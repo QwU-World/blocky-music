@@ -222,19 +222,16 @@ files. None of it is QwU World's work or licensed by QwU World:
 
 ## Not in the public source repository
 
-The public repository at https://github.com/QwU-World/blocky-music leaves out three files on purpose:
-`sounds/entity/smiley_damage.ogg` (the SampleFocus licence allows it inside the mod, not on its own),
-`textures/entity/test_rap_god_master.png` and `player anims.bbmodel` (both under *Pending confirmation* above).
-A build from that source runs without them.
+The public repository at https://github.com/QwU-World/blocky-music leaves out two files on purpose:
+`sounds/entity/smiley_damage.ogg` (the SampleFocus licence allows it inside the mod, not on its own) and
+`player anims.bbmodel` (under *Pending confirmation* below). A build from that source runs without them.
 
 ## Pending confirmation
 
 This is **not yet confirmed as QwU World's own work**. Until it is, QwU World does not offer it under
 either licence. Anything still unconfirmed will be removed or replaced before the first Modrinth beta
-(0.1.0-beta.1). Of this list, only the test NPC's texture is still in the jar.
+(0.1.0-beta.1). Nothing in the jar is on this list.
 
-- `textures/entity/test_rap_god_master.png`, the test NPC's skin: QwU World's notes say it was made from another
-  player's skin, so it is not offered under either licence until it is redrawn or its source is confirmed.
 - `player anims.bbmodel` in the repository root: started from a template of unknown origin
   (`your_new_form_ears_tail_template`). The mod does not use it, and its copy under `blockbench/` has been
   removed from the jar; this one remains in the source repository only.

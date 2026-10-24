@@ -55,12 +55,10 @@ changes between builds.
 - Third-party material and the exceptions, file by file: [NOTICE.md](NOTICE.md), also on the
   [licence page](https://qwu.world/mods/minecraft/blocky-music/license).
 
-**Not in this repository.** Three files are left out on purpose, and a build from this source runs without them:
+**Not in this repository.** Two files are left out on purpose, and a build from this source runs without them:
 
 - `sounds/entity/smiley_damage.ogg` – a SampleFocus sample. Its licence allows it inside the mod but not on its own,
   so only the release jar carries it; a build from source plays no sound for that event.
-- `textures/entity/test_rap_god_master.png` – the test NPC's skin, still waiting for confirmation of where it came
-  from (see NOTICE.md, *Pending confirmation*).
 - `player anims.bbmodel` – a Blockbench file started from a template of unknown origin; the mod does not use it.
 
 ## Links
