@@ -31,6 +31,7 @@ not in the jar.
 - `microphone.bbmodel` in the repository root (a copy of `blockbench/microphone.bbmodel`)
 - `texture.png` in the repository root (a copy of `textures/item/microphone.png`, the texture used by the
   root `microphone.bbmodel`)
+- `player anims.bbmodel` in the repository root (the Blockbench file of the player animations)
 
 Generated art is covered too, and its generator is the record of who made it:
 `src/main/resources/assets/music_battle/textures/item/music_link.png` is drawn by
@@ -66,12 +67,7 @@ They are standard format boilerplate and are not claimed as QwU World's work (se
   `src/main/resources/assets/music_battle/models/item/test_rap_god_master.json` (same as Minecraft's
   spawn-egg item models)
 
-**Pending confirmation.** Where this file came from has not been confirmed yet. Until it is, QwU World does
-not offer it under this licence. Anything still unconfirmed will be removed or replaced before the first
-Modrinth beta (0.1.0-beta.1). Nothing in the jar is on this list.
-
-- `player anims.bbmodel` in the repository root (not in the jar; its former copy under `blockbench/` has
-  been removed)
+**Pending confirmation.** Nothing is waiting for confirmation.
 
 **Also not covered:**
 

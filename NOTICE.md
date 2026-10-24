@@ -21,7 +21,7 @@ described as being "in the repository root" are in the source repository only, n
 | What | Licence | Where |
 |---|---|---|
 | QwU World's own code: Java source and compiled classes; shaders in `shaders/`; interface text in `lang/`; font definitions `font/ui_*.json`; `src/main/resources/data/`; `META-INF/neoforge.mods.toml`, `music_battle.mixins.json`, `pack.mcmeta`; build scripts, `tools/` and documentation. The rows below list the exceptions. | MIT | [LICENSE](LICENSE) |
-| QwU World's own assets: `textures/`, `models/`, `blockstates/`, `blockbench/`, `player_animations/`, `sounds/`, `sounds.json`; in the repository root, `microphone.bbmodel` and its texture `texture.png` (copies of `blockbench/microphone.bbmodel` and `textures/item/microphone.png`). `textures/item/music_link.png` is drawn by `tools/make-music-link-texture.py` in this repository, so it is QwU World's own work like the rest of this row. The rows below list the exceptions. | CC BY-NC 4.0 | [LICENSE-ASSETS.md](LICENSE-ASSETS.md) |
+| QwU World's own assets: `textures/`, `models/`, `blockstates/`, `blockbench/`, `player_animations/`, `sounds/`, `sounds.json`; in the repository root, `microphone.bbmodel` and its texture `texture.png` (copies of `blockbench/microphone.bbmodel` and `textures/item/microphone.png`) and `player anims.bbmodel` (the Blockbench file of the player animations). `textures/item/music_link.png` is drawn by `tools/make-music-link-texture.py` in this repository, so it is QwU World's own work like the rest of this row. The rows below list the exceptions. | CC BY-NC 4.0 | [LICENSE-ASSETS.md](LICENSE-ASSETS.md) |
 | Parts of code that follow the sources under **Credits: public domain** | Public domain, as their authors state | Below |
 | Parts of `build.gradle`, `settings.gradle`, `gradle.properties` and `META-INF/neoforge.mods.toml` that come from the NeoForge MDK template | MIT, from the NeoForged project (not from QwU World) | **Third-party material** below |
 | The Nunito fonts `font/nunito-semibold.ttf`, `font/nunito-bold.ttf`, `font/nunito-extrabold.ttf` (modified) | SIL Open Font License 1.1, from The Nunito Project Authors (not from QwU World) | [`font/license-ofl.txt`](src/main/resources/assets/music_battle/font/license-ofl.txt), **Third-party material** below |
@@ -222,16 +222,10 @@ files. None of it is QwU World's work or licensed by QwU World:
 
 ## Not in the public source repository
 
-The public repository at https://github.com/QwU-World/blocky-music leaves out two files on purpose:
-`sounds/entity/smiley_damage.ogg` (the SampleFocus licence allows it inside the mod, not on its own) and
-`player anims.bbmodel` (under *Pending confirmation* below). A build from that source runs without them.
+The public repository at https://github.com/QwU-World/blocky-music leaves out one file on purpose:
+`sounds/entity/smiley_damage.ogg`, because the SampleFocus licence allows it inside the mod, not on its own. A build
+from that source runs without it.
 
 ## Pending confirmation
 
-This is **not yet confirmed as QwU World's own work**. Until it is, QwU World does not offer it under
-either licence. Anything still unconfirmed will be removed or replaced before the first Modrinth beta
-(0.1.0-beta.1). Nothing in the jar is on this list.
-
-- `player anims.bbmodel` in the repository root: started from a template of unknown origin
-  (`your_new_form_ears_tail_template`). The mod does not use it, and its copy under `blockbench/` has been
-  removed from the jar; this one remains in the source repository only.
+Nothing is waiting for confirmation: every file in the jar and in the repository is accounted for above.
