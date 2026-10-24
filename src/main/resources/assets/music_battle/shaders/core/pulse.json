@@ -1,0 +1,12 @@
+{
+  "vertex": "minecraft:blit_screen",
+  "fragment": "music_battle:pulse",
+  "samplers": [
+    { "name": "DiffuseSampler" },
+    { "name": "ModelMaskSampler" }
+  ],
+  "uniforms": [
+    { "name": "Scale", "type": "float", "count": 1, "values": [ 1.0 ] },
+    { "name": "UseModelMask", "type": "float", "count": 1, "values": [ 0.0 ] }
+  ]
+}

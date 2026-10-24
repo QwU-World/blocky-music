@@ -1,0 +1,26 @@
+{
+  "required": true,
+  "package": "ru.gora.musicbattle.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "client": [
+    "client.LivingEntityRendererMixin",
+    "client.HumanoidArmorLayerMixin",
+    "client.CapeLayerMixin",
+    "client.PlayerModelAccessor",
+    "client.FiguraAvatarManagerMixin",
+    "client.KeyboardHandlerMixin",
+    "client.MouseHandlerMixin",
+    "client.SoundOptionsScreenMixin",
+    "client.ChannelMixin",
+    "client.MinecraftRenderTargetMixin",
+    "client.MinecraftConnectionAccessor",
+    "client.CameraMixin",
+    "client.ParticleEngineMixin",
+    "client.ItemInHandLayerMixin",
+    "client.ItemInHandRendererMixin",
+    "client.PlayerRendererMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

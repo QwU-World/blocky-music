@@ -1,0 +1,8 @@
+{
+  "variants": {
+    "facing=north": { "model": "music_battle:block/dj_panel" },
+    "facing=east":  { "model": "music_battle:block/dj_panel", "y": 90 },
+    "facing=south": { "model": "music_battle:block/dj_panel", "y": 180 },
+    "facing=west":  { "model": "music_battle:block/dj_panel", "y": 270 }
+  }
+}

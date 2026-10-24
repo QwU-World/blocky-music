@@ -1,0 +1,28 @@
+{
+  "parent": "music_battle:full_combo",
+  "display": {
+    "icon": {
+      "id": "music_battle:microphone"
+    },
+    "title": {
+      "translate": "advancements.music_battle.headliner.title"
+    },
+    "description": {
+      "translate": "advancements.music_battle.headliner.description"
+    },
+    "frame": "challenge",
+    "show_toast": true,
+    "announce_to_chat": true,
+    "hidden": true
+  },
+  "criteria": {
+    "code": {
+      "trigger": "minecraft:impossible"
+    }
+  },
+  "requirements": [
+    [
+      "code"
+    ]
+  ]
+}

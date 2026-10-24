@@ -1,0 +1,47 @@
+{
+  "display": {
+    "icon": {
+      "id": "music_battle:microphone"
+    },
+    "title": {
+      "translate": "advancements.music_battle.root.title"
+    },
+    "description": {
+      "translate": "advancements.music_battle.root.description"
+    },
+    "frame": "task",
+    "show_toast": false,
+    "announce_to_chat": false,
+    "hidden": false,
+    "background": "minecraft:textures/block/note_block.png"
+  },
+  "criteria": {
+    "has_kit": {
+      "trigger": "minecraft:inventory_changed",
+      "conditions": {
+        "items": [
+          {
+            "items": [
+              "music_battle:microphone",
+              "music_battle:solo_microphone",
+              "music_battle:music_link",
+              "music_battle:speaker_wire",
+              "music_battle:battle_camera",
+              "music_battle:speaker",
+              "music_battle:horizontal_speaker",
+              "music_battle:dj_panel",
+              "music_battle:smiley_ball_spawn_egg",
+              "music_battle:test_rap_god_master",
+              "music_battle:rap_god_config_wand"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "requirements": [
+    [
+      "has_kit"
+    ]
+  ]
+}

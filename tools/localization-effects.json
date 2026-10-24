@@ -1,0 +1,782 @@
+{
+  "music_battle.l10n.fx.label_001": {
+    "ru": "Точный цвет A",
+    "en": "Exact color A"
+  },
+  "music_battle.l10n.fx.label_002": {
+    "ru": "Точный цвет B",
+    "en": "Exact color B"
+  },
+  "music_battle.l10n.fx.label_003": {
+    "ru": "Цвет зрителей",
+    "en": "Spectator color"
+  },
+  "music_battle.l10n.fx.label_004": {
+    "ru": "Цвет сущностей",
+    "en": "Entity color"
+  },
+  "music_battle.l10n.fx.label_006": {
+    "ru": "+ Цвет",
+    "en": "+ Color"
+  },
+  "music_battle.l10n.fx.label_007": {
+    "ru": "− Цвет",
+    "en": "− Color"
+  },
+  "music_battle.l10n.fx.label_008": {
+    "ru": "← Цвет",
+    "en": "← Color"
+  },
+  "music_battle.l10n.fx.label_009": {
+    "ru": "Цвет →",
+    "en": "Color →"
+  },
+  "music_battle.l10n.fx.label_010": {
+    "ru": "Перенести в кисть",
+    "en": "Copy to brush"
+  },
+  "music_battle.l10n.fx.label_011": {
+    "ru": "Перенести из кисти",
+    "en": "Copy from brush"
+  },
+  "music_battle.l10n.fx.label_012": {
+    "ru": "Применить",
+    "en": "Apply"
+  },
+  "music_battle.l10n.fx.label_013": {
+    "ru": "Сохранить",
+    "en": "Save"
+  },
+  "music_battle.l10n.fx.label_014": {
+    "ru": "Сбросить",
+    "en": "Reset"
+  },
+  "music_battle.l10n.fx.label_015": {
+    "ru": "Удалить",
+    "en": "Delete"
+  },
+  "music_battle.l10n.fx.label_016": {
+    "ru": "Отмена",
+    "en": "Cancel"
+  },
+  "music_battle.l10n.fx.label_017": {
+    "ru": "Тип",
+    "en": "Type"
+  },
+  "music_battle.l10n.fx.label_018": {
+    "ru": "Фон предпросмотра",
+    "en": "Preview background"
+  },
+  "music_battle.l10n.fx.label_019": {
+    "ru": "Копирование настроек",
+    "en": "Copy settings"
+  },
+  "music_battle.l10n.fx.label_020": {
+    "ru": "Начало (тики)",
+    "en": "Start (ticks)"
+  },
+  "music_battle.l10n.fx.label_021": {
+    "ru": "Длина (0 = стандартная)",
+    "en": "Duration (0 = default)"
+  },
+  "music_battle.l10n.fx.label_022": {
+    "ru": "Порядок относительно игрового интерфейса",
+    "en": "Layer order relative to the HUD"
+  },
+  "music_battle.l10n.fx.label_023": {
+    "ru": "Порядок относительно игроков",
+    "en": "Layer order relative to players"
+  },
+  "music_battle.l10n.fx.label_024": {
+    "ru": "Порядок относительно мобов",
+    "en": "Layer order relative to mobs"
+  },
+  "music_battle.l10n.fx.label_025": {
+    "ru": "Длина (0 = точка)",
+    "en": "Duration (0 = point)"
+  },
+  "music_battle.l10n.fx.label_026": {
+    "ru": "Прозрачность 0–1",
+    "en": "Opacity 0–1"
+  },
+  "music_battle.l10n.fx.label_027": {
+    "ru": "Плавное появление",
+    "en": "Fade in"
+  },
+  "music_battle.l10n.fx.label_028": {
+    "ru": "Длительность появления 0–200 тиков (0 = стандарт)",
+    "en": "Fade-in duration 0–200 ticks (0 = default)"
+  },
+  "music_battle.l10n.fx.label_029": {
+    "ru": "Плавное затухание",
+    "en": "Fade out"
+  },
+  "music_battle.l10n.fx.label_030": {
+    "ru": "Длительность затухания 0–200 тиков (0 = стандарт)",
+    "en": "Fade-out duration 0–200 ticks (0 = default)"
+  },
+  "music_battle.l10n.fx.label_031": {
+    "ru": "Может перекрывать текстовые FX",
+    "en": "Can cover text effects"
+  },
+  "music_battle.l10n.fx.label_034": {
+    "ru": "Добавить цвет (максимум 16)",
+    "en": "Add a color (up to 16)"
+  },
+  "music_battle.l10n.fx.label_035": {
+    "ru": "Удалить выбранный цвет",
+    "en": "Remove selected color"
+  },
+  "music_battle.l10n.fx.label_036": {
+    "ru": "Сдвинуть выбранный влево",
+    "en": "Move selected color left"
+  },
+  "music_battle.l10n.fx.label_037": {
+    "ru": "Сдвинуть выбранный вправо",
+    "en": "Move selected color right"
+  },
+  "music_battle.l10n.fx.label_038": {
+    "ru": "Скорость перелива 0–10 циклов/с (0 = стоп)",
+    "en": "Color cycle speed 0–10 cycles/s (0 = stopped)"
+  },
+  "music_battle.l10n.fx.label_039": {
+    "ru": "Цвет вспышки",
+    "en": "Flash color"
+  },
+  "music_battle.l10n.fx.label_040": {
+    "ru": "Цвет P1",
+    "en": "P1 color"
+  },
+  "music_battle.l10n.fx.label_041": {
+    "ru": "Цвет затемнения",
+    "en": "Vignette color"
+  },
+  "music_battle.l10n.fx.label_042": {
+    "ru": "Цвет рамок",
+    "en": "Bar color"
+  },
+  "music_battle.l10n.fx.label_043": {
+    "ru": "Цвет A",
+    "en": "Color A"
+  },
+  "music_battle.l10n.fx.label_044": {
+    "ru": "Цвет обводки",
+    "en": "Outline color"
+  },
+  "music_battle.l10n.fx.label_045": {
+    "ru": "Цвет P2",
+    "en": "P2 color"
+  },
+  "music_battle.l10n.fx.label_046": {
+    "ru": "Цвет B",
+    "en": "Color B"
+  },
+  "music_battle.l10n.fx.label_047": {
+    "ru": "Позиция X 0–1",
+    "en": "X position 0–1"
+  },
+  "music_battle.l10n.fx.label_048": {
+    "ru": "Позиция Y 0–1",
+    "en": "Y position 0–1"
+  },
+  "music_battle.l10n.fx.label_049": {
+    "ru": "Край экрана",
+    "en": "Screen edge"
+  },
+  "music_battle.l10n.fx.label_050": {
+    "ru": "Смещение от края −1…1 (+ к центру)",
+    "en": "Offset from edge −1…1 (+ toward center)"
+  },
+  "music_battle.l10n.fx.label_051": {
+    "ru": "Размер вдоль края 0.1–1",
+    "en": "Size along edge 0.1–1"
+  },
+  "music_battle.l10n.fx.label_052": {
+    "ru": "Длина палочек 0.1–1",
+    "en": "Bar length 0.1–1"
+  },
+  "music_battle.l10n.fx.label_053": {
+    "ru": "Заполнение края",
+    "en": "Edge coverage"
+  },
+  "music_battle.l10n.fx.label_054": {
+    "ru": "Направление градиента",
+    "en": "Gradient direction"
+  },
+  "music_battle.l10n.fx.label_055": {
+    "ru": "Количество палочек",
+    "en": "Number of bars"
+  },
+  "music_battle.l10n.fx.label_056": {
+    "ru": "Расстояние основных полос 1–16 px",
+    "en": "Main scanline spacing 1–16 px"
+  },
+  "music_battle.l10n.fx.label_057": {
+    "ru": "Прозрачность основных полос 0–1",
+    "en": "Main scanline opacity 0–1"
+  },
+  "music_battle.l10n.fx.label_058": {
+    "ru": "Мерцание 0–1",
+    "en": "Flicker 0–1"
+  },
+  "music_battle.l10n.fx.label_059": {
+    "ru": "Количество микро-полос 0–1",
+    "en": "Fine scanline density 0–1"
+  },
+  "music_battle.l10n.fx.label_060": {
+    "ru": "Прозрачность микро-полос 0–1",
+    "en": "Fine scanline opacity 0–1"
+  },
+  "music_battle.l10n.fx.label_061": {
+    "ru": "Пролетающая полоса",
+    "en": "Sweeping scanline"
+  },
+  "music_battle.l10n.fx.label_062": {
+    "ru": "Ширина полосы 1–160 px",
+    "en": "Scanline width 1–160 px"
+  },
+  "music_battle.l10n.fx.label_063": {
+    "ru": "Прозрачность полосы 0–1",
+    "en": "Scanline opacity 0–1"
+  },
+  "music_battle.l10n.fx.label_064": {
+    "ru": "Скорость полосы 0.1–20",
+    "en": "Scanline speed 0.1–20"
+  },
+  "music_battle.l10n.fx.label_065": {
+    "ru": "Размер светлой области 0.1–1.4",
+    "en": "Lit area size 0.1–1.4"
+  },
+  "music_battle.l10n.fx.label_066": {
+    "ru": "Мягкость края 0.01–1.2",
+    "en": "Edge softness 0.01–1.2"
+  },
+  "music_battle.l10n.fx.label_067": {
+    "ru": "Округлость 0–1",
+    "en": "Roundness 0–1"
+  },
+  "music_battle.l10n.fx.label_068": {
+    "ru": "Выпуклость 0–1.5",
+    "en": "Bulge 0–1.5"
+  },
+  "music_battle.l10n.fx.label_069": {
+    "ru": "Радиус линзы 0.25–2",
+    "en": "Lens radius 0.25–2"
+  },
+  "music_battle.l10n.fx.label_070": {
+    "ru": "Приближение 0.25–8 (1 = без приближения)",
+    "en": "Zoom 0.25–8 (1 = no zoom)"
+  },
+  "music_battle.l10n.fx.label_071": {
+    "ru": "Хром. аберрация 0–1",
+    "en": "Chromatic aberration 0–1"
+  },
+  "music_battle.l10n.fx.label_072": {
+    "ru": "Затемнение краёв 0–1",
+    "en": "Edge darkening 0–1"
+  },
+  "music_battle.l10n.fx.label_073": {
+    "ru": "Заполнять пустые края изображением",
+    "en": "Fill empty edges with the image"
+  },
+  "music_battle.l10n.fx.label_074": {
+    "ru": "Центр X 0–1",
+    "en": "Center X 0–1"
+  },
+  "music_battle.l10n.fx.label_075": {
+    "ru": "Центр Y 0–1",
+    "en": "Center Y 0–1"
+  },
+  "music_battle.l10n.fx.label_076": {
+    "ru": "Высота сверху 0–0.45",
+    "en": "Top bar height 0–0.45"
+  },
+  "music_battle.l10n.fx.label_077": {
+    "ru": "Высота снизу 0–0.45",
+    "en": "Bottom bar height 0–0.45"
+  },
+  "music_battle.l10n.fx.label_078": {
+    "ru": "Смещение кадра −0.25–0.25",
+    "en": "Frame offset −0.25–0.25"
+  },
+  "music_battle.l10n.fx.label_079": {
+    "ru": "Мягкий край 0–0.15",
+    "en": "Edge feathering 0–0.15"
+  },
+  "music_battle.l10n.fx.label_080": {
+    "ru": "Сила тени 0–1",
+    "en": "Shadow strength 0–1"
+  },
+  "music_battle.l10n.fx.label_081": {
+    "ru": "Скорость анимации 0.1–5",
+    "en": "Animation speed 0.1–5"
+  },
+  "music_battle.l10n.fx.label_082": {
+    "ru": "Появление и исчезновение",
+    "en": "Entrance and exit"
+  },
+  "music_battle.l10n.fx.label_083": {
+    "ru": "Яркость −1…1",
+    "en": "Brightness −1…1"
+  },
+  "music_battle.l10n.fx.label_084": {
+    "ru": "Контрастность 0–3",
+    "en": "Contrast 0–3"
+  },
+  "music_battle.l10n.fx.label_085": {
+    "ru": "Насыщенность 0–3",
+    "en": "Saturation 0–3"
+  },
+  "music_battle.l10n.fx.label_086": {
+    "ru": "Оттенок −180…180°",
+    "en": "Hue −180…180°"
+  },
+  "music_battle.l10n.fx.label_087": {
+    "ru": "Гамма 0.2–3",
+    "en": "Gamma 0.2–3"
+  },
+  "music_battle.l10n.fx.label_088": {
+    "ru": "Температура −1…1",
+    "en": "Temperature −1…1"
+  },
+  "music_battle.l10n.fx.label_089": {
+    "ru": "Текст эффекта",
+    "en": "Effect text"
+  },
+  "music_battle.l10n.fx.label_090": {
+    "ru": "Шрифт",
+    "en": "Font"
+  },
+  "music_battle.l10n.fx.label_091": {
+    "ru": "Появление",
+    "en": "Entrance"
+  },
+  "music_battle.l10n.fx.label_092": {
+    "ru": "Исчезновение",
+    "en": "Exit"
+  },
+  "music_battle.l10n.fx.label_093": {
+    "ru": "Скорость печати 0.1–5",
+    "en": "Typing speed 0.1–5"
+  },
+  "music_battle.l10n.fx.label_094": {
+    "ru": "Обводка текста 0–5",
+    "en": "Text outline 0–5"
+  },
+  "music_battle.l10n.fx.label_095": {
+    "ru": "Режим вспышки",
+    "en": "Flash mode"
+  },
+  "music_battle.l10n.fx.label_096": {
+    "ru": "Мягкость вспышки 0–1",
+    "en": "Flash softness 0–1"
+  },
+  "music_battle.l10n.fx.label_097": {
+    "ru": "Кого подсвечивать",
+    "en": "Highlight targets"
+  },
+  "music_battle.l10n.fx.label_098": {
+    "ru": "Толщина контура 0.5–5",
+    "en": "Outline thickness 0.5–5"
+  },
+  "music_battle.l10n.fx.label_099": {
+    "ru": "Свечение 0–5",
+    "en": "Glow 0–5"
+  },
+  "music_battle.l10n.fx.label_100": {
+    "ru": "Подсветка зрителей текущей битвы",
+    "en": "Highlight spectators in the current battle"
+  },
+  "music_battle.l10n.fx.label_101": {
+    "ru": "Подсветка мобов в зоне битвы",
+    "en": "Highlight mobs in the battle area"
+  },
+  "music_battle.l10n.fx.label_102": {
+    "ru": "Модель без теней игрового мира, с максимальным освещением",
+    "en": "Fully lit model without world shadows"
+  },
+  "music_battle.l10n.fx.label_103": {
+    "ru": "Толщина контура 0.5–5 px",
+    "en": "Outline thickness 0.5–5 px"
+  },
+  "music_battle.l10n.fx.label_104": {
+    "ru": "Свечение контура 0–5",
+    "en": "Outline glow 0–5"
+  },
+  "music_battle.l10n.fx.label_105": {
+    "ru": "Пульсировать самостоятельно по BPM",
+    "en": "Pulse independently to the BPM"
+  },
+  "music_battle.l10n.fx.label_106": {
+    "ru": "Связь с активным FX «Пульсация»",
+    "en": "Link to the active Pulse effect"
+  },
+  "music_battle.l10n.fx.label_107": {
+    "ru": "В палитре может быть не больше 16 цветов",
+    "en": "The palette can contain up to 16 colors"
+  },
+  "music_battle.l10n.fx.label_108": {
+    "ru": "Для контура нужен хотя бы один цвет",
+    "en": "The outline needs at least one color"
+  },
+  "music_battle.l10n.fx.label_109": {
+    "ru": "Настройки перенесены в FX кисть, текст кисти сохранён",
+    "en": "Settings copied to the FX brush; brush text preserved"
+  },
+  "music_battle.l10n.fx.label_110": {
+    "ru": "Настройки перенесены в FX кисть",
+    "en": "Settings copied to the FX brush"
+  },
+  "music_battle.l10n.fx.label_111": {
+    "ru": "Настройки взяты из FX кисти, текст эффекта сохранён",
+    "en": "Settings copied from the FX brush; effect text preserved"
+  },
+  "music_battle.l10n.fx.label_112": {
+    "ru": "Настройки взяты из FX кисти",
+    "en": "Settings copied from the FX brush"
+  },
+  "music_battle.l10n.fx.label_113": {
+    "ru": "Проверь числовые значения настроек",
+    "en": "Check the numeric settings"
+  },
+  "music_battle.l10n.fx.label_114": {
+    "ru": "Выбери FX — каждый инструмент сохраняет свои настройки",
+    "en": "Choose an effect — each tool remembers its settings"
+  },
+  "music_battle.l10n.fx.label_115": {
+    "ru": "Выбери шрифт — образец показывает настоящий вид",
+    "en": "Choose a font — the sample shows its actual appearance"
+  },
+  "music_battle.l10n.fx.label_120": {
+    "ru": "На весь край",
+    "en": "Fill the entire edge"
+  },
+  "music_battle.l10n.fx.label_121": {
+    "ru": "Вдоль палочек",
+    "en": "Along the bars"
+  },
+  "music_battle.l10n.fx.label_122": {
+    "ru": "Вдоль края",
+    "en": "Along the edge"
+  },
+  "music_battle.l10n.fx.label_125": {
+    "ru": "Мигать в ритм",
+    "en": "Flash to the beat"
+  },
+  "music_battle.l10n.fx.label_126": {
+    "ru": "Двигаться с FX-пульсацией",
+    "en": "Move with the Pulse effect"
+  },
+  "music_battle.l10n.fx.label_127": {
+    "ru": "Плавный въезд/выезд",
+    "en": "Smooth slide in/out"
+  },
+  "music_battle.l10n.fx.label_128": {
+    "ru": "Убирать чёрные края",
+    "en": "Remove black edges"
+  },
+  "music_battle.l10n.fx.label_129": {
+    "ru": "Перекрывать текст",
+    "en": "Cover text"
+  },
+  "music_battle.l10n.fx.label_130": {
+    "ru": "Перекрывать интерфейс",
+    "en": "Cover the HUD"
+  },
+  "music_battle.l10n.fx.label_131": {
+    "ru": "Перекрывать игроков",
+    "en": "Cover players"
+  },
+  "music_battle.l10n.fx.label_132": {
+    "ru": "Перекрывать сущностей",
+    "en": "Cover entities"
+  },
+  "music_battle.l10n.fx.label_133": {
+    "ru": "Подсветка зрителей",
+    "en": "Highlight spectators"
+  },
+  "music_battle.l10n.fx.label_134": {
+    "ru": "Подсветка сущностей",
+    "en": "Highlight entities"
+  },
+  "music_battle.l10n.fx.label_135": {
+    "ru": "Свечение модели",
+    "en": "Model glow"
+  },
+  "music_battle.l10n.fx.label_136": {
+    "ru": "Яркость 0.1–5",
+    "en": "Brightness 0.1–5"
+  },
+  "music_battle.l10n.fx.label_137": {
+    "ru": "Плотность помех 0.1–5",
+    "en": "Interference density 0.1–5"
+  },
+  "music_battle.l10n.fx.label_138": {
+    "ru": "Общая сила линзы 0.1–5",
+    "en": "Overall lens strength 0.1–5"
+  },
+  "music_battle.l10n.fx.label_139": {
+    "ru": "Масштаб рамок 0.1–5",
+    "en": "Bar scale 0.1–5"
+  },
+  "music_battle.l10n.fx.label_140": {
+    "ru": "Амплитуда тряски 0.1–5",
+    "en": "Shake amplitude 0.1–5"
+  },
+  "music_battle.l10n.fx.label_141": {
+    "ru": "Сила приближения 0.1–5",
+    "en": "Zoom strength 0.1–5"
+  },
+  "music_battle.l10n.fx.label_142": {
+    "ru": "Высота столбцов 0.1–5",
+    "en": "Bar height 0.1–5"
+  },
+  "music_battle.l10n.fx.label_143": {
+    "ru": "Размер текста 0.1–5",
+    "en": "Text size 0.1–5"
+  },
+  "music_battle.l10n.fx.label_144": {
+    "ru": "Высота огня 0.1–5",
+    "en": "Flame height 0.1–5"
+  },
+  "music_battle.l10n.fx.label_145": {
+    "ru": "Сила цветокоррекции 0.1–5",
+    "en": "Color correction strength 0.1–5"
+  },
+  "music_battle.l10n.fx.label_146": {
+    "ru": "Затемнение краёв 0.1–5",
+    "en": "Edge darkening 0.1–5"
+  },
+  "music_battle.l10n.fx.label_148": {
+    "ru": "Сила контура 0.1–5",
+    "en": "Outline strength 0.1–5"
+  },
+  "music_battle.l10n.fx.label_149": {
+    "ru": "по буквам",
+    "en": "letter by letter"
+  },
+  "music_battle.l10n.fx.label_150": {
+    "ru": "по словам",
+    "en": "word by word"
+  },
+  "music_battle.l10n.fx.label_151": {
+    "ru": "плавно",
+    "en": "fade"
+  },
+  "music_battle.l10n.fx.label_152": {
+    "ru": "слева",
+    "en": "from the left"
+  },
+  "music_battle.l10n.fx.label_153": {
+    "ru": "справа",
+    "en": "from the right"
+  },
+  "music_battle.l10n.fx.label_154": {
+    "ru": "сверху",
+    "en": "from the top"
+  },
+  "music_battle.l10n.fx.label_155": {
+    "ru": "снизу",
+    "en": "from the bottom"
+  },
+  "music_battle.l10n.fx.label_156": {
+    "ru": "приближение",
+    "en": "zoom in"
+  },
+  "music_battle.l10n.fx.label_157": {
+    "ru": "уменьшение",
+    "en": "shrink"
+  },
+  "music_battle.l10n.fx.label_158": {
+    "ru": "пружина",
+    "en": "bounce"
+  },
+  "music_battle.l10n.fx.label_159": {
+    "ru": "вращение",
+    "en": "spin"
+  },
+  "music_battle.l10n.fx.label_160": {
+    "ru": "без анимации",
+    "en": "none"
+  },
+  "music_battle.l10n.fx.outline_color_number": {
+    "ru": "Цвет контура %s",
+    "en": "Outline color %s"
+  },
+  "music_battle.l10n.fx.effect_value": {
+    "ru": "FX: %s",
+    "en": "FX: %s"
+  },
+  "music_battle.l10n.fx.rows_value": {
+    "ru": "Ряды %s–%s",
+    "en": "Rows %s–%s"
+  },
+  "music_battle.l10n.fx.font_value": {
+    "ru": "Шрифт: %s",
+    "en": "Font: %s"
+  },
+  "music_battle.l10n.fx.entrance_value": {
+    "ru": "Появление: %s",
+    "en": "Entrance: %s"
+  },
+  "music_battle.l10n.fx.exit_value": {
+    "ru": "Исчезновение: %s",
+    "en": "Exit: %s"
+  },
+  "music_battle.l10n.fx.bars_value": {
+    "ru": "Палочек: %s",
+    "en": "Bars: %s"
+  },
+  "music_battle.l10n.fx.position_value": {
+    "ru": "Позиция: %s",
+    "en": "Position: %s"
+  },
+  "music_battle.l10n.fx.placement_value": {
+    "ru": "Размещение: %s",
+    "en": "Placement: %s"
+  },
+  "music_battle.l10n.fx.background_value": {
+    "ru": "Фон: %s",
+    "en": "Background: %s"
+  },
+  "music_battle.l10n.fx.mode_value": {
+    "ru": "Режим: %s",
+    "en": "Mode: %s"
+  },
+  "music_battle.l10n.fx.placement.point": {
+    "ru": "Точка",
+    "en": "Point"
+  },
+  "music_battle.l10n.fx.placement.length": {
+    "ru": "Длина",
+    "en": "Length"
+  },
+  "music_battle.l10n.fx.placement.range": {
+    "ru": "Диапазон",
+    "en": "Range"
+  },
+  "music_battle.l10n.fx.background.world": {
+    "ru": "Мир",
+    "en": "World"
+  },
+  "music_battle.l10n.fx.background.dark": {
+    "ru": "Тёмный",
+    "en": "Dark"
+  },
+  "music_battle.l10n.fx.background.light": {
+    "ru": "Светлый",
+    "en": "Light"
+  },
+  "music_battle.l10n.fx.background.checker": {
+    "ru": "Шахматный",
+    "en": "Checkerboard"
+  },
+  "music_battle.l10n.fx.background.red": {
+    "ru": "Красный",
+    "en": "Red"
+  },
+  "music_battle.l10n.fx.background.green": {
+    "ru": "Зелёный",
+    "en": "Green"
+  },
+  "music_battle.l10n.fx.highlight.both": {
+    "ru": "Оба игрока",
+    "en": "Both players"
+  },
+  "music_battle.l10n.fx.highlight.p1": {
+    "ru": "Игрок 1",
+    "en": "Player 1"
+  },
+  "music_battle.l10n.fx.highlight.p2": {
+    "ru": "Игрок 2",
+    "en": "Player 2"
+  },
+  "music_battle.l10n.fx.highlight.alternate": {
+    "ru": "По очереди",
+    "en": "Alternating"
+  },
+  "music_battle.l10n.fx.highlight.pulse": {
+    "ru": "Пульсация",
+    "en": "Pulse"
+  },
+  "music_battle.l10n.fx.edge.top": {
+    "ru": "сверху",
+    "en": "top"
+  },
+  "music_battle.l10n.fx.edge.left": {
+    "ru": "слева",
+    "en": "left"
+  },
+  "music_battle.l10n.fx.edge.right": {
+    "ru": "справа",
+    "en": "right"
+  },
+  "music_battle.l10n.fx.edge.bottom": {
+    "ru": "снизу",
+    "en": "bottom"
+  },
+  "music_battle.l10n.fx.brush_title": {
+    "ru": "FX кисть",
+    "en": "FX brush"
+  },
+  "music_battle.l10n.fx.settings_title": {
+    "ru": "Параметры FX",
+    "en": "FX settings"
+  },
+  "music_battle.l10n.fx.font.default": {
+    "ru": "Обычный",
+    "en": "Default"
+  },
+  "music_battle.l10n.fx.font.uniform": {
+    "ru": "Ровный",
+    "en": "Uniform"
+  },
+  "music_battle.l10n.fx.font.enchanting": {
+    "ru": "Зачарованный",
+    "en": "Enchanting"
+  },
+  "music_battle.l10n.fx.font.illager": {
+    "ru": "Илладжерский",
+    "en": "Illager"
+  },
+  "music_battle.l10n.fx.font.bold": {
+    "ru": "Жирный",
+    "en": "Bold"
+  },
+  "music_battle.l10n.fx.font.italic": {
+    "ru": "Наклонный",
+    "en": "Italic"
+  },
+  "music_battle.l10n.fx.font.bold_italic": {
+    "ru": "Жирный курсив",
+    "en": "Bold italic"
+  },
+  "music_battle.l10n.fx.font.narrow": {
+    "ru": "Узкий",
+    "en": "Narrow"
+  },
+  "music_battle.l10n.fx.font.wide": {
+    "ru": "Широкий",
+    "en": "Wide"
+  },
+  "music_battle.l10n.fx.font.retro": {
+    "ru": "Ретро",
+    "en": "Retro"
+  },
+  "music_battle.l10n.fx.font.arcade": {
+    "ru": "Аркадный",
+    "en": "Arcade"
+  },
+  "music_battle.l10n.fx.font.poster": {
+    "ru": "Плакатный",
+    "en": "Poster"
+  },
+  "music_battle.l10n.fx.selected_palette_color": {
+    "ru": "Выбран цвет %s %s",
+    "en": "Selected color %s %s"
+  },
+  "music_battle.l10n.fx.palette_color": {
+    "ru": "цвет %s %s",
+    "en": "color %s %s"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "vertex": "minecraft:blit_screen",
+  "fragment": "music_battle:vignette",
+  "samplers": [],
+  "uniforms": [
+    { "name": "Tint", "type": "float", "count": 3, "values": [ 0.02, 0.0, 0.04 ] },
+    { "name": "Radius", "type": "float", "count": 1, "values": [ 0.72 ] },
+    { "name": "Softness", "type": "float", "count": 1, "values": [ 0.34 ] },
+    { "name": "Roundness", "type": "float", "count": 1, "values": [ 0.82 ] },
+    { "name": "Alpha", "type": "float", "count": 1, "values": [ 1.0 ] }
+  ]
+}

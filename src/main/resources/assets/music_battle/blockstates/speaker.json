@@ -1,0 +1,7 @@
+{
+  "multipart": [
+    {
+      "apply": { "model": "music_battle:block/speaker" }
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "parent": "builtin/entity",
+  "textures": {
+    "particle": "music_battle:block/speaker"
+  },
+  "display": {
+    "gui": {
+      "rotation": [30, 225, 0],
+      "translation": [0, -2, 0],
+      "scale": [0.36, 0.36, 0.36]
+    },
+    "ground": {
+      "translation": [0, 2, 0],
+      "scale": [0.25, 0.25, 0.25]
+    },
+    "fixed": {
+      "rotation": [0, 180, 0],
+      "translation": [0, 0, 0],
+      "scale": [0.4, 0.4, 0.4]
+    },
+    "thirdperson_righthand": {
+      "rotation": [75, 315, 0],
+      "translation": [0, -1, 0],
+      "scale": [0.28, 0.28, 0.28]
+    },
+    "firstperson_righthand": {
+      "rotation": [0, 315, 0],
+      "translation": [0, -1, 0],
+      "scale": [0.3, 0.3, 0.3]
+    }
+  }
+}

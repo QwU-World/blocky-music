@@ -1,0 +1,21 @@
+# Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# Dev run directory: world saves, logs, downloaded mods, player tracks
+run/
+
+# Logs and crash dumps
+logs/
+*.log
+crash-reports/
+
+# Manual backups from before git. Kept on disk, out of the history.
+rollback/
+
+# macOS
+.DS_Store
+
+# Editor settings: ModDevGradle writes absolute local paths into launch.json
+.vscode/

@@ -1,0 +1,18 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "redstone",
+  "pattern": [
+    "IRI",
+    "IOI",
+    "IRI"
+  ],
+  "key": {
+    "I": { "item": "minecraft:iron_ingot" },
+    "R": { "item": "minecraft:redstone" },
+    "O": { "item": "minecraft:observer" }
+  },
+  "result": {
+    "id": "music_battle:battle_camera",
+    "count": 1
+  }
+}

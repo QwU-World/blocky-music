@@ -1,0 +1,11 @@
+{
+  "type": "minecraft:crafting_shapeless",
+  "category": "redstone",
+  "ingredients": [
+    { "item": "music_battle:speaker" }
+  ],
+  "result": {
+    "id": "music_battle:horizontal_speaker",
+    "count": 1
+  }
+}

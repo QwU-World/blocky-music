@@ -1,0 +1,19 @@
+{
+  "providers": [
+    {
+      "type": "ttf",
+      "file": "music_battle:nunito-semibold.ttf",
+      "size": 10.0,
+      "oversample": 6.0,
+      "shift": [
+        0.0,
+        0.05
+      ],
+      "skip": ""
+    },
+    {
+      "type": "reference",
+      "id": "minecraft:default"
+    }
+  ]
+}

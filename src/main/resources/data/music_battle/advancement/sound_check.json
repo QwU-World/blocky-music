@@ -1,0 +1,48 @@
+{
+  "parent": "music_battle:root",
+  "display": {
+    "icon": {
+      "id": "music_battle:speaker"
+    },
+    "title": {
+      "translate": "advancements.music_battle.sound_check.title"
+    },
+    "description": {
+      "translate": "advancements.music_battle.sound_check.description"
+    },
+    "frame": "task",
+    "show_toast": true,
+    "announce_to_chat": true,
+    "hidden": false
+  },
+  "criteria": {
+    "vertical": {
+      "trigger": "minecraft:placed_block",
+      "conditions": {
+        "location": [
+          {
+            "condition": "minecraft:block_state_property",
+            "block": "music_battle:speaker"
+          }
+        ]
+      }
+    },
+    "horizontal": {
+      "trigger": "minecraft:placed_block",
+      "conditions": {
+        "location": [
+          {
+            "condition": "minecraft:block_state_property",
+            "block": "music_battle:horizontal_speaker"
+          }
+        ]
+      }
+    }
+  },
+  "requirements": [
+    [
+      "vertical",
+      "horizontal"
+    ]
+  ]
+}

@@ -1,0 +1,223 @@
+{
+  "source": "lucide-static@1.47.0",
+  "license": "ISC",
+  "columns": 8,
+  "rows": 4,
+  "atlases": {
+    "16": {
+      "file": "icons_16.png",
+      "width": 160,
+      "height": 80,
+      "cell": 20,
+      "gutter": 2
+    },
+    "32": {
+      "file": "icons_32.png",
+      "width": 320,
+      "height": 160,
+      "cell": 40,
+      "gutter": 4
+    },
+    "64": {
+      "file": "icons_64.png",
+      "width": 640,
+      "height": 320,
+      "cell": 80,
+      "gutter": 8
+    }
+  },
+  "icons": [
+    {
+      "name": "play",
+      "lucide": "play",
+      "filled": true,
+      "sha256": "3c210a3983b60e95727e9c909cf905634214f24baac51f837f77ef33598d4dfb"
+    },
+    {
+      "name": "pause",
+      "lucide": "pause",
+      "filled": true,
+      "sha256": "d5baf971714d5dbb1c0542cbeff7316c3a37e2929ce28dee39dc401557158fe0"
+    },
+    {
+      "name": "download",
+      "lucide": "download",
+      "filled": false,
+      "sha256": "199c1dadbfd2ced2331c3b6842383ae6d6d4128ed6b557a29d8d9bb01ab606b5"
+    },
+    {
+      "name": "upload",
+      "lucide": "upload",
+      "filled": false,
+      "sha256": "9d862b2a7beb865601ecc27d248b4c3d0c287ca14935d40c4f3df575776cc019"
+    },
+    {
+      "name": "heart",
+      "lucide": "heart",
+      "filled": false,
+      "sha256": "257975d8c0ae91070efef10f9678829ea913787a00e526fa310addf07e20e63a"
+    },
+    {
+      "name": "heart_filled",
+      "lucide": "heart",
+      "filled": true,
+      "sha256": "257975d8c0ae91070efef10f9678829ea913787a00e526fa310addf07e20e63a"
+    },
+    {
+      "name": "star",
+      "lucide": "star",
+      "filled": false,
+      "sha256": "daa96418b47118cfbf8274b660c2a03d2b6d11e2fb8235a3d679fcc5cd56c59d"
+    },
+    {
+      "name": "star_filled",
+      "lucide": "star",
+      "filled": true,
+      "sha256": "daa96418b47118cfbf8274b660c2a03d2b6d11e2fb8235a3d679fcc5cd56c59d"
+    },
+    {
+      "name": "message_circle",
+      "lucide": "message-circle",
+      "filled": false,
+      "sha256": "3e37fd02446f5ebf3ccdbb23e9e4647438a2cce11ab3944a5ba734472d175526"
+    },
+    {
+      "name": "search",
+      "lucide": "search",
+      "filled": false,
+      "sha256": "5523ab5ec4d821183ad2b43b18142f36ea5080f1c90ffbf980c96a2b6cbbe5c6"
+    },
+    {
+      "name": "external_link",
+      "lucide": "external-link",
+      "filled": false,
+      "sha256": "9b447da6766cb87ec13d113eeb1be645e21cc253c64dcb8211436f627df2414b"
+    },
+    {
+      "name": "link",
+      "lucide": "link",
+      "filled": false,
+      "sha256": "b888b63ba7a04c6c431686844162cbe5f6ed1807f15fa0299de7aa5a1c4c0502"
+    },
+    {
+      "name": "copy",
+      "lucide": "copy",
+      "filled": false,
+      "sha256": "036b16bdd0ee7a330fd2b4f85424f73b9e1abd0f0b3eb615e76af83d7635b34a"
+    },
+    {
+      "name": "x",
+      "lucide": "x",
+      "filled": false,
+      "sha256": "3fb7f6004b7d52fb5019d11dff0d3ebc4236aab0651315742ea2fa5bfd6711a2"
+    },
+    {
+      "name": "check",
+      "lucide": "check",
+      "filled": false,
+      "sha256": "7cb2a63edf5a9701361656f9bfbf13b1e7b084027f7fb2c992b82cd94105d9c1"
+    },
+    {
+      "name": "chevron_down",
+      "lucide": "chevron-down",
+      "filled": false,
+      "sha256": "29da8c42aa4422ef1c32dbeffe660319cca6756b95add0a9c20b1197bbe12ded"
+    },
+    {
+      "name": "chevron_left",
+      "lucide": "chevron-left",
+      "filled": false,
+      "sha256": "4a6ec61e17068836f3399349533d79d34ed7a533dd62ffd71bd33e2b108e2fa3"
+    },
+    {
+      "name": "chevron_right",
+      "lucide": "chevron-right",
+      "filled": false,
+      "sha256": "240094983bc0ee26da77a8f7b1f87106e9f3b9bf34ac89127449140f8d96f718"
+    },
+    {
+      "name": "arrow_left",
+      "lucide": "arrow-left",
+      "filled": false,
+      "sha256": "6e5d9c1b6b63a0835f97b9806dfea6efa263a3fc573d5a0811305e082bbed4d3"
+    },
+    {
+      "name": "music",
+      "lucide": "music",
+      "filled": false,
+      "sha256": "8f0399c93496f36cab453620062d046417c40026c06bcf0cad576ed13f965bbf"
+    },
+    {
+      "name": "user_round",
+      "lucide": "user-round",
+      "filled": false,
+      "sha256": "9122649760889030755f7b5ae861450137b24cda9d4ba41b4c4f58881b91d4d6"
+    },
+    {
+      "name": "settings",
+      "lucide": "settings",
+      "filled": false,
+      "sha256": "b56a5ce2b4f32263a1c99d11c7ba8937811b5d6974bebec7cc502defdf95165e"
+    },
+    {
+      "name": "bell",
+      "lucide": "bell",
+      "filled": false,
+      "sha256": "119a76f10257765187bceabb21c1f9ecc7707a8e464767bf5625087575d94a7c"
+    },
+    {
+      "name": "flag",
+      "lucide": "flag",
+      "filled": false,
+      "sha256": "c19b5fc34b3439d9283fba84aa84c47d488284e7bbf15f72952f1a4867ff4cb3"
+    },
+    {
+      "name": "trash",
+      "lucide": "trash-2",
+      "filled": false,
+      "sha256": "5fb6eb7d98e4ae5eb1ad769b18edb0760459df26089f958ebacb480ad2d204be"
+    },
+    {
+      "name": "folder_open",
+      "lucide": "folder-open",
+      "filled": false,
+      "sha256": "a51548c11e10fdce73f9016b8201ae85b7ba0a9e8861e378b0aff40954cd6d3a"
+    },
+    {
+      "name": "refresh",
+      "lucide": "refresh-cw",
+      "filled": false,
+      "sha256": "cece3c98fb78eeb3f0333da1dcb8f035fafb3135f7959b7c6d5606b66487c77f"
+    },
+    {
+      "name": "loader",
+      "lucide": "loader-circle",
+      "filled": false,
+      "sha256": "e21030e590b1814f025c3cd0e8b14098b7a9959ff4b77c44c6851452c4e03cf1"
+    },
+    {
+      "name": "info",
+      "lucide": "info",
+      "filled": false,
+      "sha256": "9bdcdc0eb4d2baa86bc2fc251c6f87fd6d09118484eae22a36ae693e59d11720"
+    },
+    {
+      "name": "alert",
+      "lucide": "triangle-alert",
+      "filled": false,
+      "sha256": "acd931c4193da7e18dc826b79126eeaaa35ca9b494215b8c2326e51f83574cdb"
+    },
+    {
+      "name": "eye_off",
+      "lucide": "eye-off",
+      "filled": false,
+      "sha256": "2fd3fa8a0c590400b419e218323740c024731c0dfff94e62ff656c3b70ad518a"
+    },
+    {
+      "name": "filter",
+      "lucide": "list-filter",
+      "filled": false,
+      "sha256": "74da4e38d4ca258cd2bd8e61a868e51573870115cf7de6803010212256c198ad"
+    }
+  ]
+}

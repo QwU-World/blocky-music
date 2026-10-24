@@ -1,0 +1,72 @@
+plugins {
+    id 'java-library'
+    id 'net.neoforged.moddev' version '2.0.141'
+}
+
+repositories {
+    maven {
+        name = "KosmX"
+        url = "https://maven.kosmx.dev/"
+    }
+}
+
+version = mod_version
+group = mod_group_id
+
+base {
+    archivesName = 'blocky_music'
+}
+
+java.toolchain.languageVersion = JavaLanguageVersion.of(21)
+
+neoForge {
+    version = project.neo_version
+
+    runs {
+        client {
+            client()
+        }
+    }
+
+    mods {
+        "${mod_id}" {
+            sourceSet(sourceSets.main)
+        }
+    }
+}
+
+dependencies {
+    implementation "dev.kosmx.player-anim:player-animation-lib-forge:${player_animator_version}"
+}
+
+tasks.withType(ProcessResources).configureEach {
+    def replaceProperties = [
+        minecraft_version      : minecraft_version,
+        minecraft_version_range: minecraft_version_range,
+        neo_version            : neo_version,
+        neo_version_range      : neo_version_range,
+        loader_version_range   : loader_version_range,
+        mod_id                 : mod_id,
+        mod_name               : mod_name,
+        mod_license            : mod_license,
+        mod_version            : mod_version,
+        mod_authors            : mod_authors,
+        mod_description        : mod_description
+    ]
+    inputs.properties replaceProperties
+
+    filesMatching(['META-INF/neoforge.mods.toml']) {
+        expand replaceProperties
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
+
+// Ship the licence texts and the exception list inside the jar, side by side so their relative links work.
+tasks.named('jar', Jar) {
+    from(files('LICENSE', 'LICENSE-ASSETS.md', 'NOTICE.md')) {
+        into 'META-INF'
+    }
+}

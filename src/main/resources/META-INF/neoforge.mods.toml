@@ -1,0 +1,37 @@
+modLoader = "javafml"
+loaderVersion = "${loader_version_range}"
+license = "${mod_license}"
+
+[[mixins]]
+config = "music_battle.mixins.json"
+
+[[mods]]
+modId = "${mod_id}"
+version = "${mod_version}"
+displayName = "${mod_name}"
+authors = "${mod_authors}"
+description = '''${mod_description}'''
+# NeoForge looks the logo up at the root of the jar, not inside assets/, which is why the file sits beside META-INF.
+logoFile = "blocky_music_logo.png"
+displayURL = "https://qwu.world/mods/minecraft/blocky-music"
+
+[[dependencies.${mod_id}]]
+modId = "neoforge"
+type = "required"
+versionRange = "${neo_version_range}"
+ordering = "NONE"
+side = "BOTH"
+
+[[dependencies.${mod_id}]]
+modId = "minecraft"
+type = "required"
+versionRange = "${minecraft_version_range}"
+ordering = "NONE"
+side = "BOTH"
+
+[[dependencies.${mod_id}]]
+modId = "playeranimator"
+type = "required"
+versionRange = "[2.0.4,)"
+ordering = "AFTER"
+side = "CLIENT"

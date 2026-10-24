@@ -1,0 +1,36 @@
+{
+  "vertex": "minecraft:blit_screen",
+  "fragment": "music_battle:object_outline",
+  "samplers": [
+    { "name": "BlockColorSampler" },
+    { "name": "BlockDepthSampler" },
+    { "name": "ExcludedSampler" },
+    { "name": "SceneDepthSampler" }
+  ],
+  "uniforms": [
+    { "name": "InSize", "type": "float", "count": 2, "values": [ 1.0, 1.0 ] },
+    { "name": "OutlineColor", "type": "float", "count": 3, "values": [ 0.33, 0.90, 1.0 ] },
+    { "name": "Alpha", "type": "float", "count": 1, "values": [ 1.0 ] },
+    { "name": "Thickness", "type": "float", "count": 1, "values": [ 2.0 ] },
+    { "name": "GlowStrength", "type": "float", "count": 1, "values": [ 1.0 ] },
+    { "name": "UseSceneDepth", "type": "float", "count": 1, "values": [ 0.0 ] },
+    { "name": "UseExcludedMask", "type": "float", "count": 1, "values": [ 0.0 ] },
+    { "name": "WarpCount", "type": "float", "count": 1, "values": [ 0.0 ] },
+    { "name": "WarpA0", "type": "float", "count": 4, "values": [ 0.0, 0.5, 0.5, 1.0 ] },
+    { "name": "WarpA1", "type": "float", "count": 4, "values": [ 0.0, 0.5, 0.5, 1.0 ] },
+    { "name": "WarpA2", "type": "float", "count": 4, "values": [ 0.0, 0.5, 0.5, 1.0 ] },
+    { "name": "WarpA3", "type": "float", "count": 4, "values": [ 0.0, 0.5, 0.5, 1.0 ] },
+    { "name": "WarpA4", "type": "float", "count": 4, "values": [ 0.0, 0.5, 0.5, 1.0 ] },
+    { "name": "WarpA5", "type": "float", "count": 4, "values": [ 0.0, 0.5, 0.5, 1.0 ] },
+    { "name": "WarpA6", "type": "float", "count": 4, "values": [ 0.0, 0.5, 0.5, 1.0 ] },
+    { "name": "WarpA7", "type": "float", "count": 4, "values": [ 0.0, 0.5, 0.5, 1.0 ] },
+    { "name": "WarpB0", "type": "float", "count": 4, "values": [ 1.0, 1.0, 0.0, 0.0 ] },
+    { "name": "WarpB1", "type": "float", "count": 4, "values": [ 1.0, 1.0, 0.0, 0.0 ] },
+    { "name": "WarpB2", "type": "float", "count": 4, "values": [ 1.0, 1.0, 0.0, 0.0 ] },
+    { "name": "WarpB3", "type": "float", "count": 4, "values": [ 1.0, 1.0, 0.0, 0.0 ] },
+    { "name": "WarpB4", "type": "float", "count": 4, "values": [ 1.0, 1.0, 0.0, 0.0 ] },
+    { "name": "WarpB5", "type": "float", "count": 4, "values": [ 1.0, 1.0, 0.0, 0.0 ] },
+    { "name": "WarpB6", "type": "float", "count": 4, "values": [ 1.0, 1.0, 0.0, 0.0 ] },
+    { "name": "WarpB7", "type": "float", "count": 4, "values": [ 1.0, 1.0, 0.0, 0.0 ] }
+  ]
+}

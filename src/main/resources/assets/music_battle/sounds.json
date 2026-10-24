@@ -1,0 +1,14 @@
+{
+  "smiley_ball_hurt": {
+    "subtitle": "subtitles.music_battle.smiley_ball_hurt",
+    "sounds": [
+      "music_battle:entity/smiley_damage"
+    ]
+  },
+  "smiley_ball_death": {
+    "subtitle": "subtitles.music_battle.smiley_ball_death",
+    "sounds": [
+      "music_battle:entity/smiley_damage"
+    ]
+  }
+}

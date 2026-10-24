@@ -1,0 +1,20 @@
+$ErrorActionPreference = 'Stop'
+$root = Split-Path -Parent $PSScriptRoot
+$out = Join-Path $root 'build/upload-wizard-checks'
+New-Item -ItemType Directory -Path $out -Force | Out-Null
+# The pure Workshop layout model plus Gson; no Minecraft on the classpath, text is measured with java.awt.
+$groups = @('com.google.code.gson')
+$jars = foreach ($group in $groups) {
+    $dir = Join-Path $env:USERPROFILE ".gradle/caches/modules-2/files-2.1/$group"
+    if (Test-Path -LiteralPath $dir) { Get-ChildItem -LiteralPath $dir -Recurse -Filter '*.jar' | Where-Object Name -notmatch '(-sources|-javadoc|-natives-)' | Select-Object -ExpandProperty FullName }
+}
+$cp = (@($out) + @($jars)) -join [IO.Path]::PathSeparator
+$jdk = 'C:/Program Files/Eclipse Adoptium/jdk-21.0.11.10-hotspot/bin'
+$sources = @()
+foreach ($name in @('TextStyle','TextMeasurer','Palette','Spectrum','CardGrid')) { $sources += "$root/src/main/java/ru/gora/musicbattle/client/ui/$name.java" }
+foreach ($name in @('Rect','Tr','TextFit','Layout','Metrics','WorkshopStrings','Filters','ShellLayout','HtmlText','UploadLayout')) { $sources += "$root/src/main/java/ru/gora/musicbattle/client/workshop/layout/$name.java" }
+$sources += "$root/tools/UploadWizardChecks.java"
+& "$jdk/javac.exe" -proc:none -encoding UTF-8 -cp $cp -d $out @sources
+if ($LASTEXITCODE) { throw 'Upload wizard test compilation failed' }
+& "$jdk/java.exe" -Djava.awt.headless=true -cp $cp UploadWizardChecks $root
+if ($LASTEXITCODE) { throw 'Upload wizard regression failed' }

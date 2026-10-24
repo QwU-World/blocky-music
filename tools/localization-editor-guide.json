@@ -1,0 +1,1094 @@
+{
+  "music_battle.l10n.editor.visible_rows": {
+    "ru": "OK: видны FX-ряды %s–%s",
+    "en": "OK: visible FX rows %s–%s"
+  },
+  "music_battle.l10n.editor.mode": {
+    "ru": "Режим: %s",
+    "en": "Mode: %s"
+  },
+  "music_battle.l10n.editor.length_beats": {
+    "ru": "Длина: %s бит",
+    "en": "Length: %s beats"
+  },
+  "music_battle.l10n.editor.softness": {
+    "ru": "Мягкость: %s%%",
+    "en": "Softness: %s%%"
+  },
+  "music_battle.l10n.editor.row": {
+    "ru": "Ряд %s",
+    "en": "Row %s"
+  },
+  "music_battle.l10n.editor.row_detail": {
+    "ru": "Ряд: %s",
+    "en": "Row: %s"
+  },
+  "music_battle.l10n.editor.copied": {
+    "ru": "OK: скопировано %s элементов",
+    "en": "OK: copied %s items"
+  },
+  "music_battle.l10n.editor.deleted": {
+    "ru": "OK: удалено %s элементов",
+    "en": "OK: deleted %s items"
+  },
+  "music_battle.l10n.editor.converted": {
+    "ru": "OK: %s нот перенесено P1 ↔ P2",
+    "en": "OK: %s notes moved P1 ↔ P2"
+  },
+  "music_battle.l10n.editor.template_updated": {
+    "ru": "OK: шаблон %s обновлён",
+    "en": "OK: %s template updated"
+  },
+  "music_battle.l10n.editor.brush_updated": {
+    "ru": "OK: FX кисть «%s» обновлена",
+    "en": "OK: FX brush \"%s\" updated"
+  },
+  "music_battle.l10n.editor.image_selected": {
+    "ru": "OK: выбран %s%s; при сохранении будет оптимизировано в PNG",
+    "en": "OK: selected %s%s; will be optimized to PNG on save"
+  },
+  "music_battle.l10n.editor.text": {
+    "ru": "Текст: %s",
+    "en": "Text: %s"
+  },
+  "music_battle.l10n.editor.variant": {
+    "ru": "Режим: %s",
+    "en": "Mode: %s"
+  },
+  "music_battle.l10n.editor.direction": {
+    "ru": "Направление: %s",
+    "en": "Direction: %s"
+  },
+  "music_battle.l10n.editor.text_001": {
+    "ru": "OK: случайная постановка ноты отменена",
+    "en": "OK: accidental note placement undone"
+  },
+  "music_battle.l10n.editor.text_002": {
+    "ru": "Открыть FX редактор",
+    "en": "Open FX editor"
+  },
+  "music_battle.l10n.editor.text_003": {
+    "ru": "Снять выделение",
+    "en": "Clear selection"
+  },
+  "music_battle.l10n.editor.text_004": {
+    "ru": "Назад к нотам",
+    "en": "Back to notes"
+  },
+  "music_battle.l10n.editor.text_005": {
+    "ru": "FX кисть",
+    "en": "FX brush"
+  },
+  "music_battle.l10n.editor.text_006": {
+    "ru": "Снять",
+    "en": "Clear"
+  },
+  "music_battle.l10n.editor.text_007": {
+    "ru": "FX редактор",
+    "en": "FX editor"
+  },
+  "music_battle.l10n.editor.text_008": {
+    "ru": "OK: обычная сетка 1/4; таймлайн и ноты не изменены",
+    "en": "OK: standard 1/4 grid; timeline and notes unchanged"
+  },
+  "music_battle.l10n.editor.text_009": {
+    "ru": "OK: точная сетка 1/8; добавлены промежуточные позиции без приближения",
+    "en": "OK: fine 1/8 grid; intermediate positions added without zooming"
+  },
+  "music_battle.l10n.editor.text_010": {
+    "ru": "Сетка: 1/4",
+    "en": "Grid: 1/4"
+  },
+  "music_battle.l10n.editor.text_011": {
+    "ru": "Сетка: 1/8",
+    "en": "Grid: 1/8"
+  },
+  "music_battle.l10n.editor.text_012": {
+    "ru": "OK: выделение снято",
+    "en": "OK: selection cleared"
+  },
+  "music_battle.l10n.editor.text_013": {
+    "ru": "OK: ничего не выделено",
+    "en": "OK: nothing selected"
+  },
+  "music_battle.l10n.editor.text_014": {
+    "ru": "☑ Отключить стандартные полосы",
+    "en": "☑ Disable default bars"
+  },
+  "music_battle.l10n.editor.text_015": {
+    "ru": "☐ Отключить стандартные полосы",
+    "en": "☐ Disable default bars"
+  },
+  "music_battle.l10n.editor.text_016": {
+    "ru": "☑ Скрыть стандартное затемнение",
+    "en": "☑ Hide default dimming"
+  },
+  "music_battle.l10n.editor.text_017": {
+    "ru": "☐ Скрыть стандартное затемнение",
+    "en": "☐ Hide default dimming"
+  },
+  "music_battle.l10n.editor.text_018": {
+    "ru": "OK: прокручивай FX-ряды колёсиком над сеткой",
+    "en": "OK: scroll over the grid to browse FX rows"
+  },
+  "music_battle.l10n.editor.text_019": {
+    "ru": "OK: эффекты очищены",
+    "en": "OK: effects cleared"
+  },
+  "music_battle.l10n.editor.text_023": {
+    "ru": "Сила: %sx",
+    "en": "Intensity: %sx"
+  },
+  "music_battle.l10n.editor.text_025": {
+    "ru": "ID трека: имя в голосовании",
+    "en": "Track ID: name shown in voting"
+  },
+  "music_battle.l10n.editor.text_026": {
+    "ru": "Название",
+    "en": "Title"
+  },
+  "music_battle.l10n.editor.text_027": {
+    "ru": "Описание для карточки",
+    "en": "Card description"
+  },
+  "music_battle.l10n.editor.text_028": {
+    "ru": "Громкость",
+    "en": "Volume"
+  },
+  "music_battle.l10n.editor.text_029": {
+    "ru": "Музыка из music_battle_raw",
+    "en": "Audio from music_battle_raw"
+  },
+  "music_battle.l10n.editor.text_030": {
+    "ru": "Превью PNG/JPG/GIF",
+    "en": "PNG/JPG/GIF preview"
+  },
+  "music_battle.l10n.editor.text_031": {
+    "ru": "Импорт JSON/OSU/OSZ",
+    "en": "Import JSON/OSU/OSZ"
+  },
+  "music_battle.l10n.editor.text_032": {
+    "ru": "ID трека",
+    "en": "Track ID"
+  },
+  "music_battle.l10n.editor.text_033": {
+    "ru": "Описание",
+    "en": "Description"
+  },
+  "music_battle.l10n.editor.text_036": {
+    "ru": "Старт: %s тик (%s сек)",
+    "en": "Start: %s ticks (%s sec)"
+  },
+  "music_battle.l10n.editor.text_037": {
+    "ru": "Длина: точка",
+    "en": "Length: point"
+  },
+  "music_battle.l10n.editor.text_038": {
+    "ru": "Длина: %s тик (%s сек)",
+    "en": "Length: %s ticks (%s sec)"
+  },
+  "music_battle.l10n.editor.text_039": {
+    "ru": "Прозрачность: ",
+    "en": "Opacity: "
+  },
+  "music_battle.l10n.editor.text_040": {
+    "ru": " · мигает по BPM",
+    "en": " · flashes to BPM"
+  },
+  "music_battle.l10n.editor.text_041": {
+    "ru": " · реагирует на пульсацию",
+    "en": " · reacts to pulse"
+  },
+  "music_battle.l10n.editor.text_042": {
+    "ru": "Плавное появление: ",
+    "en": "Fade in: "
+  },
+  "music_battle.l10n.editor.text_043": {
+    "ru": "Плавное затухание: ",
+    "en": "Fade out: "
+  },
+  "music_battle.l10n.editor.text_044": {
+    "ru": "Перекрывает текст",
+    "en": "Covers text"
+  },
+  "music_battle.l10n.editor.text_045": {
+    "ru": "Не перекрывает текст",
+    "en": "Does not cover text"
+  },
+  "music_battle.l10n.editor.text_046": {
+    "ru": "Перекрывает игровой интерфейс",
+    "en": "Covers game interface"
+  },
+  "music_battle.l10n.editor.text_047": {
+    "ru": "Под игровым интерфейсом",
+    "en": "Below game interface"
+  },
+  "music_battle.l10n.editor.text_048": {
+    "ru": "Перекрывает игроков",
+    "en": "Covers players"
+  },
+  "music_battle.l10n.editor.text_049": {
+    "ru": "Игроки поверх эффекта",
+    "en": "Players appear above the effect"
+  },
+  "music_battle.l10n.editor.text_050": {
+    "ru": "Перекрывает сущностей",
+    "en": "Covers entities"
+  },
+  "music_battle.l10n.editor.text_051": {
+    "ru": "Сущности поверх эффекта",
+    "en": "Entities appear above the effect"
+  },
+  "music_battle.l10n.editor.text_052": {
+    "ru": "Цвета: #%s → #%s",
+    "en": "Colors: #%s → #%s"
+  },
+  "music_battle.l10n.editor.text_054": {
+    "ru": "Позиция: %s / %s · появление: %s · исчезновение: %s · скорость %sx",
+    "en": "Position: %s / %s · entrance: %s · exit: %s · speed %sx"
+  },
+  "music_battle.l10n.editor.text_055": {
+    "ru": "Контур: %s · свечение: %s",
+    "en": "Outline: %s · glow: %s"
+  },
+  "music_battle.l10n.editor.text_056": {
+    "ru": "Зрители: подсвечены цветом #%s",
+    "en": "Spectators: highlighted in #%s"
+  },
+  "music_battle.l10n.editor.text_057": {
+    "ru": "Зрители: без подсветки",
+    "en": "Spectators: no highlight"
+  },
+  "music_battle.l10n.editor.text_058": {
+    "ru": "Сущности: подсвечены цветом #%s",
+    "en": "Entities: highlighted in #%s"
+  },
+  "music_battle.l10n.editor.text_059": {
+    "ru": "Сущности: без подсветки",
+    "en": "Entities: no highlight"
+  },
+  "music_battle.l10n.editor.text_060": {
+    "ru": "Свечение модели: ",
+    "en": "Model glow: "
+  },
+  "music_battle.l10n.editor.text_061": {
+    "ru": "включено",
+    "en": "enabled"
+  },
+  "music_battle.l10n.editor.text_062": {
+    "ru": "выключено",
+    "en": "disabled"
+  },
+  "music_battle.l10n.editor.text_063": {
+    "ru": "Контур мира: %s px · свечение: %s",
+    "en": "World outline: %s px · glow: %s"
+  },
+  "music_battle.l10n.editor.text_064": {
+    "ru": "Палитра: %s цветов · перелив: %s цикла/с",
+    "en": "Palette: %s colors · cycle: %s cycles/sec"
+  },
+  "music_battle.l10n.editor.text_065": {
+    "ru": "Цвет контура: #%s",
+    "en": "Outline color: #%s"
+  },
+  "music_battle.l10n.editor.text_066": {
+    "ru": "Позиция: %s · смещение: %s",
+    "en": "Position: %s · offset: %s"
+  },
+  "music_battle.l10n.editor.text_067": {
+    "ru": "Вдоль края: %s · длина палочек: %s",
+    "en": "Along edge: %s · bar length: %s"
+  },
+  "music_battle.l10n.editor.text_068": {
+    "ru": "Основные полосы: %s px · %s%% · мерцание: %s%%",
+    "en": "Main scanlines: %s px · %s%% · flicker: %s%%"
+  },
+  "music_battle.l10n.editor.text_069": {
+    "ru": "Микро-полосы: количество %s%% · прозрачность %s%%",
+    "en": "Fine scanlines: density %s%% · opacity %s%%"
+  },
+  "music_battle.l10n.editor.text_070": {
+    "ru": "Пролёт: %s px · %s%% · %sx",
+    "en": "Sweep: %s px · %s%% · %sx"
+  },
+  "music_battle.l10n.editor.text_071": {
+    "ru": "Пролетающая полоса выключена",
+    "en": "Sweep disabled"
+  },
+  "music_battle.l10n.editor.text_072": {
+    "ru": "Радиус: %s · мягкость: %s · округлость: %s · цвет #%s",
+    "en": "Radius: %s · softness: %s · roundness: %s · color #%s"
+  },
+  "music_battle.l10n.editor.text_073": {
+    "ru": "Линза: %s · радиус: %s · приближение: %sx",
+    "en": "Lens: %s · radius: %s · zoom: %sx"
+  },
+  "music_battle.l10n.editor.text_074": {
+    "ru": "Хроматика: %s · края: %s",
+    "en": "Chromatic aberration: %s · edges: %s"
+  },
+  "music_battle.l10n.editor.text_075": {
+    "ru": "Центр линзы: %s / %s",
+    "en": "Lens center: %s / %s"
+  },
+  "music_battle.l10n.editor.text_076": {
+    "ru": "Сверху/снизу: %s%% / %s%% · смещение: %s%%",
+    "en": "Top/bottom: %s%% / %s%% · offset: %s%%"
+  },
+  "music_battle.l10n.editor.text_077": {
+    "ru": "Край: %s%% · тень: %s%% · анимация: %s %sx",
+    "en": "Edge: %s%% · shadow: %s%% · animation: %s %sx"
+  },
+  "music_battle.l10n.editor.text_078": {
+    "ru": "да",
+    "en": "yes"
+  },
+  "music_battle.l10n.editor.text_079": {
+    "ru": "нет",
+    "en": "no"
+  },
+  "music_battle.l10n.editor.text_080": {
+    "ru": "Яркость: %s · контраст: %s · насыщенность: %s",
+    "en": "Brightness: %s · contrast: %s · saturation: %s"
+  },
+  "music_battle.l10n.editor.text_081": {
+    "ru": "Оттенок: %s° · гамма: %s · температура: %s",
+    "en": "Hue: %s° · gamma: %s · temperature: %s"
+  },
+  "music_battle.l10n.editor.text_082": {
+    "ru": "Размер: %s · плотность: %s · яркость: %s",
+    "en": "Size: %s · density: %s · brightness: %s"
+  },
+  "music_battle.l10n.editor.text_083": {
+    "ru": "Мерцание: %sx · движение: %sx · перелив: %s%%",
+    "en": "Twinkle: %sx · movement: %sx · iridescence: %s%%"
+  },
+  "music_battle.l10n.editor.text_085": {
+    "ru": "Центр: %s / %s · разброс: %s",
+    "en": "Center: %s / %s · spread: %s"
+  },
+  "music_battle.l10n.editor.text_086": {
+    "ru": "Яркость",
+    "en": "Brightness"
+  },
+  "music_battle.l10n.editor.text_087": {
+    "ru": "Плотность помех",
+    "en": "Noise density"
+  },
+  "music_battle.l10n.editor.text_088": {
+    "ru": "Выпуклость линзы",
+    "en": "Lens curvature"
+  },
+  "music_battle.l10n.editor.text_089": {
+    "ru": "Масштаб рамок",
+    "en": "Bar scale"
+  },
+  "music_battle.l10n.editor.text_090": {
+    "ru": "Амплитуда тряски",
+    "en": "Shake amplitude"
+  },
+  "music_battle.l10n.editor.text_091": {
+    "ru": "Сила приближения",
+    "en": "Zoom intensity"
+  },
+  "music_battle.l10n.editor.text_092": {
+    "ru": "Высота столбцов",
+    "en": "Bar height"
+  },
+  "music_battle.l10n.editor.text_093": {
+    "ru": "Размер текста",
+    "en": "Text size"
+  },
+  "music_battle.l10n.editor.text_094": {
+    "ru": "Высота огня",
+    "en": "Fire height"
+  },
+  "music_battle.l10n.editor.text_095": {
+    "ru": "Общая сила звёзд",
+    "en": "Overall star intensity"
+  },
+  "music_battle.l10n.editor.text_096": {
+    "ru": "Сила цветокоррекции",
+    "en": "Color correction intensity"
+  },
+  "music_battle.l10n.editor.text_097": {
+    "ru": "Затемнение краёв",
+    "en": "Edge darkening"
+  },
+  "music_battle.l10n.editor.text_099": {
+    "ru": "Сила контура",
+    "en": "Outline intensity"
+  },
+  "music_battle.l10n.editor.text_100": {
+    "ru": "стандартное",
+    "en": "default"
+  },
+  "music_battle.l10n.editor.text_101": {
+    "ru": "%s тик",
+    "en": "%s ticks"
+  },
+  "music_battle.l10n.editor.text_102": {
+    "ru": "сверху",
+    "en": "top"
+  },
+  "music_battle.l10n.editor.text_103": {
+    "ru": "слева",
+    "en": "left"
+  },
+  "music_battle.l10n.editor.text_104": {
+    "ru": "справа",
+    "en": "right"
+  },
+  "music_battle.l10n.editor.text_105": {
+    "ru": "снизу",
+    "en": "bottom"
+  },
+  "music_battle.l10n.editor.text_106": {
+    "ru": "ERR: длинная нота пересечётся с другой нотой этого игрока",
+    "en": "ERR: this hold note would overlap another note for this player"
+  },
+  "music_battle.l10n.editor.text_107": {
+    "ru": "ERR: ноты нельзя накладывать друг на друга",
+    "en": "ERR: notes cannot overlap"
+  },
+  "music_battle.l10n.editor.text_108": {
+    "ru": "ERR: нечего отменять",
+    "en": "ERR: nothing to undo"
+  },
+  "music_battle.l10n.editor.text_109": {
+    "ru": "ERR: нечего повторять",
+    "en": "ERR: nothing to redo"
+  },
+  "music_battle.l10n.editor.text_110": {
+    "ru": "ERR: сначала выдели ноты или FX через Ctrl+ЛКМ",
+    "en": "ERR: select notes or FX with Ctrl+left click first"
+  },
+  "music_battle.l10n.editor.text_113": {
+    "ru": "ERR: буфер редактора пуст",
+    "en": "ERR: editor clipboard is empty"
+  },
+  "music_battle.l10n.editor.text_114": {
+    "ru": "ERR: вставка пересекается с существующими нотами",
+    "en": "ERR: pasted notes would overlap existing notes"
+  },
+  "music_battle.l10n.editor.text_115": {
+    "ru": "OK: вставлено на начало текущей страницы",
+    "en": "OK: pasted at the start of the current page"
+  },
+  "music_battle.l10n.editor.text_117": {
+    "ru": "ERR: сначала выдели ноты через Ctrl+ЛКМ",
+    "en": "ERR: select notes with Ctrl+left click first"
+  },
+  "music_battle.l10n.editor.text_118": {
+    "ru": "ERR: после преобразования ноты пересекутся с партией другого игрока",
+    "en": "ERR: converted notes would overlap the other player's part"
+  },
+  "music_battle.l10n.editor.text_120": {
+    "ru": "OK: выделение перемещено",
+    "en": "OK: selection moved"
+  },
+  "music_battle.l10n.editor.text_121": {
+    "ru": "OK: параметры эффекта обновлены",
+    "en": "OK: effect settings updated"
+  },
+  "music_battle.l10n.editor.text_126": {
+    "ru": "OK: эффект удалён",
+    "en": "OK: effect deleted"
+  },
+  "music_battle.l10n.editor.text_127": {
+    "ru": "ERR: длинная нота пересечётся с другой",
+    "en": "ERR: this hold note would overlap another"
+  },
+  "music_battle.l10n.editor.text_128": {
+    "ru": "ERR: здесь уже находится другая нота",
+    "en": "ERR: another note is already here"
+  },
+  "music_battle.l10n.editor.text_136": {
+    "ru": "; будет использован первый кадр GIF",
+    "en": "; the first GIF frame will be used"
+  },
+  "music_battle.l10n.editor.text_138": {
+    "ru": "точка",
+    "en": "point"
+  },
+  "music_battle.l10n.editor.text_139": {
+    "ru": "длина",
+    "en": "length"
+  },
+  "music_battle.l10n.editor.text_140": {
+    "ru": "2 точки",
+    "en": "2 points"
+  },
+  "music_battle.l10n.guide.text_000": {
+    "ru": "Руководство Blocky Music",
+    "en": "Blocky Music Guide"
+  },
+  "music_battle.l10n.guide.text_001": {
+    "ru": "Назад",
+    "en": "Back"
+  },
+  "music_battle.l10n.guide.text_002": {
+    "ru": "← Предыдущий раздел",
+    "en": "← Previous section"
+  },
+  "music_battle.l10n.guide.text_003": {
+    "ru": "Следующий раздел →",
+    "en": "Next section →"
+  },
+  "music_battle.l10n.guide.text_004": {
+    "ru": "Быстрый старт",
+    "en": "Quick start"
+  },
+  "music_battle.l10n.guide.text_005": {
+    "ru": "Что делает мод",
+    "en": "What the mod does"
+  },
+  "music_battle.l10n.guide.text_006": {
+    "ru": "Blocky Music добавляет музыкальные дуэли игроков и существ, голосование за карты, зрительский режим, редакторы нот и FX, настраиваемую камеру и публикацию пользовательских треков.",
+    "en": "Blocky Music adds musical duels between players and creatures, track voting, spectator mode, note and FX editors, adjustable cameras, and custom track publishing."
+  },
+  "music_battle.l10n.guide.text_007": {
+    "ru": "Первые шаги",
+    "en": "First steps"
+  },
+  "music_battle.l10n.guide.text_008": {
+    "ru": "Скрафти микрофон: железный слиток сверху, медный слиток в центре и палка снизу.",
+    "en": "Craft a microphone: an iron ingot at the top, a copper ingot in the center, and a stick at the bottom."
+  },
+  "music_battle.l10n.guide.text_009": {
+    "ru": "Зажми Shift и нажми обычным микрофоном ПКМ по воздуху или блоку, затем выбери трек — партии P1 и P2 объединятся в одну сольную партию. Отдельный сольный микрофон убран из крафта и творческого меню; старые предметы автоматически превращаются в обычные микрофоны.",
+    "en": "Hold Shift and right-click the air or a block with a regular microphone, then choose a track. The P1 and P2 parts merge into one solo part. The separate solo microphone is no longer craftable or available in Creative; old items automatically convert to regular microphones."
+  },
+  "music_battle.l10n.guide.text_010": {
+    "ru": "Открой BM в меню паузы или на главном экране. Здесь меняются скорость нот, громкость музыки, зрительские эффекты, клавиши, цвет и геометрия панели.",
+    "en": "Open BM from the pause menu or title screen. Adjust note speed, music volume, spectator effects, key bindings, and panel colors and geometry here."
+  },
+  "music_battle.l10n.guide.text_011": {
+    "ru": "Открой «Редактор треков Blocky Music», создай карту, укажи музыку и превью, затем расставь ноты и FX.",
+    "en": "Open the Blocky Music Track Editor, create a chart, choose its audio and preview image, then place notes and FX."
+  },
+  "music_battle.l10n.guide.text_012": {
+    "ru": "Чтобы начать бой, возьми микрофон и нажми им по игроку или существу. Первый использованный микрофон привязывается к владельцу и хранит его статистику.",
+    "en": "To start a battle, use a microphone on a player or creature. A microphone binds to its first user and stores their statistics."
+  },
+  "music_battle.l10n.guide.text_013": {
+    "ru": "Громкость Blocky Music меняется в реальном времени и действует также на прослушивание в редакторе.",
+    "en": "Blocky Music volume changes take effect immediately, including audio preview in the editor."
+  },
+  "music_battle.l10n.guide.text_014": {
+    "ru": "Битвы и зрители",
+    "en": "Battles and spectators"
+  },
+  "music_battle.l10n.guide.text_015": {
+    "ru": "Вызов и голосование",
+    "en": "Challenges and voting"
+  },
+  "music_battle.l10n.guide.text_016": {
+    "ru": "Микрофон по игроку отправляет вызов. Получатель принимает его кликабельной кнопкой в чате или отклоняет вызов.",
+    "en": "Using a microphone on a player sends a challenge. They can accept or decline using clickable chat actions."
+  },
+  "music_battle.l10n.guide.text_017": {
+    "ru": "Микрофон по мобу начинает подготовку боя игрока против моба. В голосовании выбираются библиотека и трек.",
+    "en": "Using a microphone on a mob prepares a player-versus-mob battle. Choose the library and track during voting."
+  },
+  "music_battle.l10n.guide.text_018": {
+    "ru": "Shift + ПКМ обычным микрофоном по воздуху или блоку открывает выбор сольного трека. В соло нет соперника и второй панели, но доступны ускорения x1.5/x2; результат не меняет статистику дуэлей.",
+    "en": "Hold Shift and right-click the air or a block with a regular microphone to choose a solo track. Solo has no opponent or second panel, but supports x1.5/x2 speed; its result does not affect duel statistics."
+  },
+  "music_battle.l10n.guide.text_019": {
+    "ru": "Доступны модификаторы: единые ноты, смертельная вечеринка, скорость x1.5/x2 и сложность моба. Итоговый набор выводится в сообщении после боя.",
+    "en": "Available modifiers include shared notes, deadly party, x1.5/x2 speed, and mob difficulty. The final settings appear in the message after the battle."
+  },
+  "music_battle.l10n.guide.text_020": {
+    "ru": "Вызывающий игрока или моба выбирает, быть игроком 1 или игроком 2, при отправке вызова (по умолчанию — игрок 1). Если в карте только одна партия, её играют оба; если две — игрок 1 играет P1, игрок 2 — P2.",
+    "en": "Whoever challenges a player or a mob chooses to be Player 1 or Player 2 when sending the challenge (Player 1 by default). If a chart contains only one player's part, both players play it; with two parts, Player 1 plays P1 and Player 2 plays P2."
+  },
+  "music_battle.l10n.guide.text_021": {
+    "ru": "Во время игры",
+    "en": "During play"
+  },
+  "music_battle.l10n.guide.text_022": {
+    "ru": "Нажимай четыре назначенные клавиши, когда нота доходит до линии. Длинную ноту держи до конца хвоста.",
+    "en": "Press the four assigned keys when notes reach the hit line. Hold long notes until their tails end."
+  },
+  "music_battle.l10n.guide.text_023": {
+    "ru": "В музыкальной паузе пробел голосует за переход к следующему участку с нотами. В меню Esc участник может сдаться.",
+    "en": "During a musical break, Space votes to skip to the next section with notes. Participants can surrender from the Esc menu."
+  },
+  "music_battle.l10n.guide.text_024": {
+    "ru": "Во время боя у участника блокируются посторонние бинды модов, Shift, прокрутка и поворот камеры. Esc и функциональные клавиши F1–F25 остаются доступны. На зрителей блокировка не действует.",
+    "en": "During battle, unrelated mod key bindings, Shift, scrolling, and camera rotation are blocked for participants. Esc and function keys F1–F25 remain available. Spectators are unaffected."
+  },
+  "music_battle.l10n.guide.text_025": {
+    "ru": "Зритель",
+    "en": "Spectating"
+  },
+  "music_battle.l10n.guide.text_026": {
+    "ru": "Зритель слышит музыку с учётом скорости и громкости, видит панели, анимации и FX в зоне слышимости. При выходе из зоны эффекты плавно затухают.",
+    "en": "Spectators hear music at the current speed and volume and see panels, animations, and FX within listening range. Effects fade smoothly when they leave that range."
+  },
+  "music_battle.l10n.guide.text_027": {
+    "ru": "Клавиша «Переключить зрительскую камеру» включает камеру битвы либо текущую камеру DJ-концерта; повторное нажатие возвращает свободный ракурс. По умолчанию это V, переназначить её можно в Настройки → Управление → Blocky Music. Удалённый ракурс меняет только изображение: персонажем всё равно можно ходить, а зона слышимости считается от его настоящего положения.",
+    "en": "The Toggle Spectator Camera key switches to the battle camera or the current DJ concert camera; press it again to return to free view. The default is V, rebindable under Options → Controls → Blocky Music. Remote view changes only the image: you can still move your character, and listening range is measured from their actual position."
+  },
+  "music_battle.l10n.guide.text_028": {
+    "ru": "Настройка «Эффекты для зрителя» полностью отключает трековые FX, когда ты не являешься участником боя.",
+    "en": "The Spectator Effects setting completely disables track FX while you are not participating in a battle."
+  },
+  "music_battle.l10n.guide.text_029": {
+    "ru": "Библиотека",
+    "en": "Library"
+  },
+  "music_battle.l10n.guide.text_030": {
+    "ru": "Мои треки",
+    "en": "My tracks"
+  },
+  "music_battle.l10n.guide.text_031": {
+    "ru": "«Создать новый трек» открывает пустую карту. Edit изменяет карту, «Создать копию» дублирует карту и её ресурсы под новым безопасным ID, «Удалить» удаляет локальную копию.",
+    "en": "Create New Track opens a blank chart. Edit changes a chart, Create Copy duplicates it and its assets under a new safe ID, and Delete removes the local copy."
+  },
+  "music_battle.l10n.guide.text_032": {
+    "ru": "ID — техническое имя папки и JSON. Название и описание показываются игрокам. Не меняй ID вручную в проводнике во время работы редактора.",
+    "en": "The ID is the technical folder and JSON filename. Players see the title and description. Do not manually rename the ID in your file manager while the editor is open."
+  },
+  "music_battle.l10n.guide.text_033": {
+    "ru": "Публикация",
+    "en": "Publishing"
+  },
+  "music_battle.l10n.guide.text_034": {
+    "ru": "Редактор доступен всем. Публиковать на сервер могут OP и игроки, которым OP выдал разрешение командой /musicbattle publishaccess grant <игрок>.",
+    "en": "Anyone can use the editor. Server publishing is available to operators and players granted access by an operator using /musicbattle publishaccess grant <player>."
+  },
+  "music_battle.l10n.guide.text_035": {
+    "ru": "При публикации карта, OGG и превью отправляются на текущий сервер. В голосовании у пользовательской карты показывается её автор.",
+    "en": "Publishing sends the chart, OGG audio, and preview image to the current server. Custom tracks show their author during voting."
+  },
+  "music_battle.l10n.guide.text_036": {
+    "ru": "Превью автоматически преобразуется в PNG и уменьшается максимум до 1024 px по стороне. Для GIF используется первый кадр.",
+    "en": "Preview images automatically convert to PNG and resize to a maximum of 1024 px per side. GIFs use their first frame."
+  },
+  "music_battle.l10n.guide.text_037": {
+    "ru": "Вкладка «Опубликованные треки» показывает твои публикации на этом сервере и позволяет удалить их с сервера.",
+    "en": "The Published Tracks tab shows your uploads on this server and lets you remove them from the server."
+  },
+  "music_battle.l10n.guide.text_038": {
+    "ru": "Пользовательские карты не проверяются администрацией и могут содержать нежелательный контент — перед открытием раздела игра показывает предупреждение.",
+    "en": "Custom charts are not reviewed by administrators and may contain unwanted content. The game displays a warning before opening this section."
+  },
+  "music_battle.l10n.guide.text_039": {
+    "ru": "Файлы и импорт",
+    "en": "Files and import"
+  },
+  "music_battle.l10n.guide.text_040": {
+    "ru": "Папки в директории игры",
+    "en": "Folders in the game directory"
+  },
+  "music_battle.l10n.guide.text_041": {
+    "ru": "music_battle_raw/ — входящие OGG, изображения и файлы карт для выбора в редакторе.",
+    "en": "music_battle_raw/ — incoming OGG audio, images, and chart files available in the editor."
+  },
+  "music_battle.l10n.guide.text_042": {
+    "ru": "music_battle_tracks/my_tracks/<id>/ — твои карты: <id>.json, <id>.ogg, оптимизированное превью и варианты ускоренной музыки.",
+    "en": "music_battle_tracks/my_tracks/<id>/ — your charts: <id>.json, <id>.ogg, optimized preview images, and faster audio variants."
+  },
+  "music_battle.l10n.guide.text_043": {
+    "ru": "music_battle_tracks/.server_cache/<сервер>/ — автоматически загруженные ресурсы конкретного сервера; папка разделена по серверам.",
+    "en": "music_battle_tracks/.server_cache/<server>/ — automatically downloaded assets, stored separately for each server."
+  },
+  "music_battle.l10n.guide.text_044": {
+    "ru": "saves/<мир>/blocky_music/server_tracks/ — серверные карты конкретного одиночного мира.",
+    "en": "saves/<world>/blocky_music/server_tracks/ — server charts for a single-player world."
+  },
+  "music_battle.l10n.guide.text_045": {
+    "ru": "saves/<мир>/blocky_music/user_tracks/ — опубликованные игроками карты этого мира. На выделенном сервере используются те же папки внутри корня мира.",
+    "en": "saves/<world>/blocky_music/user_tracks/ — charts published by players in this world. Dedicated servers use the same folders inside the world directory."
+  },
+  "music_battle.l10n.guide.text_046": {
+    "ru": "Поддерживаемые файлы",
+    "en": "Supported files"
+  },
+  "music_battle.l10n.guide.text_047": {
+    "ru": "Музыка: только Vorbis OGG. При сохранении мод создаёт корректные варианты x1.5 и x2 без повышения тона.",
+    "en": "Audio: Vorbis OGG only. Saving creates correct x1.5 and x2 variants without raising pitch."
+  },
+  "music_battle.l10n.guide.text_048": {
+    "ru": "Превью: PNG, JPG/JPEG, GIF, BMP и WBMP. Исходник должен быть не тяжелее 64 МБ; редактор сам нормализует его в PNG.",
+    "en": "Preview images: PNG, JPG/JPEG, GIF, BMP, and WBMP. Source files must be 64 MB or smaller; the editor converts them to PNG."
+  },
+  "music_battle.l10n.guide.text_049": {
+    "ru": "Импорт нот: Friday Night Funkin JSON, osu!mania .osu и архив .osz. Для .osz можно переключить найденную сложность; музыка и фон из osu копируются автоматически, когда они доступны.",
+    "en": "Note import: Friday Night Funkin JSON, osu!mania .osu files, and .osz archives. For .osz, you can switch between detected difficulties; available osu audio and backgrounds are copied automatically."
+  },
+  "music_battle.l10n.guide.text_050": {
+    "ru": "Надёжная ручная установка",
+    "en": "Safe manual installation"
+  },
+  "music_battle.l10n.guide.text_051": {
+    "ru": "Для обычной работы положи исходники в music_battle_raw и выбери их кнопками Audio, Image и Chart. После Save готовая автономная карта появится в my_tracks.",
+    "en": "For normal use, place source files in music_battle_raw and select them using Audio, Image, and Chart. After Save, your complete standalone chart appears in my_tracks."
+  },
+  "music_battle.l10n.guide.text_052": {
+    "ru": "Перед ручным редактированием JSON сделай резервную копию всей папки трека. Серверные и опубликованные карты хранятся отдельно от личных, поэтому миры и серверы не конфликтуют.",
+    "en": "Before editing JSON manually, back up the entire track folder. Server and published charts are stored separately from personal charts, preventing conflicts between worlds and servers."
+  },
+  "music_battle.l10n.guide.text_053": {
+    "ru": "Редактор нот",
+    "en": "Note editor"
+  },
+  "music_battle.l10n.guide.text_054": {
+    "ru": "Подготовка карты",
+    "en": "Preparing a chart"
+  },
+  "music_battle.l10n.guide.text_055": {
+    "ru": "Заполни ID, название, описание и BPM. Кнопками Audio/Image/Chart перебираются подходящие файлы из music_battle_raw. Load считывает OGG, Play запускает прослушивание, Save сохраняет карту.",
+    "en": "Enter the ID, title, description, and BPM. Audio/Image/Chart cycle through suitable files in music_battle_raw. Load reads the OGG, Play starts audio preview, and Save saves the chart."
+  },
+  "music_battle.l10n.guide.text_056": {
+    "ru": "Тонкая полоска над таймлайном перемещает позицию прослушивания: кликни или перетащи её, затем нажми Play. Game Preview запускает игровой предпросмотр с настоящими панелями и FX.",
+    "en": "The thin strip above the timeline controls the audio preview position: click or drag it, then press Play. Game Preview opens a gameplay preview with real panels and FX."
+  },
+  "music_battle.l10n.guide.text_057": {
+    "ru": "Постановка и изменение",
+    "en": "Placing and editing"
+  },
+  "music_battle.l10n.guide.text_058": {
+    "ru": "ЛКМ по пустой клетке ставит короткую ноту. ПКМ ставит длинную или увеличивает существующую длинную ноту. Существующая нота выбирается ЛКМ и удаляется клавишей Delete.",
+    "en": "Left-click an empty cell to place a tap note. Right-click to place a hold note or extend an existing hold. Left-click an existing note to select it, then press Delete to remove it."
+  },
+  "music_battle.l10n.guide.text_059": {
+    "ru": "ЛКМ и перетаскивание перемещает ноту. У длинной ноты тяни за видимый левый или правый край, чтобы изменить длину. При переходе на соседнюю страницу курсор переносится к её началу или концу.",
+    "en": "Left-click and drag to move a note. Drag the visible left or right edge of a hold note to resize it. Switching to an adjacent page moves the cursor to that page's beginning or end."
+  },
+  "music_battle.l10n.guide.text_060": {
+    "ru": "У сетки два режима: обычный 1/4 и точный 1/8. В режиме 1/8 между каждой парой старых линий появляется одна промежуточная позиция — как более мелкий snap в аудиоредакторе.",
+    "en": "The grid has two modes: standard 1/4 and fine 1/8. The 1/8 mode adds an intermediate position between each pair of existing lines, like finer snapping in an audio editor."
+  },
+  "music_battle.l10n.guide.text_061": {
+    "ru": "Переключение сетки не приближает таймлайн, не меняет длину страницы и не двигает готовые ноты. Новый шаг применяется только при постановке, перетаскивании и изменении длины; поэтому старые карты остаются неизменными.",
+    "en": "Changing the grid does not zoom the timeline, change page length, or move existing notes. The new spacing applies only when placing, dragging, or resizing notes, so existing charts remain unchanged."
+  },
+  "music_battle.l10n.guide.text_062": {
+    "ru": "Партии и выделение",
+    "en": "Parts and selection"
+  },
+  "music_battle.l10n.guide.text_063": {
+    "ru": "Owner P1/P2 выбирает редактируемую партию. Ноты второй партии остаются полупрозрачными, и обе партии могут иметь ноты в одном месте.",
+    "en": "Owner P1/P2 selects the part you edit. The other part's notes remain translucent, and both parts can have notes at the same position."
+  },
+  "music_battle.l10n.guide.text_064": {
+    "ru": "Ctrl+ЛКМ добавляет или убирает ноту из выделения. Стрелки двигают выделение по времени и дорожкам. P1 ↔ P2 преобразует выделенные ноты в противоположную партию.",
+    "en": "Ctrl+left click adds or removes a note from the selection. Arrow keys move the selection through time and lanes. P1 ↔ P2 moves selected notes to the other player's part."
+  },
+  "music_battle.l10n.guide.text_065": {
+    "ru": "Ctrl+C копирует, Ctrl+V вставляет на начало текущей страницы, Delete удаляет выделение, Ctrl+Z отменяет, Ctrl+Shift+Z повторяет. Кнопка «Снять выделение» очищает выбор.",
+    "en": "Ctrl+C copies, Ctrl+V pastes at the beginning of the current page, Delete removes the selection, Ctrl+Z undoes, and Ctrl+Shift+Z redoes. Clear Selection deselects everything."
+  },
+  "music_battle.l10n.guide.text_066": {
+    "ru": "Редактор FX",
+    "en": "FX editor"
+  },
+  "music_battle.l10n.guide.text_067": {
+    "ru": "Ряды и порядок",
+    "en": "Rows and order"
+  },
+  "music_battle.l10n.guide.text_068": {
+    "ru": "Видно шесть FX-рядов. Колесо над областью рядов прокручивает все 48 рядов без загрузки скрытых. Старые карты с четырьмя рядами на слой автоматически сохраняют прежнее расположение.",
+    "en": "Six FX rows are visible. Scroll over the rows to browse all 48 without loading hidden ones. Older charts with four rows per layer automatically retain their original positions."
+  },
+  "music_battle.l10n.guide.text_069": {
+    "ru": "Ряд 1 находится выше остальных и рисуется последним. Затем идут 2–6, следующий набор — 7–12 и так далее. Эффекты на одном ряду допустимы и обрабатываются независимо.",
+    "en": "Row 1 appears above all others and renders last. Rows 2–6 follow, then 7–12, and so on. Multiple effects can share a row and are processed independently."
+  },
+  "music_battle.l10n.guide.text_070": {
+    "ru": "Полупрозрачные ноты основного редактора показываются только напротив первых четырёх FX-рядов.",
+    "en": "Translucent notes from the main editor appear alongside only the first four FX rows."
+  },
+  "music_battle.l10n.guide.text_071": {
+    "ru": "Работа с эффектами",
+    "en": "Working with effects"
+  },
+  "music_battle.l10n.guide.text_072": {
+    "ru": "FX кисть выбирает тип и шаблон. Режим «точка» создаёт импульс, «длина» — эффект заданной длины, «диапазон» — участок между двумя кликами.",
+    "en": "FX Brush selects an effect type and template. Point mode creates a pulse, Length creates an effect of a specified length, and Range creates a region between two clicks."
+  },
+  "music_battle.l10n.guide.text_073": {
+    "ru": "ЛКМ по эффекту открывает его свойства; перетаскивание двигает, края меняют длину. ПКМ по занятому месту удаляет эффект. Сетка, таймлайн, выделение, копирование и отмена работают так же, как у нот.",
+    "en": "Left-click an effect to open its settings; drag to move it or drag its edges to resize it. Right-click an occupied position to delete the effect. The grid, timeline, selection, copy, and undo work just as they do for notes."
+  },
+  "music_battle.l10n.guide.text_074": {
+    "ru": "Подробности FX на таймлайне появляются, только если удерживать курсор неподвижно над эффектом 3 секунды. Любое движение мыши сразу скрывает подсказку; ручки перемещения и растягивания остаются доступными без ожидания.",
+    "en": "FX details appear on the timeline only after hovering motionless over an effect for 3 seconds. Any mouse movement immediately hides the tooltip; move and resize handles are available without waiting."
+  },
+  "music_battle.l10n.guide.text_075": {
+    "ru": "Кнопка сетки здесь тоже имеет только режимы 1/4 и 1/8: точный режим добавляет промежуточные тайминги, но не масштабирует страницу и не перестраивает существующие FX.",
+    "en": "The grid button also offers only 1/4 and 1/8 here: fine mode adds intermediate timings without scaling the page or rearranging existing FX."
+  },
+  "music_battle.l10n.guide.text_076": {
+    "ru": "Ctrl+ЛКМ выделяет несколько FX. Стрелки перемещают их по времени и рядам. Кнопка «Снять выделение» отменяет выбор.",
+    "en": "Ctrl+left click selects multiple FX. Arrow keys move them through time and rows. Clear Selection deselects them."
+  },
+  "music_battle.l10n.guide.text_077": {
+    "ru": "Свойства и кисть",
+    "en": "Settings and brush"
+  },
+  "music_battle.l10n.guide.text_078": {
+    "ru": "«Перенести в кисть» сохраняет настройки выбранного эффекта как шаблон. «Перенести из кисти» применяет шаблон; у эффекта «Текст» существующая надпись при этом не заменяется.",
+    "en": "Copy to Brush saves the selected effect's settings as a template. Apply Brush applies that template; for Text effects, the existing text is preserved."
+  },
+  "music_battle.l10n.guide.text_079": {
+    "ru": "«Плавное появление» и «Плавное затухание» включаются отдельно и имеют длительность в тиках. «Перекрывать текст» определяет влияние на текстовые FX, «Перекрывать интерфейс» переносит эффект поверх панелей и текста интерфейса. У каждого FX галочки «Перекрывать игроков» и «Перекрывать сущностей» отдельно определяют, останутся ли игроки и мобы под эффектом или будут видны поверх него.",
+    "en": "Fade In and Fade Out can be enabled separately and have durations in ticks. Cover Text controls the effect's influence on text FX; Cover Interface places it above interface panels and text. Each FX also has separate Cover Players and Cover Entities settings to keep players and mobs below the effect or visible above it."
+  },
+  "music_battle.l10n.guide.text_080": {
+    "ru": "Отдельные кнопки FX-редактора могут отключить стандартные чёрные полосы боя и стандартное затемнение фона.",
+    "en": "Separate FX editor buttons can disable the battle's default black bars and background dimming."
+  },
+  "music_battle.l10n.guide.text_081": {
+    "ru": "В свойствах TAB переключает полный предпросмотр; Ctrl+Z и Ctrl+Shift+Z отменяют и возвращают изменения параметров.",
+    "en": "In effect settings, Tab toggles full preview; Ctrl+Z and Ctrl+Shift+Z undo and redo parameter changes."
+  },
+  "music_battle.l10n.guide.text_082": {
+    "ru": "Каталог эффектов",
+    "en": "Effect catalog"
+  },
+  "music_battle.l10n.guide.text_083": {
+    "ru": "Экранные эффекты",
+    "en": "Screen effects"
+  },
+  "music_battle.l10n.guide.text_084": {
+    "ru": "Вспышка — цветная вспышка по биту или постоянная заливка на всю длину; настраиваются цвет, интенсивность, прозрачность и мягкость.",
+    "en": "Flash — a beat-driven flash or a steady fill for the entire duration, with adjustable color, intensity, opacity, and softness."
+  },
+  "music_battle.l10n.guide.text_085": {
+    "ru": "Старый ТВ — основные scanline-полосы, отдельные микро-полосы шума, мерцание и настраиваемая пролетающая полоса.",
+    "en": "Old TV — main scanlines, separate fine noise lines, flicker, and an adjustable sweeping band."
+  },
+  "music_battle.l10n.guide.text_086": {
+    "ru": "Рыбий глаз — выпуклость, радиус линзы, приближение, центр, хроматическая аберрация и затемнение краёв. Галочка «Убирать чёрные края» растягивает край изображения в пустые области сильной линзы.",
+    "en": "Fish Eye — lens curvature, radius, zoom, center, chromatic aberration, and edge darkening. Remove Black Edges stretches the image edges into empty areas caused by strong lens distortion."
+  },
+  "music_battle.l10n.guide.text_087": {
+    "ru": "Кинематографические рамки — независимая высота сверху/снизу, смещение кадра, мягкость, тень и анимация появления.",
+    "en": "Cinematic Bars — independent top and bottom heights, frame offset, softness, shadow, and entrance animation."
+  },
+  "music_battle.l10n.guide.text_088": {
+    "ru": "Тряска — смещает камеру и экран с настраиваемой амплитудой.",
+    "en": "Shake — offsets the camera and screen with adjustable amplitude."
+  },
+  "music_battle.l10n.guide.text_089": {
+    "ru": "Пульсация — ритмически масштабирует композицию и может управлять другими связанными FX.",
+    "en": "Pulse — rhythmically scales the composition and can drive other linked FX."
+  },
+  "music_battle.l10n.guide.text_090": {
+    "ru": "Цветокоррекция — меняет яркость, контрастность, насыщенность, оттенок, гамму и цветовую температуру всего кадра.",
+    "en": "Color Correction — adjusts the entire frame's brightness, contrast, saturation, hue, gamma, and color temperature."
+  },
+  "music_battle.l10n.guide.text_092": {
+    "ru": "Виньетка — затемняет настраиваемую область по краям экрана.",
+    "en": "Vignette — darkens an adjustable area around the screen edges."
+  },
+  "music_battle.l10n.guide.text_093": {
+    "ru": "Сценические эффекты",
+    "en": "Stage effects"
+  },
+  "music_battle.l10n.guide.text_094": {
+    "ru": "Визуализатор — аудиополосы сверху, снизу, слева или справа; доступны смещение, размер, длина, градиент, заполнение и число секций.",
+    "en": "Visualizer — audio bars at the top, bottom, left, or right, with adjustable offset, size, length, gradient, fill, and section count."
+  },
+  "music_battle.l10n.guide.text_095": {
+    "ru": "Текст — надпись с выбором шрифта, позиции, цветов, обводки, скорости печати, анимации появления и исчезновения.",
+    "en": "Text — a caption with selectable font, position, colors, outline, typing speed, and entrance and exit animations."
+  },
+  "music_battle.l10n.guide.text_096": {
+    "ru": "Пиксельный огонь — декоративное пламя по нижнему краю сцены.",
+    "en": "Pixel Fire — decorative flames along the bottom of the stage."
+  },
+  "music_battle.l10n.guide.text_097": {
+    "ru": "Звёзды — переливающееся звёздное поле с основным цветом и цветом блика. Настраиваются размер вплоть до микро-звёзд, плотность, центр и разброс, яркость, скорость мерцания и движения, направление полёта и сила переливания. Отрицательная скорость разворачивает выбранное направление.",
+    "en": "Stars — an iridescent star field with a base color and highlight color. Adjust size down to tiny stars, density, center, spread, brightness, twinkle and movement speed, travel direction, and iridescence. Negative speed reverses the selected direction."
+  },
+  "music_battle.l10n.guide.text_098": {
+    "ru": "Подсветка игроков — контур P1/P2 с выбором цели, толщины и свечения. У игрока подсвечиваются сама модель, надетая броня и плащ. Отдельные галочки добавляют контур зрителям и живым сущностям; для обеих групп задаётся собственный цвет.",
+    "en": "Player Highlight — P1/P2 outlines with target, thickness, and glow controls. A player's model, equipped armor, and cape are highlighted. Separate options add outlines to spectators and living entities, each with its own color."
+  },
+  "music_battle.l10n.guide.text_099": {
+    "ru": "Комбинирование",
+    "en": "Combining effects"
+  },
+  "music_battle.l10n.guide.text_100": {
+    "ru": "Связь с «Пульсацией» заставляет поддерживаемый эффект реагировать на активную пульсацию. Порядок рядов определяет, будет ли пульсировать уже искажённый экран или содержимое внутри искажения.",
+    "en": "Linking to Pulse makes supported effects react to the active pulse. Row order determines whether the distorted screen itself pulses or the content inside the distortion does."
+  },
+  "music_battle.l10n.guide.text_101": {
+    "ru": "Если эффект должен закрывать HUD, включи «Перекрывать интерфейс». Если он не должен закрывать текстовые FX, выключи «Перекрывать текст». Проверяй сложные комбинации через Game Preview.",
+    "en": "Enable Cover Interface if an effect should cover the HUD. Disable Cover Text if it should not cover text FX. Check complex combinations in Game Preview."
+  },
+  "music_battle.l10n.guide.text_102": {
+    "ru": "Камера и сервер",
+    "en": "Cameras and server"
+  },
+  "music_battle.l10n.guide.text_103": {
+    "ru": "Битва мобов",
+    "en": "Mob battles"
+  },
+  "music_battle.l10n.guide.text_104": {
+    "ru": "Музыкальная связь крафтится из красного камня, жемчуга Эндера и осколка аметиста. Нажми ею по первому мобу, затем по второму. Повторный клик по участнику отменяет его текущий бой.",
+    "en": "Craft a Music Link from redstone, an ender pearl, and an amethyst shard. Use it on the first mob, then the second. Clicking a participant again cancels their current battle."
+  },
+  "music_battle.l10n.guide.text_105": {
+    "ru": "Если держать Shift при выборе, перед стартом открывается настройка боя мобов. Мобы играют ноты автоматически согласно выбранной сложности.",
+    "en": "Hold Shift while selecting to open mob battle settings before starting. Mobs play notes automatically according to the selected difficulty."
+  },
+  "music_battle.l10n.guide.text_106": {
+    "ru": "Камера битвы",
+    "en": "Battle camera"
+  },
+  "music_battle.l10n.guide.text_107": {
+    "ru": "Поставь блок камеры рядом с будущей ареной и нажми по нему. WASD перемещает камеру, Space/Shift — вверх/вниз, мышь и стрелки поворачивают и наклоняют, Ctrl ускоряет, колесо меняет FOV, R сбрасывает позицию, Enter или Esc сохраняет.",
+    "en": "Place a camera block near the future arena and use it. WASD moves the camera; Space/Shift moves up/down; the mouse and arrow keys control yaw and pitch; Ctrl speeds movement; the wheel changes FOV; R resets the position; Enter or Esc saves."
+  },
+  "music_battle.l10n.guide.text_108": {
+    "ru": "Если эта камера уже используется активной битвой, её позиция, поворот, наклон и FOV обновляются в реальном времени у обоих участников и всех зрителей, включивших ракурс битвы.",
+    "en": "If an active battle is already using this camera, its position, yaw, pitch, and FOV update live for both participants and every spectator using the battle view."
+  },
+  "music_battle.l10n.guide.text_109": {
+    "ru": "Если зона битвы удлинена цепочкой колонок, камера может стоять и в радиусе любой подключённой к этой битве колонки — рядом с исходной ареной её ставить необязательно.",
+    "en": "If a speaker chain extends the battle area, the camera can be placed within the range of any speaker connected to that battle; it does not have to be near the original arena."
+  },
+  "music_battle.l10n.guide.text_110": {
+    "ru": "Стороны игровых панелей во время боя выбираются по положению участников относительно активной камеры.",
+    "en": "The sides of the gameplay panels are chosen from the participants' positions relative to the active camera."
+  },
+  "music_battle.l10n.guide.text_111": {
+    "ru": "Колонки",
+    "en": "Speakers"
+  },
+  "music_battle.l10n.guide.text_112": {
+    "ru": "Колонка ретранслирует музыку и зрительские FX битвы. Нажми по ней ПКМ, чтобы настроить дальность звука от 2 до 64 блоков, громкость от 0 до 200%% и трёхполосный эквалайзер: низкие, средние и высокие частоты от -12 до +12 dB.",
+    "en": "A speaker relays battle music and spectator FX. Right-click it to adjust sound range from 2 to 64 blocks, volume from 0 to 200%%, and a three-band equalizer with bass, mids, and treble from -12 to +12 dB."
+  },
+  "music_battle.l10n.guide.text_113": {
+    "ru": "Колонки можно соединять в длинную цепь: следующая должна попадать в радиус предыдущего источника. Во время музыки подключённая колонка двигается точно в BPM ускоренного трека.",
+    "en": "Speakers can form long chains: the next speaker must be within the previous source's range. Connected speakers move in time with the BPM of the sped-up track."
+  },
+  "music_battle.l10n.guide.text_114": {
+    "ru": "Горизонтальная колонка работает точно так же: передаёт звук и FX, настраивается по ПКМ и двигается в бит. Она создаётся из одной обычной колонки в любом месте сетки крафта.",
+    "en": "The horizontal speaker works the same way: it relays sound and FX, is configured by right-clicking, and moves to the beat. Craft it from one regular speaker anywhere in the crafting grid."
+  },
+  "music_battle.l10n.guide.text_115": {
+    "ru": "Рецепт колонки: железо по углам и бокам, красный камень сверху и снизу, нотный блок в центре.",
+    "en": "Speaker recipe: iron in the corners and side slots, redstone at the top and bottom, and a note block in the center."
+  },
+  "music_battle.l10n.guide.text_116": {
+    "ru": "DJ-панель",
+    "en": "DJ panel"
+  },
+  "music_battle.l10n.guide.text_117": {
+    "ru": "Проводом нажми сначала по DJ-панели, колонке или боевой камере, затем по второй точке. Панель соединяется с колонками и камерами на расстоянии до 64 блоков в том же измерении. Shift + ПКМ проводом по колонке отключает её; камеру можно отключить кнопкой × в панели.",
+    "en": "Use a wire on a DJ panel, speaker, or battle camera, then on the other endpoint. Panels connect to speakers and cameras up to 64 blocks away in the same dimension. Shift+right-click a speaker with the wire to disconnect it; disconnect cameras with the panel's × button."
+  },
+  "music_battle.l10n.guide.text_118": {
+    "ru": "Нажми на live-монитор над библиотекой, чтобы открыть галерею всех подключённых камер. В ней видны карточки с кадрами, выбор ракурса, отключение и кнопка управления положением, наклоном, поворотом и FOV. Кнопки < и > оставлены для быстрого переключения. Выбранная камера сохраняется в мире и становится текущей для всех зрителей, включивших DJ-ракурс.",
+    "en": "Click the live monitor above the library to open the gallery of connected cameras. It shows preview cards, view selection, disconnect controls, and a button for position, pitch, yaw, and FOV. The < and > buttons allow quick switching. The selected camera is saved in the world and becomes the current view for all spectators using the DJ camera."
+  },
+  "music_battle.l10n.guide.text_119": {
+    "ru": "Галерея создаёт кадры только для видимых карточек, по одной низкоразрешённой камере за проход, поэтому число камер не умножает нагрузку каждого кадра. Она показывает только уже загруженные клиентом области; при активном шейдерпаке Iris/Oculus небезопасный вложенный рендер отключается и вместо картинки выводится пояснение.",
+    "en": "The gallery renders only visible cards, one low-resolution camera per pass, so camera count does not multiply the workload every frame. It shows only areas already loaded by the client. An active Iris/Oculus shader pack disables unsafe nested rendering and displays an explanation instead."
+  },
+  "music_battle.l10n.guide.text_120": {
+    "ru": "Пока DJ-панель воспроизводит музыку, любой игрок в зоне панели или соединённых колонок может клавишей зрительской камеры включить выбранный DJ ракурс. Если DJ выбирает другую карточку или двигает текущую камеру, изображение переключается и обновляется у подключённых зрителей вживую; ходить своим персонажем при этом можно как обычно. При временной выгрузке камеры вид возвращается к телу и автоматически восстанавливается, когда камера снова доступна.",
+    "en": "While a DJ panel plays music, any player within the panel's or connected speakers' range can use the spectator camera key to view the selected DJ camera. Selecting another card or moving the camera updates connected viewers live; they can still move their characters normally. If the camera temporarily unloads, view returns to the player's body and automatically resumes when the camera becomes available again."
+  },
+  "music_battle.l10n.guide.text_121": {
+    "ru": "В панели можно редактировать выбранную колонку либо сразу все подключённые; дальность, громкость и трёхполосный эквалайзер применяются вживую без кнопки сохранения.",
+    "en": "Edit the selected speaker or all connected speakers at once. Range, volume, and the three-band equalizer apply live without a save button."
+  },
+  "music_battle.l10n.guide.text_122": {
+    "ru": "Если одновременно слышны ядро битвы и несколько колонок, мод выбирает источник с самой высокой фактической громкостью с учётом расстояния. Переключение не перезапускает трек и плавно меняет громкость и направление звука.",
+    "en": "When a battle source and several speakers are audible, the mod selects the loudest source after accounting for distance. Switching does not restart the track and smoothly changes volume and sound direction."
+  },
+  "music_battle.l10n.guide.text_123": {
+    "ru": "Слева в DJ-панели находится прокручиваемая библиотека с превью, автором, BPM и длительностью. Поле над карточками ищет трек по названию, выбор не ограничен таймером. «Играть» запускает или продолжает трек, «Пауза» сохраняет выбранный трек и позицию, кнопка «С начала» явно перематывает его, а таймлайн позволяет перейти к нужному месту.",
+    "en": "The left side of the DJ panel contains a scrollable library showing previews, authors, BPM, and duration. The field above the cards searches by title, with no selection time limit. Play starts or resumes the track, Pause preserves its selection and position, Restart rewinds it, and the timeline seeks to a chosen point."
+  },
+  "music_battle.l10n.guide.text_124": {
+    "ru": "Кнопка скорости переключает x1, x1.5 и x2. Для ускорения сервер готовит отдельный вариант звука без писклявого изменения высоты; таймлайн, FX, BPM-анимация колонок и поздно подключившиеся слушатели используют ту же скорость.",
+    "en": "The speed button cycles through x1, x1.5, and x2. The server prepares separate faster audio variants without raising pitch; the timeline, FX, speaker BPM animation, and listeners joining later use the same speed."
+  },
+  "music_battle.l10n.guide.text_125": {
+    "ru": "Пока один трек играет, выбери в библиотеке другой и нажми «Скачать зрителям». Панель фоном отправит его только слушателям, которые сейчас находятся в зоне панели или подключённых колонок, не прерывая текущую музыку. Загружается вариант выбранной скорости; если этот трек запустить до конца фоновой передачи, обычный запуск безопасно получает приоритет.",
+    "en": "While a track plays, choose another in the library and press Download for Spectators. The panel sends it in the background only to listeners currently in range of the panel or connected speakers, without interrupting the music. It downloads the selected speed variant; starting that track before the transfer finishes safely gives normal playback priority."
+  },
+  "music_battle.l10n.guide.text_126": {
+    "ru": "Звуковые FX DJ-панели работают в реальном времени: общий bypass, реверберация, эхо/задержка и фильтр низких частот, который срезает высокие. Их параметры, режим одной/всех колонок, выбранные колонка, камера и трек, скорость, позиция паузы и настройки колонок сохраняются в мире даже после закрытия интерфейса или перезапуска сервера.",
+    "en": "The DJ panel's audio FX work live: master bypass, reverb, echo/delay, and a low-pass filter that cuts high frequencies. Their parameters, one/all-speaker mode, selected speaker, camera and track, speed, paused position, and speaker settings are saved in the world, even after closing the interface or restarting the server."
+  },
+  "music_battle.l10n.guide.text_127": {
+    "ru": "«Визуальные FX» открывает настройки эффектов панели, а для активной записи плейлиста — её собственные эффекты. В плейлисте TRACK копирует FX карты вместе с таймлайном, DJ копирует текущие FX панели, NONE отключает эффекты записи. Это независимые копии: их правки не меняют исходную карту, эффекты панели или другие записи. Повторный выбор того же источника сохраняет правки. Настройки используют полный инспектор редактора карт; предварительные изменения применяются вживую, «Сохранить» подтверждает их, а «Отмена» восстанавливает состояние до предпросмотра. Данные сохраняются в блоке и передаются зрителям без перезапуска музыки, в том числе при позднем входе. При естественном завершении трека эффекты продолжают анимацию и плавно затухают, даже если уже начинается следующая песня.",
+    "en": "Visual FX opens the panel's effect settings, or the active playlist entry's own effects. In the playlist, TRACK copies the chart's FX and timeline, DJ copies the panel's current FX, and NONE disables that entry's effects. These copies are independent: editing them does not change the original chart, panel effects, or other entries. Selecting the same source again preserves your edits. Settings use the chart editor's full inspector: preview changes apply live, Save confirms them, and Cancel restores the state before preview. Data is saved in the block and sent to spectators without restarting the music, including listeners joining later. When a track ends naturally, effects keep animating and fade smoothly, even as the next song starts."
+  },
+  "music_battle.l10n.guide.text_128": {
+    "ru": "Рецепт DJ-панели: проигрыватель в центре, красный камень крестом и железные слитки по углам. Рецепт провода: нить в центре и красный камень крестом.",
+    "en": "DJ panel recipe: a jukebox in the center, redstone in a cross, and iron ingots in the corners. Wire recipe: string in the center and redstone in a cross."
+  },
+  "music_battle.l10n.guide.text_129": {
+    "ru": "Команды",
+    "en": "Commands"
+  },
+  "music_battle.l10n.guide.text_130": {
+    "ru": "/musicbattle tracks — список и расположение серверных карт.",
+    "en": "/musicbattle tracks — list server charts and their locations."
+  },
+  "music_battle.l10n.guide.text_131": {
+    "ru": "/musicbattle reload — перечитать каталог карт; требуется OP.",
+    "en": "/musicbattle reload — reload the chart catalog; requires operator permissions."
+  },
+  "music_battle.l10n.guide.text_132": {
+    "ru": "/musicbattle publishaccess grant <игрок> — разрешить публикацию; требуется OP.",
+    "en": "/musicbattle publishaccess grant <player> — allow publishing; requires operator permissions."
+  },
+  "music_battle.l10n.guide.text_133": {
+    "ru": "/musicbattle publishaccess revoke <игрок> — отозвать разрешение; требуется OP.",
+    "en": "/musicbattle publishaccess revoke <player> — revoke publishing permission; requires operator permissions."
+  },
+  "music_battle.l10n.guide.text_134": {
+    "ru": "/musicbattle publishaccess check <игрок> — проверить разрешение; требуется OP.",
+    "en": "/musicbattle publishaccess check <player> — check publishing permission; requires operator permissions."
+  },
+  "music_battle.l10n.guide.text_135": {
+    "ru": "Команды accept и decline обычно вызываются кликабельными действиями в сообщении о дуэли.",
+    "en": "The accept and decline commands are normally triggered by clickable actions in duel challenge messages."
+  },
+  "music_battle.l10n.guide.text_136": {
+    "ru": "Если на сервере нет ни одной карты, бой отменяется. Для обычных серверных карт положи готовые папки в blocky_music/server_tracks текущего мира и выполни reload.",
+    "en": "If the server has no charts, the battle is canceled. For regular server charts, place complete track folders in the current world's blocky_music/server_tracks folder and run reload."
+  },
+  "music_battle.l10n.guide.text_137": {
+    "ru": "Совет: %s",
+    "en": "Tip: %s"
+  },
+  "music_battle.l10n.guide.text_138": {
+    "ru": "Важно: %s",
+    "en": "Important: %s"
+  },
+  "music_battle.l10n.editor.max_effects": {
+    "ru": "ERR: максимум %s эффектов",
+    "en": "ERR: maximum %s effects"
+  },
+  "music_battle.l10n.editor.range_start": {
+    "ru": "OK: начало диапазона %s, поставь вторую точку",
+    "en": "OK: range starts at %s; place the second point"
+  },
+  "music_battle.l10n.editor.range_added": {
+    "ru": "OK: диапазон эффекта добавлен",
+    "en": "OK: effect range added"
+  },
+  "music_battle.l10n.editor.effect_added": {
+    "ru": "OK: %s добавлен",
+    "en": "OK: %s added"
+  },
+  "music_battle.l10n.editor.preview_position": {
+    "ru": "OK: позиция прослушивания — тик %s",
+    "en": "OK: preview position — tick %s"
+  }
+}

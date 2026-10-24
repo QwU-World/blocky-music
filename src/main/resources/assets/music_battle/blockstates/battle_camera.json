@@ -1,0 +1,8 @@
+{
+  "variants": {
+    "facing=north": { "model": "music_battle:block/battle_camera" },
+    "facing=east": { "model": "music_battle:block/battle_camera", "y": 90 },
+    "facing=south": { "model": "music_battle:block/battle_camera", "y": 180 },
+    "facing=west": { "model": "music_battle:block/battle_camera", "y": 270 }
+  }
+}

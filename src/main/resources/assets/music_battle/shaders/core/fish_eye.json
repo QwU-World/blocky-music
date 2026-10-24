@@ -1,0 +1,19 @@
+{
+  "vertex": "minecraft:blit_screen",
+  "fragment": "music_battle:fish_eye",
+  "samplers": [
+    { "name": "DiffuseSampler" },
+    { "name": "ModelMaskSampler" }
+  ],
+  "uniforms": [
+    { "name": "Strength", "type": "float", "count": 1, "values": [ 0.24 ] },
+    { "name": "Radius", "type": "float", "count": 1, "values": [ 1.0 ] },
+    { "name": "Zoom", "type": "float", "count": 1, "values": [ 1.0 ] },
+    { "name": "Center", "type": "float", "count": 2, "values": [ 0.5, 0.5 ] },
+    { "name": "Opacity", "type": "float", "count": 1, "values": [ 1.0 ] },
+    { "name": "Chromatic", "type": "float", "count": 1, "values": [ 0.1 ] },
+    { "name": "EdgeDarkening", "type": "float", "count": 1, "values": [ 0.28 ] },
+    { "name": "RemoveBlackEdges", "type": "float", "count": 1, "values": [ 0.0 ] },
+    { "name": "UseModelMask", "type": "float", "count": 1, "values": [ 0.0 ] }
+  ]
+}

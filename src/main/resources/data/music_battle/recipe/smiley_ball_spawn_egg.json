@@ -1,0 +1,17 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "pattern": ["ROY", "LSC", "BPM"],
+  "key": {
+    "R": {"item": "minecraft:red_dye"},
+    "O": {"item": "minecraft:orange_dye"},
+    "Y": {"item": "minecraft:yellow_dye"},
+    "L": {"item": "minecraft:lime_dye"},
+    "S": {"item": "minecraft:nether_star"},
+    "C": {"item": "minecraft:cyan_dye"},
+    "B": {"item": "minecraft:blue_dye"},
+    "P": {"item": "minecraft:purple_dye"},
+    "M": {"item": "minecraft:magenta_dye"}
+  },
+  "result": {"id": "music_battle:smiley_ball_spawn_egg", "count": 1}
+}

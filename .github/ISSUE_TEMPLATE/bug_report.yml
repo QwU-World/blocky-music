@@ -1,0 +1,69 @@
+name: Bug report
+description: Something in Blocky Music does not work
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time. The log is the most useful thing you can attach: most of these bugs are one line
+        in it.
+
+  - type: input
+    id: version
+    attributes:
+      label: Blocky Music version
+      description: The jar's name, as it is in your mods folder.
+      placeholder: blocky_music-0.1.0.jar
+    validations:
+      required: true
+
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where it happened
+      options:
+        - Single-player
+        - On a server (I am a player)
+        - On a server (I run it)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows
+        - macOS (Apple silicon)
+        - macOS (Intel)
+        - Linux
+    validations:
+      required: true
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you got instead.
+      placeholder: |
+        I challenged my friend and picked a map from the Workshop. The download finished, but the battle never started.
+    validations:
+      required: true
+
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: |
+        `logs/latest.log` from your Minecraft instance (and the server's, if you run it). Attach the file or paste the
+        part around the problem. It contains your username; look before you post.
+      render: text
+
+  - type: checkboxes
+    id: before
+    attributes:
+      label: Before you post
+      options:
+        - label: The server and every player use the same Blocky Music build.
+        - label: This happens with only Blocky Music and playerAnimator installed, or I have said which other mods are involved.
+        - label: I have looked at the open issues and this is not one of them.

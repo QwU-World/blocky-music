@@ -1,0 +1,36 @@
+{
+  "parent": "music_battle:sound_check",
+  "display": {
+    "icon": {
+      "id": "music_battle:battle_camera"
+    },
+    "title": {
+      "translate": "advancements.music_battle.camera_crew.title"
+    },
+    "description": {
+      "translate": "advancements.music_battle.camera_crew.description"
+    },
+    "frame": "task",
+    "show_toast": true,
+    "announce_to_chat": true,
+    "hidden": false
+  },
+  "criteria": {
+    "placed": {
+      "trigger": "minecraft:placed_block",
+      "conditions": {
+        "location": [
+          {
+            "condition": "minecraft:block_state_property",
+            "block": "music_battle:battle_camera"
+          }
+        ]
+      }
+    }
+  },
+  "requirements": [
+    [
+      "placed"
+    ]
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "type": "minecraft:block",
+  "pools": [
+    {
+      "rolls": 1,
+      "entries": [
+        {
+          "type": "minecraft:item",
+          "name": "music_battle:speaker",
+          "conditions": [
+            {
+              "condition": "minecraft:block_state_property",
+              "block": "music_battle:speaker",
+              "properties": { "extension": "false" }
+            }
+          ]
+        }
+      ],
+      "conditions": [
+        {
+          "condition": "minecraft:survives_explosion"
+        }
+      ]
+    }
+  ],
+  "random_sequence": "music_battle:blocks/speaker"
+}

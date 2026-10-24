@@ -1,0 +1,6 @@
+{
+  "vertex": "minecraft:blit_screen",
+  "fragment": "music_battle:fx_model_mask",
+  "samplers": [],
+  "uniforms": []
+}

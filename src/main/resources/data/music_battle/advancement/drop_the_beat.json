@@ -1,0 +1,33 @@
+{
+  "parent": "music_battle:root",
+  "display": {
+    "icon": {
+      "id": "music_battle:microphone"
+    },
+    "title": {
+      "translate": "advancements.music_battle.drop_the_beat.title"
+    },
+    "description": {
+      "translate": "advancements.music_battle.drop_the_beat.description"
+    },
+    "frame": "task",
+    "show_toast": true,
+    "announce_to_chat": true,
+    "hidden": false
+  },
+  "criteria": {
+    "called_out": {
+      "trigger": "minecraft:player_interacted_with_entity",
+      "conditions": {
+        "item": {
+          "items": "music_battle:microphone"
+        }
+      }
+    }
+  },
+  "requirements": [
+    [
+      "called_out"
+    ]
+  ]
+}

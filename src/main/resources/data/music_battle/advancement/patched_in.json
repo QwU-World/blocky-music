@@ -1,0 +1,38 @@
+{
+  "parent": "music_battle:sound_check",
+  "display": {
+    "icon": {
+      "id": "music_battle:speaker_wire"
+    },
+    "title": {
+      "translate": "advancements.music_battle.patched_in.title"
+    },
+    "description": {
+      "translate": "advancements.music_battle.patched_in.description"
+    },
+    "frame": "task",
+    "show_toast": true,
+    "announce_to_chat": true,
+    "hidden": false
+  },
+  "criteria": {
+    "wired": {
+      "trigger": "minecraft:item_used_on_block",
+      "conditions": {
+        "location": [
+          {
+            "condition": "minecraft:match_tool",
+            "predicate": {
+              "items": "music_battle:speaker_wire"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "requirements": [
+    [
+      "wired"
+    ]
+  ]
+}
