@@ -29,8 +29,8 @@ Modrinth (`github.com/modrinth/code`) — именно они решают, пу
 out correctly and are consistent with information found elsewhere». Раздел 5 там назван правилами,
 которые «will not be enforced as strictly», но расхождения всё равно дают лишние вопросы на ревью. Jar,
 файлы, страница лицензии и страница на Modrinth должны говорить одно и то же. В jar 0.2.0-beta.2 это
-проверено (пункт 6). Страницу лицензии на qwu.world после последней правки `NOTICE.md` надо перезалить
-(пункт 7), а листинг на Modrinth заполнить из готового текста.
+проверено (пункт 6). Страница лицензии на qwu.world перезалита 1 ноября 2026 и совпадает с `NOTICE.md` этого
+релиза (пункт 7); листинг на Modrinth заполняется из готового текста.
 
 Готовый текст листинга (Summary, Description по-английски, блок раскрытий, поля версии и лицензии) лежит в
 [`MODRINTH-LISTING.md`](MODRINTH-LISTING.md) — он написан под правила из этого файла и проверен по ним.
@@ -116,8 +116,8 @@ out correctly and are consistent with information found elsewhere». Разде�
      `[NOTICE.md](NOTICE.md)` при переносе заменить якорями на этой же странице или абсолютными URL: как
      есть они ведут на `/mods/minecraft/blocky-music/LICENSE` и т. п., а там 404.
    - При любой правке `NOTICE.md` страницу перезаливать (вместе с датой «Last updated»), и до того, как
-     URL уходит в поле License на Modrinth. Копии на сайте старше `NOTICE.md` от 1 ноября 2026, поэтому перед
-     отправкой на ревью — `node scripts/sync-blocky-music-license.mjs --apply` и деплой.
+     URL уходит в поле License на Modrinth (`node scripts/sync-blocky-music-license.mjs --apply` в репозитории
+     сайта и деплой). Для 0.2.0-beta.2 это сделано 1 ноября 2026.
    - Валидатор Modrinth страницу не открывает: для `LicenseRef-*` он проверяет только, что URL не пустой,
      разбирается и не на запрещённом домене
      ([license.rs](https://github.com/modrinth/code/blob/main/apps/labrinth/src/validate/project/license.rs)).
