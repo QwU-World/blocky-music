@@ -60,7 +60,7 @@ import ru.gora.musicbattle.workshop.api.WorkshopDtos.SetHistory;
 import ru.gora.musicbattle.workshop.api.WorkshopDtos.Upload;
 
 /**
- * Blocking client for the workshop HTTP API v1 (spec 02, 06 section 4). Pure JDK and Gson; call it off the render
+ * Blocking client for the workshop HTTP API v1. Pure JDK and Gson; call it off the render
  * thread.
  *
  * <ul>
@@ -74,7 +74,7 @@ import ru.gora.musicbattle.workshop.api.WorkshopDtos.Upload;
  *       (download links, previews) must resolve to the same origin, otherwise the call is refused.</li>
  *   <li><b>Tokens:</b> the workshop bearer token is attached only to {@code /api/} requests on the workshop origin,
  *       never to files and never in URLs. This class never sees the Minecraft access token.</li>
- *   <li><b>Responses:</b> every JSON body must carry {@code "schema": 1} (spec 02 section 1), otherwise
+ *   <li><b>Responses:</b> every JSON body must carry {@code "schema": 1}, otherwise
  *       {@link WorkshopApiException#SCHEMA_MISMATCH}; errors become {@link WorkshopApiException} with the API code and
  *       {@code Retry-After}.</li>
  *   <li><b>Drive, not network:</b> a download reads from a socket and writes to a drive, and the JDK throws the same
@@ -776,9 +776,9 @@ public final class WorkshopApi {
         return value != null && SHA256.matcher(value).matches();
     }
 
-    // ================================================================ catalogue (02 section 2)
+    // ================================================================ catalogue
 
-    /** Search parameters, 02 section 2.1. Null or empty values are left out. */
+    /** Search parameters. Null or empty values are left out. */
     public record SearchQuery(String q, String category, List<String> general, Integer genre, Integer language, String audio,
                               List<String> extra, Boolean nsfw, String sort, String cursor, Integer limit) {
         public static SearchQuery of(String q) {
@@ -834,7 +834,7 @@ public final class WorkshopApi {
         return WorkshopDtos.read(getJson("/api/v1/beatmapsets/" + positive(setId) + "/history", true, cancel), SetHistory.class);
     }
 
-    /** {@code POST /api/v1/beatmapsets/cards} (08 A5.5), at most 50 ids. */
+    /** {@code POST /api/v1/beatmapsets/cards}, at most 50 ids. */
     public List<SetCard> cards(List<Long> ids, CancelToken cancel) throws WorkshopApiException {
         JsonArray array = new JsonArray();
         ids.stream().limit(50).forEach(id -> array.add(new JsonPrimitive(id)));
@@ -911,7 +911,7 @@ public final class WorkshopApi {
         return WorkshopDtos.read(getJson("/api/v1/users/" + ref, true, cancel), WorkshopDtos.Profile.class);
     }
 
-    // ================================================================ comments (04 section 2)
+    // ================================================================ comments
 
     public CommentsPage comments(String commentableType, long commentableId, long parentId, String sort, String cursor,
                                  CancelToken cancel) throws WorkshopApiException {
@@ -946,7 +946,7 @@ public final class WorkshopApi {
     }
 
     /**
-     * {@code POST /api/v1/reports {targetType, targetId, reason, details}} (04 section 6.1). {@code targetType}:
+     * {@code POST /api/v1/reports {targetType, targetId, reason, details}}. {@code targetType}:
      * beatmapset, comment or user.
      */
     public JsonObject report(String targetType, long targetId, String reason, String details, CancelToken cancel)
@@ -989,7 +989,7 @@ public final class WorkshopApi {
         return sendJson("POST", "/api/v1/comments", json, true, cancel);
     }
 
-    // ================================================================ account and auth (02 section 4)
+    // ================================================================ account and auth
 
     public Me me(CancelToken cancel) throws WorkshopApiException {
         return WorkshopDtos.read(getJson("/api/v1/me", true, cancel), Me.class);
@@ -1130,7 +1130,7 @@ public final class WorkshopApi {
         return codes;
     }
 
-    // ================================================================ uploads (02 section 3)
+    // ================================================================ uploads
 
     public Upload createUpload(Long setId, CancelToken cancel) throws WorkshopApiException {
         JsonObject body = new JsonObject();

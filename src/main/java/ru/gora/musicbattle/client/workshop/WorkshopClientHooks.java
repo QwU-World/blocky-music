@@ -6,7 +6,6 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
-import net.minecraft.client.gui.components.Tooltip;
 import net.minecraft.client.gui.screens.PauseScreen;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.TitleScreen;
@@ -20,7 +19,7 @@ import ru.gora.musicbattle.client.workshop.layout.MenuCornerButtons;
 import ru.gora.musicbattle.client.workshop.layout.Rect;
 
 /**
- * Game hooks of the Workshop (spec 06 section 5): the Alt+B key (rebindable), the button on the title screen and the
+ * Game hooks of the Workshop: the Alt+B key (rebindable), the button on the title screen and the
  * pause menu, the global {@code .blockymap} drop and the client tick. Called from {@code ClientGameEvents} and the mouse
  * input mixin. Render thread only.
  */
@@ -28,7 +27,7 @@ public final class WorkshopClientHooks {
     private WorkshopClientHooks() {
     }
 
-    // ---------------------------------------------------------------- payloads (spec 06 section 10)
+    // ---------------------------------------------------------------- payloads
     // The second owner of client-only handlers behind ClientPayloadBridge: everything the server's Workshop
     // features send lands here, so the battle controller keeps its own surface. Render thread.
 
@@ -65,7 +64,7 @@ public final class WorkshopClientHooks {
     }
 
     /**
-     * Answers a battle asset offer from the in-memory content index only (review of 06 section 9.4): no file is
+     * Answers a battle asset offer from the in-memory content index only: no file is
      * hashed and nothing blocking happens on this thread.
      */
     public static void answerTrackAssetOffer(ru.gora.musicbattle.network.TrackAssetOfferPayload payload) {
@@ -109,7 +108,6 @@ public final class WorkshopClientHooks {
         Rect bounds = pause ? MenuCornerButtons.pauseWorkshop() : MenuCornerButtons.workshop(screen.width);
         Button button = new TitleButton((int) bounds.x(), (int) bounds.y(), (int) bounds.w(), (int) bounds.h(),
                 Component.translatable("screen.music_battle.workshop.title_button"), ignored -> WorkshopClient.open(screen));
-        button.setTooltip(Tooltip.create(Component.translatable("screen.music_battle.workshop.title_button.tooltip")));
         event.addListener(button);
     }
 
@@ -125,10 +123,10 @@ public final class WorkshopClientHooks {
         return WorkshopDrops.onFilesDropped(screen, paths);
     }
 
-    /** Vanilla button with the Workshop music icon before its label. */
-    private static final class TitleButton extends Button {
+    /** Vanilla button with the Workshop music icon before its label, and its hint in the toolkit's card. */
+    private static final class TitleButton extends MenuButtonTooltips.HintedButton {
         TitleButton(int x, int y, int width, int height, Component message, OnPress onPress) {
-            super(x, y, width, height, message, onPress, DEFAULT_NARRATION);
+            super(x, y, width, height, message, "screen.music_battle.workshop.title_button.tooltip", onPress);
         }
 
         @Override

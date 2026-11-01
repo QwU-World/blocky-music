@@ -24,6 +24,11 @@ import ru.gora.musicbattle.data.TrackEffectSettings;
  * position in this list, and the server resolves that number against its own runtime notes. Each note in the file
  * carries the number the server gave it, and this reader puts it there, so the two numberings are the same list by
  * construction. Nothing here may sort, filter or merge the notes on top of that.
+ *
+ * <p>What it refuses is said with a translation key ({@link ClientTrackExporter.Problem}), in the player's own language:
+ * the reason, after «карта повреждена: » / "Invalid beatmap: ", goes to the server's log and, for a spectator whose
+ * download failed, to that spectator's own chat. The other players only learn whose client failed
+ * ({@code BattleManager.reportClientError}, {@code server.client_error_player}).
  */
 public final class ClientTrackChart {
     /**
@@ -39,19 +44,23 @@ public final class ClientTrackChart {
         try {
             JsonObject root = JsonParser.parseString(Files.readString(path, StandardCharsets.UTF_8)).getAsJsonObject();
             String trackId = root.has("id") ? root.get("id").getAsString() : "";
-            if (!trackId.equals(expectedTrackId) || !root.has("notes") || !root.get("notes").isJsonArray()) {
-                throw new IOException("Chart metadata does not match selected track");
+            if (!trackId.equals(expectedTrackId)) {
+                throw new ClientTrackExporter.Problem("music_battle.l10n.client.beatmap_mismatch");
+            }
+            // The right beatmap with no list of notes is broken, not another beatmap's file, which it used to be called.
+            if (!root.has("notes") || !root.get("notes").isJsonArray()) {
+                throw new ClientTrackExporter.Problem("music_battle.l10n.client.beatmap_no_notes");
             }
             JsonArray array = root.getAsJsonArray("notes");
             if (array.size() > MAX_NOTES) {
-                throw new IOException("Chart has too many notes");
+                throw new ClientTrackExporter.Problem("music_battle.l10n.client.beatmap_too_many_notes");
             }
             List<BattleNote> notes = new ArrayList<>(array.size());
             BattleNote[] byServerIndex = new BattleNote[array.size()];
             boolean numbered = array.size() > 0;
             for (JsonElement element : array) {
                 if (!element.isJsonObject()) {
-                    throw new IOException("Chart contains an invalid note");
+                    throw new ClientTrackExporter.Problem("music_battle.l10n.client.beatmap_bad_note");
                 }
                 JsonObject note = element.getAsJsonObject();
                 int owner = integer(note, "owner");
@@ -59,7 +68,7 @@ public final class ClientTrackChart {
                 int tick = integer(note, "tick");
                 int duration = integer(note, "durationTicks");
                 if (owner < 0 || owner > 1 || lane < 0 || lane > 3 || tick < 0 || duration < 0) {
-                    throw new IOException("Chart note is outside allowed ranges");
+                    throw new ClientTrackExporter.Problem("music_battle.l10n.client.beatmap_note_out_of_range");
                 }
                 BattleNote parsed = new BattleNote(owner, lane, tick, duration);
                 notes.add(parsed);
@@ -90,15 +99,15 @@ public final class ClientTrackChart {
                         : TrackEffect.LEGACY_FX_ROWS_PER_LAYER;
                 if (fxRowsPerLayer != TrackEffect.LEGACY_FX_ROWS_PER_LAYER
                         && fxRowsPerLayer != TrackEffect.FX_ROWS_PER_LAYER) {
-                    throw new IOException("Chart uses an unsupported FX grid");
+                    throw new ClientTrackExporter.Problem("music_battle.l10n.client.beatmap_fx_grid");
                 }
                 JsonArray effectArray = root.getAsJsonArray("effects");
                 if (effectArray.size() > TrackEffect.MAX_EFFECTS) {
-                    throw new IOException("Chart has too many effects");
+                    throw new ClientTrackExporter.Problem("music_battle.l10n.client.beatmap_too_many_effects");
                 }
                 for (JsonElement element : effectArray) {
                     if (!element.isJsonObject()) {
-                        throw new IOException("Chart contains an invalid effect");
+                        throw new ClientTrackExporter.Problem("music_battle.l10n.client.beatmap_bad_effect");
                     }
                     JsonObject effect = element.getAsJsonObject();
                     String type = effect.has("type") ? effect.get("type").getAsString() : "flash";
@@ -131,7 +140,7 @@ public final class ClientTrackChart {
                     float outlineThickness = effect.has("outlineThickness") ? effect.get("outlineThickness").getAsFloat() : 2.0F;
                     float glowStrength = effect.has("glowStrength") ? effect.get("glowStrength").getAsFloat() : 1.0F;
                     if (sourceLane < 0 || sourceLane >= fxRowsPerLayer || sourceLayer < 0 || sourceLayer > 7 || tick < 0 || duration < 0 || duration > 20 * 60 * 30 || !Float.isFinite(intensity) || !Float.isFinite(softness)) {
-                        throw new IOException("Chart effect is outside allowed ranges");
+                        throw new ClientTrackExporter.Problem("music_battle.l10n.client.beatmap_effect_out_of_range");
                     }
                     TrackEffect.FxPosition position = TrackEffect.migrateFxPosition(sourceLane, sourceLayer, fxRowsPerLayer);
                     effects.add(new TrackEffect(effectType, position.lane(), position.layer(), tick, duration, intensity, softness,
@@ -145,7 +154,9 @@ public final class ClientTrackChart {
             return new LoadedChart(ordered, List.copyOf(effects), disableStageBars, hideStandardDimming,
                     ChartBeat.readOffsetMs(root));
         } catch (RuntimeException exception) {
-            throw new IOException("Unable to parse downloaded chart", exception);
+            IOException unreadable = new ClientTrackExporter.Problem("music_battle.l10n.client.beatmap_unreadable");
+            unreadable.initCause(exception);
+            throw unreadable;
         }
     }
 
@@ -154,7 +165,7 @@ public final class ClientTrackChart {
             if ("durationTicks".equals(key)) {
                 return 0;
             }
-            throw new IOException("Chart note is missing " + key);
+            throw new ClientTrackExporter.Problem("music_battle.l10n.client.beatmap_missing_field", key);
         }
         return object.get(key).getAsInt();
     }

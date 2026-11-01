@@ -22,9 +22,14 @@ public final class SpeakerBlockEntityRenderer implements BlockEntityRenderer<Spe
         Direction facing = facingOf(speaker);
         boolean active = speaker.getBlockState().hasProperty(SpeakerBlock.ACTIVE)
                 && speaker.getBlockState().getValue(SpeakerBlock.ACTIVE);
+        // From a beat of the song the speaker plays (beat 1 of its chart, after any lead-in) when the server said which
+        // tick that is; otherwise from the world's tick 0 as before, the right tempo at an arbitrary phase.
+        long beatTick = speaker.getBeatGameTick();
         float elapsedSeconds = speaker.getLevel() == null
                 ? 0.0F
-                : (speaker.getLevel().getGameTime() + partialTick) / 20.0F;
+                : beatTick == SpeakerBlockEntity.NO_BEAT
+                ? (speaker.getLevel().getGameTime() + partialTick) / 20.0F
+                : ((speaker.getLevel().getGameTime() - beatTick) + partialTick) / 20.0F;
         // The supplied animation lasts 0.5 seconds. Advancing one animation loop per beat
         // locks the cone/body movement to the effective (speed-adjusted) battle BPM.
         float animationSeconds = elapsedSeconds * (speaker.getActiveBpm() / 60.0F) * 0.5F;

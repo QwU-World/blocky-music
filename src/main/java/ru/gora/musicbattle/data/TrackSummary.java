@@ -5,7 +5,7 @@ import net.minecraft.network.RegistryFriendlyByteBuf;
 /**
  * One row of the vote screen and of the DJ track picker.
  *
- * <p>Wave M3 (spec 06 section 9.4) added {@link #source}, {@link #setId}, {@link #contentSha256} and {@link #mapper}
+ * <p>{@link #source}, {@link #setId}, {@link #contentSha256} and {@link #mapper} are there
  * so a row can say where it came from: a server beatmap installed from the Workshop, a legacy server track, a track a
  * player published on this server, or — built by the client, never sent by the server — one of the voter's own
  * installed sets. The chips and the players' warning in the vote screen read only {@link #source}.
@@ -71,7 +71,7 @@ public record TrackSummary(
                 userTrack ? Source.USER : Source.SERVER, 0L, "", "");
     }
 
-    /** Kept from before M3: the players' warning and the publisher tooltip ask exactly this. */
+    /** Kept beside source(): the players' warning and the publisher tooltip ask exactly this. */
     public boolean userTrack() {
         return source == Source.USER;
     }

@@ -10,7 +10,7 @@ import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.RenderType;
 
 /**
- * Per-frame draw counters for measuring a screen (research section 13.3): SDF shapes queued, immediate image
+ * Per-frame draw counters for measuring a screen: SDF shapes queued, immediate image
  * draws, vanilla fallback fills, and, when the screen renders through {@link #countingGraphics}, the number
  * of batches actually flushed per render type. Render thread only.
  */

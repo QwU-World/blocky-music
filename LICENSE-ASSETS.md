@@ -4,7 +4,7 @@ Blocky Music assets © 2026 by QwU World is licensed under CC BY-NC 4.0. To view
 
 | | |
 |---|---|
-| **Title** | Blocky Music assets (textures, models, block states, Blockbench projects, player animations, sounds) |
+| **Title** | Blocky Music assets (textures, models, block states, Blockbench projects, player animations, sound definitions) |
 | **Author** | QwU World |
 | **Source** | https://qwu.world/mods/minecraft/blocky-music |
 | **Licence** | Creative Commons Attribution-NonCommercial 4.0 International (CC BY-NC 4.0) |
@@ -26,12 +26,16 @@ not in the jar.
 - `src/main/resources/assets/music_battle/models/`
 - `src/main/resources/assets/music_battle/blockstates/`
 - `src/main/resources/assets/music_battle/blockbench/`
-- `src/main/resources/assets/music_battle/player_animations/`
+- `src/main/resources/assets/music_battle/player_animations/` (made from
+  `blockbench/bm_player_animation.bbmodel` by `tools/convert_blockbench_player_animations.mjs`)
 - `src/main/resources/assets/music_battle/sounds/` and `src/main/resources/assets/music_battle/sounds.json`
+  (`sounds/` holds no sound of QwU World's own today: its one file is the SampleFocus sound excluded below, so
+  the folder is in the jar but not in the public source repository)
 - `microphone.bbmodel` in the repository root (a copy of `blockbench/microphone.bbmodel`)
 - `texture.png` in the repository root (a copy of `textures/item/microphone.png`, the texture used by the
   root `microphone.bbmodel`)
-- `player anims.bbmodel` in the repository root (the Blockbench file of the player animations)
+- `player anims.bbmodel` in the repository root (an earlier Blockbench draft of the player animations, not used
+  by the build; its six `ref_` cubes are only the standard Minecraft player shape the animations are posed against)
 
 Generated art is covered too, and its generator is the record of who made it:
 `src/main/resources/assets/music_battle/textures/item/music_link.png` is drawn by
@@ -48,7 +52,8 @@ under the SampleFocus Standard License (https://samplefocus.com/license), it is 
 World's licences, and it must not be extracted from the mod or redistributed on its own. Details are in
 [NOTICE.md](NOTICE.md).
 
-- `src/main/resources/assets/music_battle/sounds/entity/smiley_damage.ogg` (sample from SampleFocus)
+- `src/main/resources/assets/music_battle/sounds/entity/smiley_damage.ogg` (sample from SampleFocus; in the jar, not in
+  the public source repository)
 
 **Excluded: third-party fonts and icons.** They keep their own licences; details and full texts are in
 [NOTICE.md](NOTICE.md) and next to the files.
@@ -81,11 +86,12 @@ They are standard format boilerplate and are not claimed as QwU World's work (se
   `minecraft:block/jukebox_side` and `minecraft:item/blaze_rod`. The game loads those textures from the
   player's own copy of Minecraft. They are Mojang's, are not included in Blocky Music, and are not licensed
   here.
-- **Names and logos.** "QwU World", "Blocky Music" and their logos. CC BY-NC 4.0 itself says: "Patent and
-  trademark rights are not licensed under this Public License" (Section 2(b)(2)).
-- **Music, charts and anything players make or import.** Blocky Music ships no music. Tracks, charts,
-  beatmaps, cover images and audio that a player creates, imports or shares belong to their owners. Nothing
-  QwU World licenses covers them.
+- **Names and logos.** "QwU World", "Blocky Music" and their logos, among them the Blocky Music logo
+  `src/main/resources/blocky_music_logo.png`. CC BY-NC 4.0 itself says: "Patent and trademark rights are not
+  licensed under this Public License" (Section 2(b)(2)).
+- **Music, beatmaps and anything players make or import.** Blocky Music ships no music. Beatmaps, songs, cover
+  images and other audio that a player creates, imports or shares belong to their owners. Nothing QwU World
+  licenses covers them.
 
 ## How to attribute
 

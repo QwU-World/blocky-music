@@ -1,0 +1,28 @@
+{
+  "parent": "music_battle:headliner",
+  "display": {
+    "icon": {
+      "id": "minecraft:nether_star"
+    },
+    "title": {
+      "translate": "advancements.music_battle.meaning_of_life.title"
+    },
+    "description": {
+      "translate": "advancements.music_battle.meaning_of_life.description"
+    },
+    "frame": "challenge",
+    "show_toast": true,
+    "announce_to_chat": true,
+    "hidden": true
+  },
+  "criteria": {
+    "code": {
+      "trigger": "minecraft:impossible"
+    }
+  },
+  "requirements": [
+    [
+      "code"
+    ]
+  ]
+}

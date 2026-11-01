@@ -54,7 +54,7 @@ public final class MusicBattleKeys {
     );
 
     /**
-     * Opens the Workshop; Alt+B by default (Option+B on macOS), rebindable (architect decision for wave M2b). Alt keeps
+     * Opens the Workshop; Alt+B by default (Option+B on macOS), rebindable. Alt keeps
      * clear of vanilla's hard-coded Ctrl/Cmd+B narrator shortcut, so no input mixin is needed.
      */
     public static final KeyMapping OPEN_WORKSHOP = new KeyMapping(

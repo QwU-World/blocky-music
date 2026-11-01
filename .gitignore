@@ -19,3 +19,7 @@ rollback/
 
 # Editor settings: ModDevGradle writes absolute local paths into launch.json
 .vscode/
+
+# A check once ran with the literal "(Join-Path" as its folder and left DJ presets in it, which got committed
+# (tools/run-check.py has understood that argument since). Such a stray folder never belongs in the repository.
+/(Join-Path/

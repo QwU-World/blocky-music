@@ -51,6 +51,14 @@ public final class BattleTracks {
             contentSha256 = contentSha256 == null ? "" : contentSha256;
             previewFile = previewFile == null ? "" : previewFile;
         }
+
+        /**
+         * Who made it, as the card and the page both credit it: the player who published a players' beatmap, otherwise
+         * the mapper the package names, or whoever put it on the server when it names none. Empty when nobody is known.
+         */
+        public String maker() {
+            return kind == Kind.PLAYERS || mapper.isBlank() ? publishedBy : mapper;
+        }
     }
 
     /**

@@ -1,23 +1,47 @@
 package ru.gora.musicbattle.client;
 
-import static ru.gora.musicbattle.client.ClientTranslations.text;
-
 import java.util.Locale;
 import java.util.Objects;
 import java.util.function.IntConsumer;
 import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.CommonComponents;
 import net.minecraft.network.chat.Component;
 import net.minecraft.util.Mth;
+import org.lwjgl.glfw.GLFW;
+import ru.gora.musicbattle.client.ui.FancyEditBox;
+import ru.gora.musicbattle.client.ui.Palette;
+import ru.gora.musicbattle.client.ui.RoundedRect;
+import ru.gora.musicbattle.client.ui.TextStyle;
+import ru.gora.musicbattle.client.ui.TextStyles;
 import ru.gora.musicbattle.data.ColorPickerMath;
 
-/** Standalone exact RGB/HSV color picker shared by track and DJ effect editors. */
+/**
+ * Standalone exact RGB/HSV color picker shared by the effect editor (a beatmap's effects and a DJ's), the note colours
+ * in the battle settings and the gameplay preview's background.
+ *
+ * <p>It used to be a square teal slab: a flat panel with a cyan rule along its top, white frames around the colour
+ * field, and the bitmap font. It is now one of the toolkit's dialogs - the raised rounded panel, the heading over a
+ * hairline, quiet labels, rounded frames and ring markers - with every control where it always was, so a player who
+ * knows where to click still finds it there.
+ */
 public final class ExactColorPickerScreen extends Screen implements DjPanelOwnedScreen {
     private static final int PANEL_MARGIN = 14;
     private static final int HUE_WIDTH = 14;
     private static final int CONTROL_MIN_WIDTH = 110;
+    /** The heading's cap line and the hairline under it, from the panel's top; the controls start at 34. */
+    private static final int TITLE_Y = 8;
+    private static final int RULE_Y = 26;
+    /**
+     * The page colour over the screen the picker was opened from, at the dim it always had. That screen keeps drawing
+     * underneath, and on most of them it is where the colour being chosen shows live, so it stays in sight.
+     */
+    private static final int SCRIM = Palette.withAlpha(Palette.BG_0, 0.72F);
+    /** The white of the markers and their dark halo, which keeps them visible over a light and a dark colour alike. */
+    private static final int MARKER = 0xFFFFFFFF;
+    private static final int MARKER_HALO = 0x8C000000;
 
     private final Screen parent;
     private final IntConsumer onPreview;
@@ -58,8 +82,8 @@ public final class ExactColorPickerScreen extends Screen implements DjPanelOwned
         int controlsWidth = controlsWidth();
         int top = pickerTop();
 
-        hexBox = addRenderableWidget(new ru.gora.musicbattle.client.ui.FancyEditBox(font, controlsX, top + 13,
-                controlsWidth, 20, Component.literal("HEX")));
+        hexBox = addRenderableWidget(new FancyEditBox(font, controlsX, top + 13,
+                controlsWidth, 20, Component.translatable("screen.music_battle.color_picker.hex")));
         hexBox.setMaxLength(7);
         hexBox.setFilter(ExactColorPickerScreen::isPartialHex);
 
@@ -67,10 +91,10 @@ public final class ExactColorPickerScreen extends Screen implements DjPanelOwned
         int channelWidth = Math.max(24, (controlsWidth - channelGap * 2) / 3);
         int blueX = controlsX + (channelWidth + channelGap) * 2;
         int blueWidth = Math.max(24, controlsX + controlsWidth - blueX);
-        redBox = addRenderableWidget(channelBox(controlsX, top + 54, channelWidth, "R"));
+        redBox = addRenderableWidget(channelBox(controlsX, top + 54, channelWidth, "red"));
         greenBox = addRenderableWidget(channelBox(
-                controlsX + channelWidth + channelGap, top + 54, channelWidth, "G"));
-        blueBox = addRenderableWidget(channelBox(blueX, top + 54, blueWidth, "B"));
+                controlsX + channelWidth + channelGap, top + 54, channelWidth, "green"));
+        blueBox = addRenderableWidget(channelBox(blueX, top + 54, blueWidth, "blue"));
 
         hexBox.setResponder(this::onHexChanged);
         redBox.setResponder(ignored -> onChannelChanged(redBox, 16));
@@ -81,18 +105,24 @@ public final class ExactColorPickerScreen extends Screen implements DjPanelOwned
         int buttonGap = 6;
         int buttonWidth = (panelWidth() - PANEL_MARGIN * 2 - buttonGap) / 2;
         int buttonY = panelTop() + panelHeight() - 28;
+        // Done is what the picker is for, so it is the dialog's one primary action, as Save is in the toolkit's.
         addRenderableWidget(FancyButton.create(CommonComponents.GUI_DONE,
-                ignored -> applyAndClose(), panelLeft() + PANEL_MARGIN, buttonY, buttonWidth, 20));
+                ignored -> applyAndClose(), panelLeft() + PANEL_MARGIN, buttonY, buttonWidth, 20).primary());
         addRenderableWidget(FancyButton.create(CommonComponents.GUI_CANCEL,
                 ignored -> onClose(), panelLeft() + PANEL_MARGIN + buttonWidth + buttonGap,
                 buttonY, buttonWidth, 20));
     }
 
-    private EditBox channelBox(int x, int y, int width, String label) {
-        EditBox box = new ru.gora.musicbattle.client.ui.FancyEditBox(font, x, y, width, 20, Component.literal(label));
+    private EditBox channelBox(int x, int y, int width, String channel) {
+        EditBox box = new FancyEditBox(font, x, y, width, 20, channelLabel(channel));
         box.setMaxLength(3);
         box.setFilter(ExactColorPickerScreen::isPartialChannel);
         return box;
+    }
+
+    /** "R", "G" or "B", through the language files like every other word on screen. */
+    private static Component channelLabel(String channel) {
+        return Component.translatable("screen.music_battle.color_picker." + channel);
     }
 
     @Override
@@ -113,18 +143,30 @@ public final class ExactColorPickerScreen extends Screen implements DjPanelOwned
     }
 
     private void renderPicker(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
-        graphics.fill(0, 0, width, height, 0xB8080C12);
+        graphics.fill(0, 0, width, height, SCRIM);
         int left = panelLeft();
         int top = panelTop();
         int panelWidth = panelWidth();
         int panelHeight = panelHeight();
-        graphics.fill(left, top, left + panelWidth, top + panelHeight, 0xFF12232D);
-        graphics.fill(left, top, left + panelWidth, top + 3, 0xFF55D8F4);
-        graphics.drawCenteredString(font, title, left + panelWidth / 2, top + 10, 0xFFFFFFFF);
-
+        // The toolkit's dialog: the raised panel, its heading and the hairline under it (WorkshopDialogScreen).
+        RoundedRect.shadow(graphics, left, top + 2.0F, panelWidth, panelHeight, Palette.RADIUS_LG, 12.0F,
+                Palette.SHADOW_LIFTED);
+        RoundedRect.fill(graphics, left, top, panelWidth, panelHeight, Palette.RADIUS_LG, Palette.BG_1);
+        RoundedRect.stroke(graphics, left, top, panelWidth, panelHeight, Palette.RADIUS_LG, 1.0F, Palette.LINE);
+        // The title names what is being coloured, a lane or an effect setting, and can be long: it is cut to the
+        // panel rather than run past its edges.
+        TextStyles.queueCentered(graphics, TextStyles.ellipsize(TextStyles.styled(title, TextStyle.TITLE),
+                panelWidth - PANEL_MARGIN * 2.0F), left + panelWidth / 2.0F, top + TITLE_Y, Palette.TEXT_1);
+        RoundedRect.fill(graphics, left + PANEL_MARGIN, top + RULE_Y, panelWidth - PANEL_MARGIN * 2.0F, 1.0F, 0.0F,
+                Palette.LINE);
+        // The colour field and the hue strip are plain fills, which go out as they are drawn: what is queued so far
+        // goes first, so that the panel is under them.
+        graphics.flush();
         drawSaturationValueSquare(graphics);
         drawHueStrip(graphics);
         drawControlLabelsAndSwatch(graphics);
+        // The frames, markers, labels and swatch are queued; they go out before the widgets, which draw on top.
+        graphics.flush();
         super.render(graphics, mouseX, mouseY, partialTick);
     }
 
@@ -132,7 +174,6 @@ public final class ExactColorPickerScreen extends Screen implements DjPanelOwned
         int x = pickerLeft();
         int y = pickerTop();
         int size = pickerSize();
-        graphics.fill(x - 1, y - 1, x + size + 1, y + size + 1, 0xFFE8F6FF);
         int denominator = Math.max(1, size - 1);
         for (int column = 0; column < size; column++) {
             float columnSaturation = column / (float) denominator;
@@ -140,29 +181,34 @@ public final class ExactColorPickerScreen extends Screen implements DjPanelOwned
             graphics.fill(x + column, y, x + column + 1, y + size, columnColor);
         }
         graphics.fillGradient(x, y, x + size, y + size, 0x00000000, 0xFF000000);
+        // Drawn over the field, so that its rounded corners also round off the field's own.
+        RoundedRect.stroke(graphics, x - 1.0F, y - 1.0F, size + 2.0F, size + 2.0F, Palette.RADIUS_SM, 1.0F,
+                Palette.LINE);
 
-        int markerX = x + Math.round(saturation * denominator);
-        int markerY = y + Math.round((1.0F - value) * denominator);
-        graphics.fill(markerX - 4, markerY, markerX + 5, markerY + 1, 0xFF000000);
-        graphics.fill(markerX, markerY - 4, markerX + 1, markerY + 5, 0xFF000000);
-        graphics.fill(markerX - 3, markerY, markerX + 4, markerY + 1, 0xFFFFFFFF);
-        graphics.fill(markerX, markerY - 3, markerX + 1, markerY + 4, 0xFFFFFFFF);
+        // A ring around the chosen point, filled with the colour itself, rather than a crosshair over it.
+        float markerX = x + Math.round(saturation * denominator) + 0.5F;
+        float markerY = y + Math.round((1.0F - value) * denominator) + 0.5F;
+        RoundedRect.stroke(graphics, markerX - 6.0F, markerY - 6.0F, 12.0F, 12.0F, 6.0F, 1.0F, MARKER_HALO);
+        RoundedRect.stroke(graphics, markerX - 5.0F, markerY - 5.0F, 10.0F, 10.0F, 5.0F, 1.5F, MARKER);
+        RoundedRect.circle(graphics, markerX, markerY, 3.5F, color);
     }
 
     private void drawHueStrip(GuiGraphics graphics) {
         int x = hueLeft();
         int y = pickerTop();
         int size = pickerSize();
-        graphics.fill(x - 1, y - 1, x + HUE_WIDTH + 1, y + size + 1, 0xFFE8F6FF);
         int denominator = Math.max(1, size - 1);
         for (int row = 0; row < size; row++) {
             int rowColor = 0xFF000000
                     | ColorPickerMath.hsvToRgb(row / (float) denominator, 1.0F, 1.0F);
             graphics.fill(x, y + row, x + HUE_WIDTH, y + row + 1, rowColor);
         }
-        int markerY = y + Math.round(hue * denominator);
-        graphics.fill(x - 3, markerY - 1, x + HUE_WIDTH + 3, markerY + 2, 0xFF000000);
-        graphics.fill(x - 2, markerY, x + HUE_WIDTH + 2, markerY + 1, 0xFFFFFFFF);
+        RoundedRect.stroke(graphics, x - 1.0F, y - 1.0F, HUE_WIDTH + 2.0F, size + 2.0F, Palette.RADIUS_SM, 1.0F,
+                Palette.LINE);
+        // A rounded handle across the strip, open in the middle so the hue it marks shows through.
+        float markerY = y + Math.round(hue * denominator) + 0.5F;
+        RoundedRect.stroke(graphics, x - 3.0F, markerY - 3.5F, HUE_WIDTH + 6.0F, 7.0F, 3.5F, 1.0F, MARKER_HALO);
+        RoundedRect.stroke(graphics, x - 2.0F, markerY - 2.5F, HUE_WIDTH + 4.0F, 5.0F, 2.5F, 1.5F, MARKER);
     }
 
     private void drawControlLabelsAndSwatch(GuiGraphics graphics) {
@@ -173,22 +219,28 @@ public final class ExactColorPickerScreen extends Screen implements DjPanelOwned
         int channelWidth = Math.max(24, (controlsWidth - channelGap * 2) / 3);
         int blueX = x + (channelWidth + channelGap) * 2;
 
-        graphics.drawString(font, "HEX", x, y + 2, 0xFFB9D8E4, false);
-        graphics.drawString(font, "R", x, y + 43, 0xFFFF8A8A, false);
-        graphics.drawString(font, "G", x + channelWidth + channelGap, y + 43, 0xFF72EFA6, false);
-        graphics.drawString(font, "B", blueX, y + 43, 0xFF77C7FF, false);
-        graphics.drawString(font, Component.literal(text("music_battle.l10n.client.055")), x, y + 82, 0xFFB9D8E4, false);
+        // Each label's cap line sits ten units over the control it names; the quiet face of a form's section labels.
+        label(graphics, Component.translatable("screen.music_battle.color_picker.hex"), x, y + 3, controlsWidth);
+        label(graphics, channelLabel("red"), x, y + 44, channelWidth);
+        label(graphics, channelLabel("green"), x + channelWidth + channelGap, y + 44, channelWidth);
+        label(graphics, channelLabel("blue"), blueX, y + 44, Math.max(24, x + controlsWidth - blueX));
+        label(graphics, Component.translatable("music_battle.l10n.client.055"), x, y + 84, controlsWidth);
 
         int swatchTop = y + 94;
         int swatchBottom = Math.max(swatchTop + 20,
                 Math.min(y + pickerSize(), panelTop() + panelHeight() - 40));
-        graphics.fill(x - 1, swatchTop - 1,
-                x + controlsWidth + 1, swatchBottom + 1, 0xFFE8F6FF);
-        graphics.fill(x, swatchTop, x + controlsWidth, swatchBottom, color);
-        String value = formatHex(color);
-        int textColor = valueForText(color) > 0.55F ? 0xFF101820 : 0xFFFFFFFF;
-        graphics.drawCenteredString(font, value, x + controlsWidth / 2,
-                swatchTop + Math.max(1, (swatchBottom - swatchTop - 8) / 2), textColor);
+        int swatchHeight = swatchBottom - swatchTop;
+        RoundedRect.fill(graphics, x, swatchTop, controlsWidth, swatchHeight, Palette.RADIUS_SM, color);
+        RoundedRect.stroke(graphics, x, swatchTop, controlsWidth, swatchHeight, Palette.RADIUS_SM, 1.0F, Palette.LINE);
+        int textColor = valueForText(color) > 0.55F ? Palette.ON_PILL : Palette.TEXT_1;
+        TextStyles.queueCentered(graphics, TextStyles.text(formatHex(color), TextStyle.STRONG).getVisualOrderText(),
+                x + controlsWidth / 2.0F, TextStyles.centeredCapY(TextStyle.STRONG, swatchTop, swatchHeight), textColor);
+    }
+
+    /** A control's name in the toolkit's small label face, cut to the control's width. */
+    private static void label(GuiGraphics graphics, Component text, float x, float y, float maxWidth) {
+        TextStyles.queue(graphics, TextStyles.ellipsize(TextStyles.styled(text, TextStyle.LABEL), maxWidth), x, y,
+                Palette.TEXT_3);
     }
 
     @Override
@@ -230,13 +282,18 @@ public final class ExactColorPickerScreen extends Screen implements DjPanelOwned
         return super.mouseReleased(mouseX, mouseY, button);
     }
 
+    /**
+     * Esc cancels and Enter applies, as in every toolkit dialog, except that Enter on a button the keyboard is on
+     * presses that button: tabbing to Cancel and pressing Enter used to apply the colour anyway.
+     */
     @Override
     public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
-        if (keyCode == org.lwjgl.glfw.GLFW.GLFW_KEY_ESCAPE) {
+        if (keyCode == GLFW.GLFW_KEY_ESCAPE) {
             onClose();
             return true;
         }
-        if (keyCode == 257 || keyCode == 335) {
+        boolean enter = keyCode == GLFW.GLFW_KEY_ENTER || keyCode == GLFW.GLFW_KEY_KP_ENTER;
+        if (enter && !(getFocused() instanceof Button)) {
             applyAndClose();
             return true;
         }

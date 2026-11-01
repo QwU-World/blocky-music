@@ -9,8 +9,10 @@ package ru.gora.musicbattle.data;
  * not shake it back and forth, and returns to the middle when both play or the music rests for a while. With shared
  * notes, or alone, the lean stays at zero and the shot is exactly the centred one.
  *
- * <p>The lean is eased with a limited speed and a softened start, so a full swing from one side to the other takes
- * about two seconds and never begins with a jolt. Pure arithmetic, checked by tools/BattleFeelChecks.java.
+ * <p>The lean is eased with a limited speed and a softened start and stop, so a full swing from one side to the other
+ * takes about three seconds and neither begins nor ends with a jolt. Testers found the earlier two-second swing, which
+ * reached full speed within a few ticks, read as a jerk on every change of side. Pure arithmetic, checked by
+ * tools/BattleFeelChecks.java and tools/BattleCameraChecks.java.
  */
 public final class BattleCameraFocus {
     /** How long before a phrase the camera begins to turn, so it has arrived by the first note. */
@@ -20,9 +22,11 @@ public final class BattleCameraFocus {
     /** A rest shorter than this keeps the lean; a longer one brings the shot back to the middle. */
     public static final int HOLD_TICKS = 50;
     /** The fastest the lean changes, per tick, across its range of -1 to 1. */
-    public static final float MAX_SPEED = 0.05F;
-    private static final float EASE = 0.1F;
-    private static final float ACCELERATION = 0.2F;
+    public static final float MAX_SPEED = 0.04F;
+    /** The share of the remaining way the lean wants to cover per tick; it slows down as it arrives. */
+    private static final float EASE = 0.08F;
+    /** How quickly the speed itself follows that wish: low, so a turn builds up and settles instead of snapping. */
+    private static final float ACCELERATION = 0.12F;
 
     private float focus;
     private float velocity;

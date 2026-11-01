@@ -29,7 +29,7 @@ import ru.gora.musicbattle.network.WorkshopSetStateReportPayload;
 import ru.gora.musicbattle.server.MusicBattleServerConfig;
 
 /**
- * The server half of the Workshop screens (spec 06 sections 9.1 and 9.2): lifecycle, the feature announcement
+ * The server half of the Workshop screens: lifecycle, the feature announcement
  * every client needs before it may show the Server beatmaps tab or the Server comments button, and the handlers
  * the payload registrar calls. Server thread throughout; the blocking work lives in {@link ServerBeatmapTransfers},
  * {@link ServerBeatmaps} and {@link ServerComments}.
@@ -212,7 +212,7 @@ public final class ServerWorkshop {
         }
     }
 
-    /** A client's installed-check answer about a set this server holds (spec 08 A5.1). Advisory, rate-limited. */
+    /** A client's installed-check answer about a set this server holds. Advisory, rate-limited. */
     public static void acceptStateReport(ServerPlayer player, WorkshopSetStateReportPayload payload) {
         long now = System.currentTimeMillis();
         long[] window = REPORT_RATE.computeIfAbsent(player.getUUID(), ignored -> new long[]{now, 0});

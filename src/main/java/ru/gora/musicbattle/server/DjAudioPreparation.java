@@ -80,7 +80,7 @@ final class DjAudioPreparation {
         }
     }
 
-    /** Returns only an already-prepared asset; it never launches ffmpeg. */
+    /** Returns only an already-prepared asset; it never starts a conversion. */
     static Optional<PreparedAudio> ready(MusicBattleTracks.Track track, float requestedSpeed) {
         float speed = normalizeSpeed(requestedSpeed);
         AssetKey key;

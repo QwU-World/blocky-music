@@ -20,7 +20,7 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
 /**
- * Verification of {@link WorkshopLayout#SIGNATURE_FILE_NAME} (spec 08 A5.3).
+ * Verification of {@link WorkshopLayout#SIGNATURE_FILE_NAME}.
  *
  * <p>The site signs every package it serves with Ed25519 over
  * <pre>bmw-sig-v1\n&lt;setId&gt;\n&lt;revision&gt;\n&lt;contentSha256&gt;\n</pre>
@@ -30,8 +30,8 @@ import java.util.zip.ZipFile;
  *
  * <p>A Minecraft server installs client-supplied package bytes only when this says yes: without a signature anybody
  * could forge {@code ws_<any id>} with any audio and push it to the other players. That is also why
- * {@code workshop.allowPlayerMaps} defaults to false — a build whose {@link #PUBLIC_KEY_BASE64} is still empty
- * verifies nothing and every client-supplied package is refused.
+ * {@code workshop.allowPlayerMaps} can default to true: the key below is pinned, so only packages the Workshop signed
+ * are installed. A build whose {@link #PUBLIC_KEY_BASE64} were empty would verify nothing and refuse them all.
  *
  * <p>Pure JDK: {@code Signature.getInstance("Ed25519")} (JDK 15+) and {@code java.util.zip}.
  */
@@ -40,10 +40,11 @@ public final class WorkshopSignature {
      * The site's public key, raw 32 bytes, base64 — the second line printed by the workshop's
      * {@code npm run keys:package}.
      *
-     * <p>TODO(owner): the key pair has not been generated yet (the workshop's {@code .env.example} ships
-     * {@code PACKAGE_SIGNING_KEY=} empty), so this is deliberately blank. Paste the raw public key here in the same
-     * change that puts the private key on the server; until then {@link #configured()} is false, every
-     * {@link #verify} returns false, and no server accepts client-supplied packages.
+     * <p>Pinned on 18.09.2026: this is the public half of the Workshop's {@code PACKAGE_SIGNING_KEY}. The private half
+     * lives only on the Workshop server and is not in any repository. With the key pinned, {@link #configured()} is
+     * true and {@link #verify} accepts a package only when its signature checks out against this key. If the
+     * constant were ever blank, {@link #configured()} would be false, every {@link #verify} would return false, and
+     * no server would accept a package a player supplies.
      */
     public static final String PUBLIC_KEY_BASE64 = "zVs+GHUCwhW0ypQSEoFq0CBi/jpIDGkfaRGKged9lDE=";
 
@@ -127,7 +128,7 @@ public final class WorkshopSignature {
     }
 
     /**
-     * The whole rule a server applies to bytes a client sent (spec 08 A5.3): the archive carries a signature the
+     * The whole rule a server applies to bytes a client sent: the archive carries a signature the
      * pinned key accepts for exactly the offered {@code (setId, revision, contentSha256)}.
      */
     public static boolean verifyPackage(Path archive, long setId, int revision, String contentSha256) {

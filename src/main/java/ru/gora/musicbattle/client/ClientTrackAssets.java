@@ -124,7 +124,7 @@ public final class ClientTrackAssets {
     }
 
     /**
-     * Content hash → file, for answering a battle asset offer (spec 06 section 9.4).
+     * Content hash → file, for answering a battle asset offer.
      *
      * <p>The index is built off the render thread from data that already exists, so no file is ever hashed to
      * answer an offer: every cached transfer has its verified {@code .sha256} sidecar, and every installed Workshop

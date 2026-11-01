@@ -64,6 +64,14 @@ public interface TrackEffectEditHost {
         return 1.0F;
     }
 
+    /**
+     * Where beat 1 falls in the song whose effect this is, in ms ({@code ChartBeat}), so the preview's beat visuals land
+     * on the chart's beats. 0 for a host with no chart behind it (a DJ set loops on its own clock).
+     */
+    default int previewBeatOffsetMs() {
+        return 0;
+    }
+
     default Component inspectorTitle(TrackEffect original) {
         return Component.translatable(original == null ? "music_battle.l10n.fx.brush_title" : "music_battle.l10n.fx.settings_title");
     }

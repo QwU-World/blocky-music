@@ -9,10 +9,9 @@ $jars = foreach ($group in $groups) {
 }
 $compiled = Join-Path $projectRoot 'build/classes/java/main'
 $cp = (@($outputDir, $compiled, "$projectRoot/build/moddev/artifacts/neoforge-21.1.230-merged.jar") + @($jars)) -join [IO.Path]::PathSeparator
-$jdk = 'C:/Program Files/Eclipse Adoptium/jdk-21.0.11.10-hotspot/bin'
+$jdk = & (Join-Path $PSScriptRoot 'find-jdk.ps1')
 & "$jdk/javac.exe" -proc:none -encoding UTF-8 -cp $cp -d $outputDir "$projectRoot/tools/BattleSpeakerRoutingChecks.java"
 if ($LASTEXITCODE) { throw 'Speaker routing test compilation failed' }
+# Isolates the battle selector and then runs the checks against it in the same JVM (see BattleSpeakerRoutingChecks#main).
 & "$jdk/java.exe" -cp $cp BattleSpeakerRoutingChecks $compiled $outputDir
-if ($LASTEXITCODE) { throw 'Speaker routing world isolation failed' }
-& "$jdk/java.exe" -cp $cp BattleSpeakerRoutingChecks
 if ($LASTEXITCODE) { throw 'Battle speaker routing regression failed' }

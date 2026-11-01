@@ -3,7 +3,7 @@ package ru.gora.musicbattle.client.workshop.layout;
 /**
  * Translated text for the pure layout model. In game this wraps Minecraft's language ({@code Component.translatable}
  * flattened to a string, because the layout measures strings); the {@code workshop-screens} check loads the same
- * {@code lang/*.json} files. Keys live under {@code screen.music_battle.workshop.} (spec 06 section 11).
+ * {@code lang/*.json} files. Keys live under {@code screen.music_battle.workshop.}.
  */
 @FunctionalInterface
 public interface Tr {

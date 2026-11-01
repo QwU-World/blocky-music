@@ -35,9 +35,9 @@ import ru.gora.musicbattle.workshop.api.WorkshopInbox;
 import ru.gora.musicbattle.workshop.api.WorkshopSession;
 
 /**
- * The game's Workshop wiring (spec 06 sections 4, 5, 7, 8): one instance per client holding the consent file, the API
+ * The game's Workshop wiring: one instance per client holding the consent file, the API
  * client with Minecraft's proxy, the session, the catalog, installed-check, the downloader and the inbox, plus the
- * executors they run on. Screens (M2b) take everything from here.
+ * executors they run on. The Workshop screens take everything from here.
  *
  * <p>Threads: downloads on a two-thread pool, installs on {@code Util.nonCriticalIoPool()}, small IO (catalog scans,
  * inbox, installed-check, session restore) on one "Workshop IO" thread, Minecraft proofs on {@link MinecraftProof}'s
@@ -81,7 +81,8 @@ public final class WorkshopClient {
         ru.gora.musicbattle.client.ui.CoverCache.origin(api.baseUri().toString());
         session = new WorkshopSession(api, new RefreshTokenStore(RefreshTokenStore.defaultPath(tracksRoot)), System::currentTimeMillis);
         String label = ClientLabels.forGame(System.getProperty("os.name"));
-        signIn = new MinecraftSignIn(api, session, MinecraftProof.JOINER, new SecureRandom(), System::currentTimeMillis, label);
+        signIn = new MinecraftSignIn(api, session, MinecraftProof.JOINER, new SecureRandom(), System::currentTimeMillis, label,
+                config);
         deviceFlow = new DeviceFlow(api, session, System::currentTimeMillis);
         catalog = new WorkshopCatalog(tracksRoot);
         installedCheck = new InstalledCheck(api, catalog, System::currentTimeMillis);
@@ -190,7 +191,7 @@ public final class WorkshopClient {
         return ui;
     }
 
-    /** Preview volume from {@code config/music_battle-workshop.json} (spec review of 06 section 6). */
+    /** Preview volume from {@code config/music_battle-workshop.json}. */
     public float previewVolume() {
         return (float) Math.max(0.0, Math.min(1.0, config.number("previewVolume", ru.gora.musicbattle.client.ui.PreviewPlayer.DEFAULT_VOLUME)));
     }
@@ -325,7 +326,7 @@ public final class WorkshopClient {
 
     /**
      * Opens the Workshop (key, title screen, settings). The consent screen comes first the first time, and also when a
-     * helper request is waiting for network access the player has not granted (spec 07 section 8): a click on the site
+     * helper request is waiting for network access the player has not granted: a click on the site
      * would otherwise sit in the inbox with nothing to explain it.
      */
     public static void open(Screen parent) {
@@ -339,7 +340,11 @@ public final class WorkshopClient {
         minecraft.setScreen(new WorkshopScreen(parent));
     }
 
-    /** Stores the consent answer (render thread). */
+    /**
+     * Stores the consent answer (render thread): the first-run screen, "Allow network" and the Network access switch on
+     * the account page. Turning it off cancels the downloads; the sign-in and the remembered Minecraft account stay, so
+     * turning it on again later works as before.
+     */
     public void setNetworkConsent(boolean allowed) throws IOException {
         config.setNetworkConsent(allowed, Instant.now());
         if (!allowed) {
@@ -348,7 +353,10 @@ public final class WorkshopClient {
         WorkshopRequests.onConsentAnswered(this, allowed);
     }
 
-    /** Called by a Workshop screen when it opens: inbox scan, lazy sign-in, installed-check (at most every 10 min). */
+    /**
+     * Called by a Workshop screen when it opens: inbox scan, lazy sign-in, installed-check (at most every 10 min). The
+     * automatic Minecraft sign-in only starts for an account that signed in here before; see {@link MinecraftProof}.
+     */
     void onWorkshopOpened() {
         scanInbox();
         if (!networkAllowed()) {
@@ -372,7 +380,7 @@ public final class WorkshopClient {
      * thread, so it is safe to call from anywhere.
      *
      * <p>A map that arrived from a file, a friend or the inbox carries no installed-check answer, and without one a
-     * battle may not offer it (spec 08 A5.1). The player can do nothing about that themselves, so whatever installs a
+     * battle may not offer it. The player can do nothing about that themselves, so whatever installs a
      * map locally asks for this straight away instead of leaving it to the next time the Workshop happens to open.
      */
     public void refreshInstalledState() {
@@ -446,7 +454,7 @@ public final class WorkshopClient {
         for (Path file : inbox.scan()) {
             WorkshopDrops.processInboxFile(this, file);
         }
-        // Helper requests (spec 07 section 8): tiny JSON files asking the mod to download a set itself.
+        // Helper requests: tiny JSON files asking the mod to download a set itself.
         for (Path file : inbox.scanRequests()) {
             WorkshopRequests.process(this, file);
         }

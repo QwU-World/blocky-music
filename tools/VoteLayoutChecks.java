@@ -905,7 +905,7 @@ public final class VoteLayoutChecks {
         return found;
     }
 
-    /** Spec 06 section 11: player-visible text is a key in both language files, never a literal. */
+    /** Player-visible text is a key in both language files, never a literal. */
     private static void noCyrillicInLiterals(String source, String name) {
         String stripped = Pattern.compile("(?s)//[^\n]*|/\\*.*?\\*/").matcher(source).replaceAll(" ");
         Matcher literal = Pattern.compile("\"(?:\\\\.|[^\"\\\\])*\"").matcher(stripped);

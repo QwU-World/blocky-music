@@ -7,9 +7,10 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import ru.gora.musicbattle.MusicBattleMod;
 
 /**
- * A DJ chose one chart of a Workshop set in the Workshop picker. When the server already holds that set the chart
- * joins the panel's playlist at once; otherwise the server answers in {@link DjWorkshopAddResultPayload} whether the
- * DJ may bring it through "Add to server", and adds the chart once that transfer has installed it.
+ * A DJ chose one chart of a Workshop set in the Workshop picker behind the panel's "+". When the server already holds
+ * that set the chart joins the booth's own list at once; otherwise the server answers in
+ * {@link DjWorkshopAddResultPayload} whether the DJ may bring it through "Add to server", and adds the chart to the list
+ * once that transfer has installed it. The playlist is never touched: it is filled from the list by its own Add.
  */
 public record DjWorkshopAddPayload(BlockPos panelPos, long setId, int revision, String contentSha256, String chartKey)
         implements CustomPacketPayload {

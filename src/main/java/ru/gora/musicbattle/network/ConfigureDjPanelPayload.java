@@ -141,7 +141,11 @@ public record ConfigureDjPanelPayload(
         APPLY_VISUAL_FX,
         PRELOAD_AUDIENCE,
         APPLY_AUDIO_PRESET,
-        RESET_SPEAKERS;
+        RESET_SPEAKERS,
+        /** Puts {@code trackId} on the booth's own beatmap list; the playlist is not touched. */
+        LIBRARY_ADD,
+        /** Takes {@code trackId} off the booth's list; its playlist rows and the playing song stay. */
+        LIBRARY_REMOVE;
 
         private static Action byOrdinal(int value) {
             Action[] values = values();

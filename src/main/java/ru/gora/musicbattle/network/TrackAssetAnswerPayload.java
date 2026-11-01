@@ -8,7 +8,7 @@ import ru.gora.musicbattle.MusicBattleMod;
 
 /**
  * The answer to {@link TrackAssetOfferPayload}. It is computed from an in-memory hash index only: a payload
- * handler never hashes a file, so a battle start can never stall the render thread (review of 06 section 9.4).
+ * handler never hashes a file, so a battle start can never stall the render thread.
  */
 public record TrackAssetAnswerPayload(UUID battleId, String trackId, String assetKind, String fileName, String sha256,
                                       boolean have) implements CustomPacketPayload {

@@ -2,7 +2,7 @@ package ru.gora.musicbattle.client.ui;
 
 /**
  * Blocky Music Workshop design tokens as ARGB, mirrored from the website's {@code public/css/tokens.css}
- * (spec 03 section 3, with the contrast adjustments from the 17 September 2026 review) at the default hue
+ * (with the contrast adjustments from the 17 September 2026 review) at the default hue
  * 265. The ui-toolkit check recomputes every constant from the HSL values below and, when the website
  * repository sits next to this one, from tokens.css itself.
  *
@@ -47,7 +47,7 @@ public final class Palette {
     /** {@code --shadow-lifted}: hsl(265 30% 2% / .45). */
     public static final int SHADOW_LIFTED = 0x73050407;
 
-    /** One CSS px of the website / one osu! px at 1080p, in GUI units at GUI scale 2 (research section 1). */
+    /** One CSS px of the website / one osu! px at 1080p, in GUI units at GUI scale 2. */
     public static final float PX = 0.7F;
     /** {@code --r-sm}, {@code --r-md}, {@code --r-lg} (4, 8, 12 px). */
     public static final float RADIUS_SM = 4 * PX;

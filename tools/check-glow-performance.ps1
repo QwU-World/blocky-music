@@ -12,7 +12,7 @@ $jars = foreach ($group in $groups) {
 }
 $lwjgl = @(rg --files (Join-Path $dependencyRoot 'org.lwjgl') -g '*.jar' | Where-Object { [IO.Path]::GetFileName($_) -match '^lwjgl(-glfw|-opengl)?-3\.3\.3(-natives-windows)?\.jar$' })
 $cp = (@($outputDir,"$projectDir/build/classes/java/main", "$projectDir/build/moddev/artifacts/neoforge-21.1.230-merged.jar") + @($jars) + $lwjgl) -join [IO.Path]::PathSeparator
-$jdk = 'C:/Program Files/Eclipse Adoptium/jdk-21.0.11.10-hotspot/bin'
+$jdk = & (Join-Path $PSScriptRoot 'find-jdk.ps1')
 & "$jdk/javac.exe" -proc:none -encoding UTF-8 -cp $cp -d $outputDir "$projectDir/src/main/java/ru/gora/musicbattle/client/GlowMeshExpansion.java" "$projectDir/src/main/java/ru/gora/musicbattle/client/ClientModelGlowEngine.java" "$PSScriptRoot/GlowMeshPerformanceChecks.java"
 if ($LASTEXITCODE) { throw 'Glow performance check compilation failed' }
 $checkArgs = @()

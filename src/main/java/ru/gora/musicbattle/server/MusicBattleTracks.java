@@ -6,6 +6,7 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import java.io.BufferedInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.AtomicMoveNotSupportedException;
@@ -30,7 +31,9 @@ import net.neoforged.fml.loading.FMLPaths;
 import net.neoforged.neoforge.event.server.ServerAboutToStartEvent;
 import net.neoforged.neoforge.event.server.ServerStoppedEvent;
 import ru.gora.musicbattle.MusicBattleMod;
-import ru.gora.musicbattle.audio.FfmpegVorbis;
+import ru.gora.musicbattle.audio.NativeAudio;
+import ru.gora.musicbattle.audio.codec.PcmStream;
+import ru.gora.musicbattle.audio.codec.VorbisDecoder;
 import ru.gora.musicbattle.data.BattleNote;
 import ru.gora.musicbattle.data.ChartBeat;
 import ru.gora.musicbattle.data.TrackEffect;
@@ -40,6 +43,8 @@ import ru.gora.musicbattle.data.TrackSummary;
 public final class MusicBattleTracks {
     public static final String DIRECTORY_NAME = "music_battle_tracks";
     public static final String PERSONAL_DIRECTORY_NAME = "my_tracks";
+    /** See {@link #temporaryDirectory}. */
+    public static final String TEMPORARY_DIRECTORY_NAME = ".temp";
     public static final String SERVER_DIRECTORY_NAME = "server_tracks";
     public static final String USER_SERVER_DIRECTORY_NAME = "user_tracks";
     public static final String WORLD_STORAGE_DIRECTORY_NAME = "blocky_music";
@@ -52,10 +57,11 @@ public final class MusicBattleTracks {
     private static final int CURRENT_PLAYER_PARTY_ORDER_VERSION = 2;
     private static final Map<Path, CachedOggDuration> OGG_DURATION_CACHE = new ConcurrentHashMap<>();
     private static final Map<Path, CachedOggInfo> OGG_INFO_CACHE = new ConcurrentHashMap<>();
+    private static final Map<Path, CachedSpeedCopyMark> SPEED_COPY_MARKS = new ConcurrentHashMap<>();
     /** How long a failed conversion is remembered before anything asks for that file again. */
     private static final long SPEED_VARIANT_RETRY_NANOS = TimeUnit.MINUTES.toNanos(5);
     private static final Map<Path, SpeedVariantFailure> SPEED_VARIANT_FAILURES = new ConcurrentHashMap<>();
-    /** Targets a worker is building, so two battles on one track never run ffmpeg over each other. */
+    /** Targets a worker is building, so two battles on one track never convert over each other. */
     private static final Set<Path> SPEED_VARIANTS_IN_FLIGHT = ConcurrentHashMap.newKeySet();
     private static volatile ExecutorService speedVariantWorker;
     /**
@@ -63,13 +69,20 @@ public final class MusicBattleTracks {
      * speeds in each of two battles fit; anything beyond that is a backlog no battle would live to hear.
      */
     public static final int SPEED_VARIANT_VOTE_QUEUE_LIMIT = 4;
-    /** How long a stopping server gives the worker to stop ffmpeg and delete its temporary file. */
+    /** How long a stopping server gives the worker to stop its conversion and delete its temporary file. */
     private static final long SPEED_VARIANT_STOP_SECONDS = 5;
     /**
-     * A temporary file older than this belongs to no running conversion, since FfmpegVorbis stops every run after a
-     * minute; it is a leftover of a process that was killed before it could clean up.
+     * A temporary file older than this belongs to no running conversion, since every conversion is stopped after
+     * {@link #SPEED_VARIANT_TIMEOUT_SECONDS}; it is a leftover of a game that was killed before it could clean up.
      */
     private static final long STALE_PART_MILLIS = TimeUnit.MINUTES.toMillis(10);
+    /**
+     * The longest one sped-up copy may take. A four-minute song takes about a second and a half on a desktop, so this
+     * only ends a conversion that something has gone badly wrong with.
+     */
+    private static final int SPEED_VARIANT_TIMEOUT_SECONDS = 60;
+    /** Identification, comment and setup: the packets of a Vorbis stream before its audio. */
+    private static final int VORBIS_HEADER_PACKETS = 3;
 
     private record SpeedVariantFailure(SpeedRefusal refusal, String reason, long atNanos) {
     }
@@ -83,7 +96,7 @@ public final class MusicBattleTracks {
     private static volatile Path activeWorldStorageDirectory;
 
     /**
-     * Where a catalogue entry came from (spec 06 section 9.1). {@link #loadDirectory} takes it instead of the old
+     * Where a catalogue entry came from. {@link #loadDirectory} takes it instead of the old
      * {@code userTrack} flag, so a folder is never read "as" something else and the vote screen can chip the rows.
      * Client state never reaches this: the installed sets of {@link ru.gora.musicbattle.workshop.WorkshopCatalog}
      * are a separate, client-only list (the {@code workshop-catalog-isolation} check).
@@ -102,6 +115,44 @@ public final class MusicBattleTracks {
 
     public static Path tracksRootDirectory() {
         return FMLPaths.GAMEDIR.get().resolve(DIRECTORY_NAME).toAbsolutePath().normalize();
+    }
+
+    /**
+     * {@code music_battle_tracks/.temp}: the mod's own temporary folder, inside the Minecraft folder. Everything the mod
+     * keeps on disk only for a moment goes here (a picture made for "Publish to server", a song converted before it is
+     * checked), never into the system's temporary folder, so nothing of the mod's is written outside the Minecraft
+     * folder. The leading dot keeps the track scan out of it. {@link #clearTemporaryDirectory} empties it when the
+     * game starts, which removes whatever a killed game left behind.
+     */
+    public static Path temporaryDirectory() {
+        return tracksRootDirectory().resolve(TEMPORARY_DIRECTORY_NAME).toAbsolutePath().normalize();
+    }
+
+    /**
+     * Deletes the files directly in {@link #temporaryDirectory} (not links, not folders): nothing in it outlives the
+     * launch that made it, so at the next start all of it is a leftover. Failures are ignored; a leftover is harmless.
+     */
+    public static int clearTemporaryDirectory() {
+        Path directory = temporaryDirectory();
+        if (!Files.isDirectory(directory, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+            return 0;
+        }
+        int deleted = 0;
+        // Its own folder, not a speed copy's: those are cleared by NativeAudio.deleteStaleTemporaryFiles.
+        try (java.util.stream.Stream<Path> files = Files.list(directory)) {
+            for (Path file : files.toList()) {
+                try {
+                    if (Files.isRegularFile(file, java.nio.file.LinkOption.NOFOLLOW_LINKS) && Files.deleteIfExists(file)) {
+                        deleted++;
+                    }
+                } catch (IOException ignored) {
+                    // Held open by another program: the next start tries again.
+                }
+            }
+        } catch (IOException | RuntimeException ignored) {
+            // An unreadable folder is reported by whatever needs it next.
+        }
+        return deleted;
     }
 
     public static Path tracksDirectory() {
@@ -139,8 +190,29 @@ public final class MusicBattleTracks {
         return shown == null ? "" : shown.toString().replace('\\', '/');
     }
 
+    /**
+     * A relative path read the way {@link #displayPath} writes it, against the Minecraft folder: the file it names
+     * there, or {@code null} when it names none (or would leave the folder). A box that shows a saved song as
+     * music_battle_tracks/my_tracks/x/x.ogg must find that song again.
+     */
+    public static Path gameFolderFile(Path relative) {
+        if (relative == null || relative.isAbsolute()) {
+            return null;
+        }
+        Path game = FMLPaths.GAMEDIR.get().toAbsolutePath().normalize();
+        Path file = game.resolve(relative).toAbsolutePath().normalize();
+        return file.startsWith(game) && !file.equals(game) && Files.isRegularFile(file) ? file : null;
+    }
+
+    /**
+     * An absolute path starts the text or follows a space, a quote, a bracket, '=' or a ':' that does not open a web
+     * address ("Failed:/Users/x"); a file: URI ("file:///Users/x/a.ogg") is a path too, and is folded whole. Never a
+     * slash inside a word: the '/' of an already relative path such as music_battle_tracks/song.ogg, or the '//' of a
+     * web address, is not the start of a path, and folding it there ate the folder name.
+     */
     private static final java.util.regex.Pattern ABSOLUTE_PATH_IN_TEXT =
-            java.util.regex.Pattern.compile("(?:[A-Za-z]:[\\\\/]|/)(?:[^\\s\"'<>|*?]+[\\\\/])*[^\\s\"'<>|*?]*");
+            java.util.regex.Pattern.compile("(?:(?<![\\w.~:/\\\\-])|(?<=:)(?!//))(?:(?i:file:)(?://)?)?"
+                    + "(?:/?[A-Za-z]:[\\\\/]|/)(?:[^\\s\"'<>|*?]+[\\\\/])*[^\\s\"'<>|*?]*");
 
     /**
      * An exception message with every absolute path in it folded to {@link #displayPath}. The
@@ -158,17 +230,30 @@ public final class MusicBattleTracks {
         return safeText(message);
     }
 
-    /** Folds every absolute path in a piece of text the way {@link #displayPath} does. */
+    /**
+     * Folds every absolute path in a piece of text the way {@link #displayPath} does. A folder name may hold a space
+     * ("Application Support", "C:\Users\John Smith"), and where a path ends is then a guess, so the folders this
+     * machine knows are folded by their exact text first: the Minecraft folder to nothing (what is below it stays), and
+     * every folder above it and the home folder to a bare '/', which the general rule then folds to the file name.
+     */
     public static String safeText(String text) {
         if (text == null || text.isEmpty()) {
             return "";
         }
+        text = foldKnownFolders(text);
         java.util.regex.Matcher matcher = ABSOLUTE_PATH_IN_TEXT.matcher(text);
         StringBuilder out = new StringBuilder(text.length());
         while (matcher.find()) {
+            String found = matcher.group();
+            if (found.regionMatches(true, 0, "file:", 0, 5)) {
+                // file:///Users/x, file:///C:/x and file:/x name the file system's own path after the scheme.
+                found = found.substring(5).replaceFirst("^/+(?=[A-Za-z]:[\\\\/])", "").replaceFirst("^/{2,}", "/");
+            }
             String shown;
             try {
-                shown = displayPath(Path.of(matcher.group()));
+                Path path = Path.of(found);
+                // C:\Users\x\y.ogg read on macOS or Linux is one odd file name to Path.of, not an absolute path.
+                shown = path.isAbsolute() ? displayPath(path) : lastPathSegment(found);
             } catch (RuntimeException invalid) {
                 shown = "";
             }
@@ -176,6 +261,147 @@ public final class MusicBattleTracks {
         }
         matcher.appendTail(out);
         return out.toString();
+    }
+
+    private static String lastPathSegment(String path) {
+        String[] parts = path.split("[\\\\/]+");
+        return parts.length == 0 ? "" : parts[parts.length - 1];
+    }
+
+    /** One folder this machine knows, as text: {@code inside} for the Minecraft folder, else a folder above it or home. */
+    private record KnownFolder(java.util.regex.Pattern pattern, boolean inside) {}
+
+    private record KnownFolders(String key, List<KnownFolder> folders) {}
+
+    private static volatile KnownFolders knownFolders;
+
+    private static String foldKnownFolders(String text) {
+        Path game;
+        try {
+            game = FMLPaths.GAMEDIR.get();
+        } catch (RuntimeException notLoaded) {
+            game = null;
+        }
+        String home = System.getProperty("user.home", "");
+        String key = game + "\u0000" + home;
+        KnownFolders known = knownFolders;
+        if (known == null || !known.key().equals(key)) {
+            known = new KnownFolders(key, knownFoldersOf(game, home));
+            knownFolders = known;
+        }
+        for (KnownFolder folder : known.folders()) {
+            java.util.regex.Matcher matcher = folder.pattern().matcher(text);
+            StringBuilder out = null;
+            int from = 0;
+            while (from <= text.length() && matcher.find(from)) {
+                if (out == null) {
+                    out = new StringBuilder(text.length());
+                }
+                out.append(text, from, matcher.start());
+                int end = matcher.end();
+                if (folder.inside()) {
+                    // What is below the Minecraft folder stays, with forward slashes as displayPath writes it.
+                    int tail = end;
+                    while (tail < text.length() && !Character.isWhitespace(text.charAt(tail))
+                            && "\"'<>|*?".indexOf(text.charAt(tail)) < 0) {
+                        tail++;
+                    }
+                    out.append(text.substring(end, tail).replace('\\', '/'));
+                    from = tail;
+                } else {
+                    // A folder above it leaves '/' to start a path, which the general rule folds to the file name.
+                    out.append(matcher.group(1) == null ? "" : "/");
+                    from = end;
+                }
+            }
+            if (out != null) {
+                out.append(text, from, text.length());
+                text = out.toString();
+            }
+        }
+        return text;
+    }
+
+    /** The longest folder first, so the Minecraft folder is folded before the folders that hold it. */
+    private static List<KnownFolder> knownFoldersOf(Path game, String home) {
+        Map<String, Boolean> roots = new java.util.LinkedHashMap<>();
+        List<Path> above = new ArrayList<>();
+        if (game != null) {
+            Path absolute = game.toAbsolutePath().normalize();
+            for (Path form : withRealPath(absolute)) {
+                addForms(roots, form, true);
+                for (Path parent = form.getParent(); parent != null && parent.getParent() != null; parent = parent.getParent()) {
+                    above.add(parent);
+                }
+            }
+        }
+        if (!home.isBlank()) {
+            try {
+                Path homePath = Path.of(home);
+                if (homePath.isAbsolute()) {
+                    above.addAll(withRealPath(homePath.normalize()));
+                }
+            } catch (RuntimeException invalid) {
+                // A user.home Path.of rejects names nothing to fold.
+            }
+        }
+        for (Path folder : above) {
+            addForms(roots, folder, false);
+        }
+        List<Map.Entry<String, Boolean>> sorted = new ArrayList<>(roots.entrySet());
+        sorted.sort(Comparator.comparingInt((Map.Entry<String, Boolean> entry) -> entry.getKey().length()).reversed());
+        List<KnownFolder> folders = new ArrayList<>(sorted.size());
+        for (Map.Entry<String, Boolean> entry : sorted) {
+            // Starts where a path may start (also after ':' or as a file: address), ends at a separator or where the
+            // name stops, so /Users/bob never folds the front of /Users/bobby.
+            folders.add(new KnownFolder(java.util.regex.Pattern.compile(
+                    "(?<![\\w.~/\\\\%-])(?:file:[\\\\/]*)?" + entry.getKey() + "(?![\\w.~%-])([\\\\/]+)?",
+                    java.util.regex.Pattern.CASE_INSENSITIVE | java.util.regex.Pattern.UNICODE_CASE), entry.getValue()));
+        }
+        return folders;
+    }
+
+    private static List<Path> withRealPath(Path path) {
+        List<Path> forms = new ArrayList<>(2);
+        forms.add(path);
+        try {
+            Path real = path.toRealPath();
+            if (!real.equals(path)) {
+                forms.add(real); // /var/folders/... is /private/var/folders/... on a Mac, and messages use either.
+            }
+        } catch (IOException | RuntimeException missing) {
+            // A folder that does not exist yet is named in messages only as written.
+        }
+        return forms;
+    }
+
+    /** The folder's text with either separator between its names, and its file: URI spelling (a space as %20). */
+    private static void addForms(Map<String, Boolean> roots, Path folder, boolean inside) {
+        List<String> spellings = new ArrayList<>(2);
+        spellings.add(folder.toString().replace('\\', '/'));
+        try {
+            String uri = folder.toUri().getRawPath();
+            if (uri != null) {
+                spellings.add(uri.replaceFirst("^/(?=[A-Za-z]:)", ""));
+            }
+        } catch (RuntimeException | java.io.IOError invalid) {
+            // No URI spelling for this folder.
+        }
+        for (String spelling : spellings) {
+            boolean rooted = spelling.startsWith("/");
+            List<String> names = new ArrayList<>();
+            for (String name : spelling.split("/+")) {
+                if (!name.isEmpty()) {
+                    names.add(java.util.regex.Pattern.quote(name));
+                }
+            }
+            if (names.isEmpty()) {
+                continue;
+            }
+            String regex = (rooted ? "[\\\\/]+" : "") + String.join("[\\\\/]+", names);
+            // The Minecraft folder wins over the same text as a folder above it.
+            roots.merge(regex, inside, Boolean::logicalOr);
+        }
     }
 
     public static Path ensureTracksDirectory() {
@@ -254,10 +480,10 @@ public final class MusicBattleTracks {
     /**
      * Stops the speed-audio worker together with its server, and waits a moment for it.
      *
-     * <p>The worker is a daemon thread, so a dedicated server used to exit underneath a running conversion: the
-     * cleanup in FfmpegVorbis never ran, ffmpeg went on as an orphan and its temporary file stayed in the track folder
-     * for good. Interrupting the worker lets FfmpegVorbis stop ffmpeg and delete that file first. In single player the
-     * next world starts a fresh worker on its first request.
+     * <p>The worker is a daemon thread, so a dedicated server would otherwise exit underneath a running conversion
+     * and leave its temporary file in the track folder for good. Interrupting the worker makes the conversion stop
+     * within milliseconds and delete that file first. In single player the next world starts a fresh worker on its
+     * first request.
      */
     public static void stopSpeedVariantWorker() {
         ExecutorService worker;
@@ -362,7 +588,7 @@ public final class MusicBattleTracks {
     }
 
     /**
-     * Every chart under {@code directory} (depth 2), tagged with where it came from (spec 06 section 9.1).
+     * Every chart under {@code directory} (depth 2), tagged with where it came from.
      * Only {@code *.json} files are charts, so nothing else may carry that extension at depth 1 or 2 — the server
      * beatmaps index therefore lives outside this folder, as {@code server_beatmaps.index}.
      *
@@ -422,8 +648,9 @@ public final class MusicBattleTracks {
     /**
      * The audio for a speed, converting the track if that has not been done yet.
      *
-     * <p>The conversion runs ffmpeg and waits for it, so this belongs on a worker thread only. The battle path
-     * uses {@link #battleAudio} and {@link #requestSpeedVariant} instead, which never wait for a process.
+     * <p>The conversion runs on the calling thread and takes a second or more, so this belongs on a worker thread
+     * only. The battle path uses {@link #battleAudio} and {@link #requestSpeedVariant} instead, which never wait for
+     * a conversion.
      */
     public static Optional<AudioAsset> audioAsset(Track track, float speedMultiplier) {
         Optional<Path> original = audioPath(track);
@@ -462,15 +689,13 @@ public final class MusicBattleTracks {
 
     /**
      * Why a battle plays at normal speed although its players voted for more. Each one tells the players something
-     * different, because what the server owner has to do about it is different: wait, install ffmpeg, or read the
+     * different, because what the server owner can do about it is different: wait for the next battle, or read the
      * server log.
      */
     public enum SpeedRefusal {
         /** The sped-up copy is being made right now and was not finished in the time the battle waits for it. */
         PREPARING("music_battle.l10n.server.speed_audio_preparing"),
-        /** There is no ffmpeg on the server. */
-        FFMPEG_MISSING("music_battle.l10n.server.speed_audio_fallback"),
-        /** ffmpeg is there, but the conversion failed; the reason is in the server log. */
+        /** The conversion failed (a damaged song file, a full disk); the reason is in the server log. */
         CONVERSION_FAILED("music_battle.l10n.server.speed_audio_failed");
 
         private final String messageKey;
@@ -483,21 +708,16 @@ public final class MusicBattleTracks {
         public String messageKey() {
             return messageKey;
         }
-
-        /** What a failed conversion means for the players: only a missing ffmpeg is something else than a failure. */
-        public static SpeedRefusal of(Throwable failure) {
-            return failure instanceof FfmpegVorbis.MissingException ? FFMPEG_MISSING : CONVERSION_FAILED;
-        }
     }
 
     /**
      * Picks the audio for a battle from the files that already exist.
      *
-     * <p>This runs on the server thread while a battle is being set up, so it never starts ffmpeg: a conversion
-     * takes seconds to a minute and the whole server would stand still for all of it. The sped-up copy is built
-     * in the background from {@link #requestSpeedVariant}, which the vote asks for as soon as somebody picks a
-     * speed. A battle the two of them already agreed to is never refused over the speed - it loses the modifier
-     * and is told why.
+     * <p>This runs on the server thread while a battle is being set up, so it never converts anything: a conversion
+     * takes a second or more and the whole server would stand still for all of it. The sped-up copy is built in the
+     * background from {@link #requestSpeedVariant}, which the vote asks for as soon as somebody picks a speed. A
+     * battle the two of them already agreed to is never refused over the speed - it loses the modifier and is told
+     * why.
      */
     public static BattleAudio battleAudio(Track track, float speedMultiplier) {
         Optional<Path> original = audioPath(track);
@@ -522,7 +742,7 @@ public final class MusicBattleTracks {
                 : new BattleAudio(normal, 1.0F, failure.refusal(), failure.reason());
     }
 
-    /** The audio for a speed only if it is already on disk; it never starts ffmpeg. */
+    /** The audio for a speed only if it is already on disk; it never starts a conversion. */
     public static Optional<AudioAsset> preparedAudio(Track track, float speedMultiplier) {
         Optional<Path> original = audioPath(track);
         if (original.isEmpty()) {
@@ -556,7 +776,7 @@ public final class MusicBattleTracks {
         if (SPEED_VARIANTS_IN_FLIGHT.size() >= SPEED_VARIANT_VOTE_QUEUE_LIMIT) {
             // A vote is only a head start, so a full queue simply skips it: the battle asks again when it starts,
             // and that request is never refused. Without the cap, votes from many battles, or from a client that
-            // votes for everything, would line up ffmpeg runs of a minute each without end.
+            // votes for everything, would line up conversions without end.
             return null;
         }
         SpeedVariantFailure failure = requestSpeedVariantFailure(track, speedMultiplier);
@@ -591,7 +811,7 @@ public final class MusicBattleTracks {
             } catch (IOException | RuntimeException exception) {
                 MusicBattleMod.LOGGER.warn("Unable to prepare Blocky Music speed audio for track '{}'.", track.id(), exception);
                 SPEED_VARIANT_FAILURES.put(target, new SpeedVariantFailure(
-                        SpeedRefusal.of(exception), safeMessage(exception), System.nanoTime()));
+                        SpeedRefusal.CONVERSION_FAILED, safeMessage(exception), System.nanoTime()));
             } finally {
                 SPEED_VARIANTS_IN_FLIGHT.remove(target);
             }
@@ -606,7 +826,7 @@ public final class MusicBattleTracks {
         }
         synchronized (MusicBattleTracks.class) {
             if (speedVariantWorker == null) {
-                // One conversion at a time, because two ffmpeg runs only fight over the same disk, and a daemon
+                // One conversion at a time, because two only fight over the same processor and disk, and a daemon
                 // thread, because a half-finished conversion must never hold the game open on shutdown.
                 speedVariantWorker = Executors.newSingleThreadExecutor(runnable -> {
                     Thread thread = new Thread(runnable, "blocky-music-speed-audio");
@@ -625,7 +845,11 @@ public final class MusicBattleTracks {
         return new AudioAsset(relativeName, target);
     }
 
-    /** Whether the sped-up copy on disk is finished, newer than its source and really at this speed. */
+    /**
+     * Whether the sped-up copy on disk is finished, newer than its source, made by this build's converter and really at
+     * this speed. A copy an older build made (ffmpeg's atempo, or this converter before its timeline matched the game's)
+     * is stale, so the next battle that asks for it has it made again, once: the new copy carries the mark.
+     */
     private static boolean speedVariantReady(Path source, Path target, float speed) {
         try {
             return Files.isRegularFile(target)
@@ -637,7 +861,10 @@ public final class MusicBattleTracks {
         }
     }
 
-    /** Runs ffmpeg and waits for it, so it belongs on a worker thread - never on the server thread. */
+    /**
+     * Makes the sped-up copy, pitch kept, with the mod's own converter ({@link NativeAudio}). It works on the calling
+     * thread, so it belongs on a worker thread - never on the server thread.
+     */
     public static void createSpeedVariant(Path source, Path target, float speedMultiplier) throws IOException {
         float speed = normalizeSpeed(speedMultiplier);
         if (speed <= 1.01F) {
@@ -652,43 +879,16 @@ public final class MusicBattleTracks {
         // Leftovers of the old fixed-name temporary files, which a stopped conversion used to leave behind.
         Files.deleteIfExists(target.resolveSibling(target.getFileName() + ".tmp"));
         Files.deleteIfExists(target.resolveSibling(target.getFileName() + ".tmp.ogg"));
-        deleteStaleParts(target);
-        FfmpegVorbis.convert(source, target, "atempo=" + (speed >= 1.9F ? "2.0" : "1.5"), 60);
-        // Checked here rather than on the next battle, so a copy of the wrong length is a reported failure with a
-        // reason instead of a file that is silently rebuilt every time.
-        if (!isValidSpeedVariant(source, target, speed)) {
+        // The converter's own temporary files that a killed server left here. The converter clears its leftovers in
+        // any folder after an hour; next to a battle's song they go after ten minutes, since no copy takes that long.
+        NativeAudio.deleteStaleTemporaryFiles(target.getParent(), STALE_PART_MILLIS);
+        NativeAudio.convertToVorbis(source, target, speed, SPEED_VARIANT_TIMEOUT_SECONDS);
+        // Checked here rather than on the next battle, so a copy of the wrong length, or without this build's mark,
+        // is a reported failure with a reason instead of a file that is silently rebuilt every time.
+        String problem = speedVariantProblem(source, target, speed);
+        if (problem != null) {
             Files.deleteIfExists(target);
-            throw new IOException("ffmpeg wrote a copy whose length does not match x" + speed + " of the original.");
-        }
-    }
-
-    /**
-     * Deletes the temporary files a killed conversion of this target left behind. Their names are random, so the
-     * fixed-name cleanup above never finds them; a recent one may belong to a conversion still running for a DJ panel
-     * and is left alone.
-     */
-    private static void deleteStaleParts(Path target) {
-        Path directory = target.getParent();
-        if (directory == null) {
-            return;
-        }
-        String prefix = "." + target.getFileName() + ".";
-        long cutoff = System.currentTimeMillis() - STALE_PART_MILLIS;
-        try (var parts = Files.newDirectoryStream(directory, entry -> {
-            String name = String.valueOf(entry.getFileName());
-            return name.startsWith(prefix) && name.endsWith(".part");
-        })) {
-            for (Path part : parts) {
-                try {
-                    if (Files.getLastModifiedTime(part).toMillis() < cutoff) {
-                        Files.deleteIfExists(part);
-                    }
-                } catch (IOException ignored) {
-                    // Another leftover is no worse than this one; the conversion itself does not depend on it.
-                }
-            }
-        } catch (IOException ignored) {
-            // An unreadable folder fails the conversion right after this with a reason worth reporting.
+            throw new IOException("The converter wrote a copy that " + problem + ".");
         }
     }
 
@@ -706,11 +906,15 @@ public final class MusicBattleTracks {
         }
 
         OggInfo info = readCachedOggInfo(normalized);
+        if (info.cutOff) {
+            // The callers also use this to check that a song arrived or was uploaded whole.
+            throw new IOException("Truncated OGG page");
+        }
         if (info.sampleRate <= 0 || info.lastGranulePosition <= 0) {
             throw new IOException("Unable to read OGG duration");
         }
 
-        double seconds = info.lastGranulePosition / (double) info.sampleRate;
+        double seconds = info.playedSamples() / (double) info.sampleRate;
         int durationTicks = Math.max(10 * 20, (int) Math.ceil(seconds * 20.0D));
         OGG_DURATION_CACHE.put(normalized, new CachedOggDuration(size, modified, durationTicks));
         return durationTicks;
@@ -727,19 +931,35 @@ public final class MusicBattleTracks {
     }
 
     private static boolean isValidSpeedVariant(Path source, Path target, float speed) {
+        return speedVariantProblem(source, target, speed) == null;
+    }
+
+    /**
+     * What is wrong with a sped-up copy, or null when it is this build's copy of the source at this speed. The lengths
+     * are compared as the game plays them ({@link OggInfo#playedSamples}): a song whose granule positions do not start
+     * at zero, such as a stream recording, used to have its correct copy rejected as the wrong speed.
+     */
+    private static String speedVariantProblem(Path source, Path target, float speed) {
         try {
             OggInfo sourceInfo = readCachedOggInfo(source);
             OggInfo targetInfo = readCachedOggInfo(target);
-            if (sourceInfo.sampleRate <= 0 || sourceInfo.lastGranulePosition <= 0
-                    || targetInfo.sampleRate <= 0 || targetInfo.lastGranulePosition <= 0) {
-                return false;
+            if (sourceInfo.sampleRate <= 0 || sourceInfo.playedSamples() <= 0
+                    || targetInfo.sampleRate <= 0 || targetInfo.playedSamples() <= 0) {
+                return "has no length that can be read";
             }
-            double sourceSeconds = sourceInfo.lastGranulePosition / (double) sourceInfo.sampleRate;
-            double targetSeconds = targetInfo.lastGranulePosition / (double) targetInfo.sampleRate;
+            int mark = speedCopyVersion(target);
+            if (mark != NativeAudio.SPEED_COPY_VERSION) {
+                return "is not marked as this build's (" + NativeAudio.SPEED_COPY_FIELD + "=" + mark + ", expected "
+                        + NativeAudio.SPEED_COPY_VERSION + ")";
+            }
+            double sourceSeconds = sourceInfo.playedSamples() / (double) sourceInfo.sampleRate;
+            double targetSeconds = targetInfo.playedSamples() / (double) targetInfo.sampleRate;
             double actualSpeed = sourceSeconds / Math.max(0.001D, targetSeconds);
-            return Math.abs(actualSpeed - speed) <= Math.max(0.04D, speed * 0.03D);
+            return Math.abs(actualSpeed - speed) <= Math.max(0.04D, speed * 0.03D)
+                    ? null
+                    : "plays at x" + String.format(java.util.Locale.ROOT, "%.3f", actualSpeed) + " instead of x" + speed;
         } catch (IOException exception) {
-            return false;
+            return "cannot be read (" + safeMessage(exception) + ")";
         }
     }
 
@@ -1269,6 +1489,23 @@ public final class MusicBattleTracks {
         return Math.max(min, Math.min(max, value));
     }
 
+    /**
+     * The converter's mark on a sped-up copy ({@link NativeAudio#speedCopyVersion}), read once for each version of the
+     * file, since the server thread asks at the start of every battle.
+     */
+    private static int speedCopyVersion(Path copy) throws IOException {
+        Path normalized = copy.toAbsolutePath().normalize();
+        long size = Files.size(normalized);
+        long modified = Files.getLastModifiedTime(normalized).toMillis();
+        CachedSpeedCopyMark cached = SPEED_COPY_MARKS.get(normalized);
+        if (cached != null && cached.size() == size && cached.modified() == modified) {
+            return cached.version();
+        }
+        int version = NativeAudio.speedCopyVersion(normalized);
+        SPEED_COPY_MARKS.put(normalized, new CachedSpeedCopyMark(size, modified, version));
+        return version;
+    }
+
     private static OggInfo readCachedOggInfo(Path oggFile) throws IOException {
         Path normalized = oggFile.toAbsolutePath().normalize();
         long size = Files.size(normalized);
@@ -1282,10 +1519,25 @@ public final class MusicBattleTracks {
         return info;
     }
 
+    /**
+     * The sample rate and granule positions of an Ogg Vorbis file, read from its page headers without decoding
+     * anything. Only the Vorbis stream's own pages count, up to its end-of-stream page: the game plays neither a link
+     * chained after it nor a page of another stream. A file cut off in the middle of a page ends at its last whole
+     * page, where the game, and the converter after it, stop playing it, and says so ({@link OggInfo#cutOff}): its
+     * speed copy is judged by that length (before, it was refused as unreadable although the converter had made it
+     * right), while {@link #readOggDurationTicks}, which also checks that a song arrived whole, still refuses it.
+     */
     private static OggInfo readOggInfo(Path oggFile) throws IOException {
         int sampleRate = -1;
+        int shortBlock = 0;
+        int longBlock = 0;
+        int serial = 0;
         long lastGranulePosition = -1L;
+        long firstAudioGranule = -1L;
+        long packetsEnded = 0L;
+        long audioPacketsBeforeGranule = 0L;
         boolean firstPacketChecked = false;
+        boolean cutOff = false;
 
         try (InputStream input = Files.newInputStream(oggFile)) {
             while (true) {
@@ -1293,14 +1545,24 @@ public final class MusicBattleTracks {
                 if (header.length == 0) {
                     break;
                 }
+                if (header.length != 27 && firstPacketChecked) {
+                    cutOff = true;
+                    break;
+                }
                 if (header.length != 27 || header[0] != 'O' || header[1] != 'g' || header[2] != 'g' || header[3] != 'S') {
                     throw new IOException("Invalid OGG page");
                 }
 
                 long granulePosition = readLittleEndianLong(header, 6);
+                int pageSerial = (header[14] & 0xFF) | (header[15] & 0xFF) << 8 | (header[16] & 0xFF) << 16
+                        | (header[17] & 0xFF) << 24;
                 int segments = header[26] & 0xFF;
                 byte[] lacing = input.readNBytes(segments);
                 if (lacing.length != segments) {
+                    if (firstPacketChecked) {
+                        cutOff = true;
+                        break;
+                    }
                     throw new IOException("Truncated OGG segment table");
                 }
 
@@ -1311,21 +1573,96 @@ public final class MusicBattleTracks {
 
                 byte[] payload = input.readNBytes(payloadLength);
                 if (payload.length != payloadLength) {
+                    if (firstPacketChecked) {
+                        cutOff = true;
+                        break;
+                    }
                     throw new IOException("Truncated OGG payload");
                 }
+                if (firstPacketChecked && pageSerial != serial) {
+                    continue;
+                }
+                serial = pageSerial;
 
                 if (!firstPacketChecked) {
                     firstPacketChecked = true;
                     sampleRate = readVorbisSampleRate(payload);
+                    // The two block sizes, as powers of two in one byte of the identification header.
+                    if (payload.length > 28) {
+                        shortBlock = 1 << (payload[28] & 0x0F);
+                        longBlock = 1 << ((payload[28] >> 4) & 0x0F);
+                    }
+                }
+                for (byte segment : lacing) {
+                    if ((segment & 0xFF) < 255) {
+                        packetsEnded++;
+                    }
                 }
 
                 if (granulePosition >= 0) {
                     lastGranulePosition = granulePosition;
+                    if (firstAudioGranule < 0L && packetsEnded > VORBIS_HEADER_PACKETS) {
+                        firstAudioGranule = granulePosition;
+                        audioPacketsBeforeGranule = packetsEnded - VORBIS_HEADER_PACKETS;
+                    }
+                }
+                if ((header[5] & 0x04) != 0) {
+                    break;
                 }
             }
         }
 
-        return new OggInfo(sampleRate, lastGranulePosition);
+        // Where the game's playback starts on the granule scale. The audio packets up to the first page with a
+        // granule position bring the stream at least (packets - 1) half short blocks and at most as many half long
+        // blocks past its first sample. A first granule position beyond that reach means the stream does not start at
+        // zero (a recording cut from a broadcast): Minecraft plays it from its first sample all the same, so its
+        // length is counted from there, to within half that range. Every encoder's own files start at zero, and for
+        // them nothing changes.
+        long startOffset = 0L;
+        long exactPlayed = -1L;
+        if (firstAudioGranule >= 0L && audioPacketsBeforeGranule > 0L) {
+            long steps = audioPacketsBeforeGranule - 1L;
+            long leastReach = steps * (shortBlock / 2);
+            long mostReach = steps * (longBlock / 2);
+            if (firstAudioGranule > mostReach) {
+                startOffset = firstAudioGranule - (leastReach + mostReach) / 2L;
+            }
+        }
+        // That estimate holds only for a file whose granule positions follow its packets, which every encoder's own
+        // files do. A stream rip does not: its positions start where the broadcast was, or follow the container's
+        // clock after a cut with ffmpeg's "-c copy", and the estimate was measured 0.38 s short to 0.78 s long on
+        // such files, as the game plays more or less than the last position says. Whether the positions follow the
+        // packets is read from the packets' headers (no audio is decoded); when they do not, the file is decoded once
+        // on the timeline Minecraft plays (VorbisDecoder.Timeline.MINECRAFT, which counts exactly the samples the
+        // game's JOrbisAudioStream gives), and the result is cached with the file's size and date like the rest.
+        if (!cutOff && lastGranulePosition > 0 && !granulesMatchPackets(oggFile)) {
+            exactPlayed = playedByMinecraft(oggFile);
+        }
+        return new OggInfo(sampleRate, lastGranulePosition, startOffset, cutOff, exactPlayed);
+    }
+
+    private static boolean granulesMatchPackets(Path oggFile) {
+        try (InputStream input = new BufferedInputStream(Files.newInputStream(oggFile), 1 << 16)) {
+            return VorbisDecoder.granulesMatchPackets(input);
+        } catch (IOException | RuntimeException exception) {
+            return false;
+        }
+    }
+
+    /** The samples Minecraft plays from an Ogg Vorbis file, by decoding it; -1 when it cannot be decoded. */
+    private static long playedByMinecraft(Path oggFile) {
+        try (InputStream input = new BufferedInputStream(Files.newInputStream(oggFile), 1 << 16);
+             PcmStream stream = VorbisDecoder.open(input, VorbisDecoder.Timeline.MINECRAFT)) {
+            float[][] buffer = new float[stream.channels()][8192];
+            long played = 0L;
+            int n;
+            while ((n = stream.read(buffer, 0, buffer[0].length)) > 0) {
+                played += n;
+            }
+            return played;
+        } catch (IOException | RuntimeException exception) {
+            return -1L;
+        }
     }
 
     private static int readVorbisSampleRate(byte[] payload) throws IOException {
@@ -1422,12 +1759,26 @@ public final class MusicBattleTracks {
     public record AudioAsset(String fileName, Path path) {
     }
 
-    private record OggInfo(int sampleRate, long lastGranulePosition) {
+    /**
+     * @param startOffset the granule position the game's playback starts at, 0 for a stream that starts at zero
+     * @param cutOff whether the file ends in the middle of a page, as an interrupted download or copy does
+     * @param exactPlayed for a stream that does not start at zero, the samples the game plays, counted by decoding;
+     *     -1 otherwise, where the last granule position says it exactly
+     */
+    private record OggInfo(int sampleRate, long lastGranulePosition, long startOffset, boolean cutOff,
+                           long exactPlayed) {
+        /** The song's length as the game plays it. */
+        long playedSamples() {
+            return exactPlayed >= 0L ? exactPlayed : lastGranulePosition - startOffset;
+        }
     }
 
     private record CachedOggDuration(long size, long modified, int durationTicks) {
     }
 
     private record CachedOggInfo(long size, long modified, OggInfo info) {
+    }
+
+    private record CachedSpeedCopyMark(long size, long modified, int version) {
     }
 }

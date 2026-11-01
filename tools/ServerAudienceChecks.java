@@ -39,14 +39,31 @@ public final class ServerAudienceChecks {
         field(galleryClass,"cameras").set(gallery,cameras);
         Class<?> screen = Class.forName("net.minecraft.client.gui.screens.Screen");
         screen.getField("width").set(gallery,640); screen.getField("height").set(gallery,480);
-        Method cardMethod = galleryClass.getDeclaredMethod("card",int.class); cardMethod.setAccessible(true);
-        Object card = cardMethod.invoke(gallery,1);
-        Method x = card.getClass().getDeclaredMethod("x"); x.setAccessible(true);
-        Method y = card.getClass().getDeclaredMethod("y"); y.setAccessible(true);
+        // The gallery's layout measures its words with the game's font, which this check has not got: it is given one laid
+        // out with a fixed-width stand-in, and the second camera's card is clicked where that layout put it.
+        Class<?> layoutClass = Class.forName("ru.gora.musicbattle.client.DjCameraGalleryScreen$GalleryLayout");
+        Class<?> wordsClass = Class.forName("ru.gora.musicbattle.client.DjPanelScreen$Words");
+        Constructor<?> wordsMaker = wordsClass.getDeclaredConstructor(java.util.function.UnaryOperator.class, Locale.class);
+        wordsMaker.setAccessible(true);
+        Object words = wordsMaker.newInstance((java.util.function.UnaryOperator<String>) key -> key, Locale.ROOT);
+        Class<?> measurerClass = Class.forName("ru.gora.musicbattle.client.ui.TextMeasurer");
+        Object measurer = Proxy.newProxyInstance(measurerClass.getClassLoader(), new Class<?>[]{measurerClass},
+                (proxy, method, arguments) -> method.getName().equals("width") ? ((String) arguments[0]).length() * 2.0F : null);
+        Method compute = layoutClass.getDeclaredMethod("compute", int.class, int.class, measurerClass, wordsClass);
+        compute.setAccessible(true);
+        Object layout = compute.invoke(null, 640, 480, measurer, words);
+        field(galleryClass,"layout").set(gallery,layout);
+        Method cardMethod = layoutClass.getDeclaredMethod("card",int.class,int.class); cardMethod.setAccessible(true);
+        Object card = cardMethod.invoke(layout,1,0);
+        Method cardX = card.getClass().getDeclaredMethod("x"); cardX.setAccessible(true);
+        Method cardY = card.getClass().getDeclaredMethod("y"); cardY.setAccessible(true);
+        java.util.function.Function<Object,Integer> whole = value -> Math.round((Float) value);
+        Method x = cardX;
+        Method y = cardY;
         List<Object> sent = (List<Object>)Class.forName("net.neoforged.neoforge.network.PacketDistributor").getField("SENT").get(null);
         sent.clear();
         galleryClass.getMethod("mouseClicked",double.class,double.class,int.class)
-                .invoke(gallery,((int)x.invoke(card))+5d,((int)y.invoke(card))+5d,0);
+                .invoke(gallery,whole.apply(x.invoke(card))+5d,whole.apply(y.invoke(card))+5d,0);
         check(field(galleryClass,"selectedIndex").getInt(gallery)==1,"card click changes only the inspected camera");
         check(sent.isEmpty() && field(panelClass,"cameraIndex").getInt(panel)==0,"standby card inspection sends no broadcast selection");
         Method select = galleryClass.getDeclaredMethod("selectCurrent"); select.setAccessible(true); select.invoke(gallery);

@@ -9,7 +9,7 @@ $jars = foreach ($group in $groups) {
     if (Test-Path -LiteralPath $dir) { Get-ChildItem -LiteralPath $dir -Recurse -Filter '*.jar' | Where-Object Name -notmatch '(-sources|-javadoc|-natives-)' | Select-Object -ExpandProperty FullName }
 }
 $cp = (@($out, "$root/build/moddev/artifacts/neoforge-21.1.230-merged.jar") + @($jars)) -join [IO.Path]::PathSeparator
-$jdk = 'C:/Program Files/Eclipse Adoptium/jdk-21.0.11.10-hotspot/bin'
+$jdk = & (Join-Path $PSScriptRoot 'find-jdk.ps1')
 $sources = @()
 foreach ($name in @('SdfMath','Spectrum','Palette','TextStyle','Motion','CardGrid','UiShaderGuard','UiIcon')) { $sources += "$root/src/main/java/ru/gora/musicbattle/client/ui/$name.java" }
 $sources += "$root/tools/UiToolkitChecks.java"

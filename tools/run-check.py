@@ -5,7 +5,15 @@ Runs one of the tools/check-*.ps1 regressions on macOS or Linux, without PowerSh
 Every check script is the same shape underneath: build a classpath, javac a harness from tools/,
 run its main class. Only two things in them are Windows-specific, the JDK path and $env:USERPROFILE,
 so this reads the .ps1, lifts out the sources, the classpath groups, the main class and its modes,
-and runs the same thing with the JDK Gradle provisioned for the toolchain.
+and runs the same thing with a JDK 21.
+
+The JDK is looked for in this order: BLOCKY_JDK, JAVA_HOME, the JDK Gradle provisioned for the
+toolchain (under jdks/ in GRADLE_USER_HOME or ~/.gradle), `/usr/libexec/java_home -v 21` on macOS,
+`java` on PATH. BLOCKY_JDK is taken as given: if it is not a JDK 21 the run stops and says what it
+found. The other places are passed over (with a note for JAVA_HOME) until one reports major version
+21; if none does, the run stops and lists what it found. The libraries come from Gradle's cache
+(GRADLE_USER_HOME or ~/.gradle), so build once with `gradle compileJava` first. LWJGL's natives are
+picked for this machine: macOS or Linux, x86-64 or arm64.
 
     python3 tools/run-check.py dj-workflow
     python3 tools/run-check.py client-defaults --packaged
@@ -14,28 +22,103 @@ and runs the same thing with the JDK Gradle provisioned for the toolchain.
 """
 import glob
 import os
+import platform
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 TOOLS = ROOT / "tools"
-CACHE = Path.home() / ".gradle" / "caches" / "modules-2" / "files-2.1"
+GRADLE_HOME = Path(os.environ["GRADLE_USER_HOME"]).expanduser() if os.environ.get("GRADLE_USER_HOME") \
+    else Path.home() / ".gradle"
+CACHE = GRADLE_HOME / "caches" / "modules-2" / "files-2.1"
 DARWIN = sys.platform == "darwin"
-NATIVES = "natives-macos-arm64" if DARWIN else "natives-linux"
+
+
+def natives_classifier() -> str:
+    """LWJGL's classifier for this machine's natives: natives-macos[-arm64] or natives-linux[-arm64]."""
+    arm = platform.machine().lower() in ("arm64", "aarch64")
+    if DARWIN:
+        return "natives-macos-arm64" if arm else "natives-macos"
+    if sys.platform.startswith("linux"):
+        return "natives-linux-arm64" if arm else "natives-linux"
+    sys.exit(f"run-check.py runs on macOS and Linux; on {sys.platform} use the tools/check-*.ps1 scripts")
+
+
+NATIVES = natives_classifier()
+
+
+def java_major(bin_: Path):
+    """The major version `java -version` reports for this bin folder, or None if it does not run."""
+    try:
+        out = subprocess.run([str(bin_ / "java"), "-version"], capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    m = re.search(r'version "(\d+)(?:\.(\d+))?', out.stderr + out.stdout)
+    if not m:
+        return None
+    major = int(m.group(1))
+    return int(m.group(2)) if major == 1 and m.group(2) else major
+
+
+def jdk_candidates():
+    """(where it came from, bin folder) in the order run-check tries them."""
+    for var in ("BLOCKY_JDK", "JAVA_HOME"):
+        if os.environ.get(var):
+            yield var, Path(os.environ[var]).expanduser() / "bin"
+    for pattern in ("jdks/*/jdk-21*/Contents/Home/bin", "jdks/*/jdk-21*/bin", "jdks/*21*/Contents/Home/bin",
+                    "jdks/*21*/bin"):
+        for candidate in sorted(glob.glob(str(GRADLE_HOME / pattern))):
+            yield f"Gradle's {GRADLE_HOME / 'jdks'}", Path(candidate)
+    if DARWIN and Path("/usr/libexec/java_home").exists():
+        home = subprocess.run(["/usr/libexec/java_home", "-v", "21"], capture_output=True, text=True).stdout.strip()
+        if home:
+            yield "java_home -v 21", Path(home) / "bin"
+    on_path = shutil.which("java")
+    if on_path:
+        yield "java on PATH", Path(os.path.realpath(on_path)).parent
+
+
+_JDK = None
 
 
 def jdk_bin() -> Path:
-    for candidate in sorted(glob.glob(str(Path.home() / ".gradle/jdks/*/jdk-21*/Contents/Home/bin"))):
-        return Path(candidate)
-    for candidate in sorted(glob.glob(str(Path.home() / ".gradle/jdks/*/jdk-21*/bin"))):
-        return Path(candidate)
-    if DARWIN:
-        home = subprocess.run(["/usr/libexec/java_home", "-v", "21"], capture_output=True, text=True).stdout.strip()
-        if home:
-            return Path(home) / "bin"
-    sys.exit("no JDK 21 found; run `gradle compileJava` once so the toolchain is provisioned")
+    """
+    The first JDK candidate that is a JDK 21. BLOCKY_JDK is taken as given, so one that is not 21 stops the run. The
+    other places are passed over until one is 21: JAVA_HOME often names a newer JDK set for other work, and
+    java_home -v 21 answers with a newer JDK when no 21 is installed.
+    """
+    global _JDK
+    if _JDK is not None:
+        return _JDK
+    seen = []
+    for source, bin_ in jdk_candidates():
+        if not (bin_ / "java").exists() or not (bin_ / "javac").exists():
+            if source == "BLOCKY_JDK":
+                sys.exit(f"BLOCKY_JDK points at {bin_.parent}, which has no bin/java and bin/javac")
+            seen.append(f"{source}: {bin_.parent} (no bin/java and bin/javac)")
+            continue
+        major = java_major(bin_)
+        if major == 21:
+            _JDK = bin_
+            return bin_
+        if source == "BLOCKY_JDK":
+            sys.exit(f"BLOCKY_JDK points at {bin_.parent}, which is Java {major}; the checks need JDK 21")
+        if source == "JAVA_HOME":
+            print(f"note: JAVA_HOME is Java {major}, not 21; looking further", file=sys.stderr)
+        seen.append(f"{source}: {bin_.parent} (Java {major})")
+    sys.exit("no JDK 21 found" + (" (found only " + "; ".join(seen) + ")" if seen else "")
+             + ". Set BLOCKY_JDK or JAVA_HOME to a JDK 21, or run `gradle compileJava` once so Gradle provisions one")
+
+
+def packaged_jar() -> Path:
+    """build/libs/blocky_music-<mod_version>.jar, the version read from gradle.properties as Gradle names the jar."""
+    for line in (ROOT / "gradle.properties").read_text(encoding="utf-8").splitlines():
+        if line.startswith("mod_version="):
+            return ROOT / "build" / "libs" / f"blocky_music-{line.split('=', 1)[1].strip()}.jar"
+    sys.exit("no mod_version in gradle.properties")
 
 
 def posix(rel: str) -> str:
@@ -161,7 +244,7 @@ class Check:
                           re.findall(r"build[\\/]moddev[\\/]artifacts[\\/][^\"'\s)]+\.jar", t)]
         self.wants_natives = "natives-windows" in t or "lwjgl" in t
         self.uses_classes = "build/classes/java/main" in t or "build\\classes\\java\\main" in t or "$classes" in t
-        self.jar = ROOT / "build" / "libs" / "blocky_music-0.1.0.jar"
+        self.jar = packaged_jar()
 
         # The run line, in every shape the scripts use: optional JVM flags, a -cp that is either a
         # variable or a parenthesised expression, then either a class name (possibly fully
@@ -241,6 +324,13 @@ class Check:
             return None if base is None else str(Path(base) / posix(prefix.group(2)))
         if a in ("$compiled", "$classes"):
             return str(self.jar if self.packaged else ROOT / "build/classes/java/main")
+        # A value the script sets from the project root, such as a default fixture:
+        # if (-not $TrackPath) { $TrackPath = Join-Path $projectRoot 'tools/fixtures/...' }
+        if a.startswith("$"):
+            m = re.search(r"\$" + re.escape(a[1:]) + r"\s*=\s*Join-Path\s+\$(?:root|projectRoot|projectDir)\s+'([^']+)'",
+                          self.text)
+            if m:
+                return str(ROOT / posix(m.group(1)))
         if a.startswith("$"):
             return None
         return posix(a)
@@ -271,7 +361,8 @@ class Check:
         missing = {a for run_args in runs for a, raw in zip(run_args, self.args) if a is None}
         if missing:
             unknown = [raw for raw in self.args if self.resolve_arg(raw) is None and raw != "$mode"]
-            print(f"SKIP {self.name}: needs {' '.join(unknown)}, which only the Windows setup defined")
+            print(f"SKIP {self.name}: its script passes {' '.join(unknown)}, which it sets from a parameter or the"
+                  " Windows environment and this runner cannot work out; run the .ps1 with that value instead")
             return -1
         self.out.mkdir(parents=True, exist_ok=True)
         if not self.source_launcher:
@@ -297,6 +388,12 @@ def main(argv):
     packaged = "--packaged" in argv
     dry = "--dry-run" in argv
     names = [a for a in argv if not a.startswith("--")]
+    if not dry:
+        jdk = jdk_bin()  # stops here, with the reason, when there is no JDK 21
+        print(f"JDK 21: {jdk.parent}", flush=True)
+        if not CACHE.is_dir():
+            sys.exit(f"no Gradle cache at {CACHE}; run `gradle compileJava` once (set GRADLE_USER_HOME if Gradle keeps"
+                     " its cache elsewhere)")
     if names == ["all"]:
         names = sorted(p.name[len("check-"):-len(".ps1")] for p in TOOLS.glob("check-*.ps1"))
     results = {}

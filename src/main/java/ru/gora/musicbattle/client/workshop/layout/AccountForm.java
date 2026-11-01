@@ -4,10 +4,11 @@ import java.util.List;
 import ru.gora.musicbattle.client.workshop.layout.Form.Item;
 
 /**
- * The account view as a {@link Form} (spec 06 section 6.4, 08 A1.2): signing in with the Minecraft account or with a
+ * The account view as a {@link Form}: signing in with the Minecraft account or with a
  * code, the device code with "Open the link" and "Copy code", the "Signed in as @username. Continue · This isn't me"
  * step, the signed-in state with the linked Minecraft accounts, the standing banner, the one-time acceptance of the
- * rules, notifications and sign-out.
+ * rules, notifications and sign-out, and, signed in or out, the Network access switch that turns the Workshop's network
+ * access off again (or back on through the first-run screen).
  */
 public final class AccountForm {
     public enum Mode {
@@ -24,13 +25,17 @@ public final class AccountForm {
     /**
      * {@code status}, {@code error}, {@code rules} and {@code rulesChanged} are already translated strings, or null.
      * {@code rules} says whether the one-time acceptance is given and when; {@code rulesChanged} carries the line about
-     * a document that moved, and {@code rulesPending} offers the acceptance right here.
+     * a document that moved, and {@code rulesPending} offers the acceptance right here. {@code networkAllowed} is the
+     * Workshop's network consent, which the Network access switch shows and changes.
      */
     public record State(Mode mode, boolean minecraftAccount, boolean remember, String userCode, String status, String error,
                         String username, String displayName, List<Form.Row> minecraft, boolean canLink, boolean autoSignIn,
                         List<String> notifications, String standing, int unread, boolean busy, String rules,
-                        String rulesChanged, boolean rulesPending, Card card) {
+                        String rulesChanged, boolean rulesPending, Card card, boolean networkAllowed) {
     }
+
+    /** The id of the Network access switch. */
+    public static final String NETWORK = "account.network";
 
     private AccountForm() {
     }
@@ -59,6 +64,7 @@ public final class AccountForm {
                 form.note("account.device.note", tr.get(k + "account.sign_in_code.note"), "normal");
                 form.toggle("account.remember", tr.get(k + "account.remember"), state.remember(), true);
                 form.buttons("account.about.row", Form.button("account.about", tr.get(k + "account.what_is_qwu")));
+                network(form, tr, state);
             }
             case DEVICE_WAITING, LINK_WAITING -> {
                 boolean link = state.mode() == Mode.LINK_WAITING;
@@ -133,6 +139,7 @@ public final class AccountForm {
                 form.buttons("account.profile.row", Form.button("account.open_profile", tr.get(k + "account.open_profile")));
                 form.buttons("account.actions", Form.button("account.manage", tr.get(k + "account.manage")),
                         Form.danger("account.sign_out", tr.get(k + "account.sign_out")));
+                network(form, tr, state);
             }
             default -> {
                 // Every mode is handled above; a future one shows nothing rather than crashing.
@@ -142,6 +149,19 @@ public final class AccountForm {
             form.note("account.error", state.error(), "danger");
         }
         return form.build();
+    }
+
+    /**
+     * Network access, signed in or out: after "Allow" this is the way to turn it off again, and while it is off the
+     * same switch brings back the first-run screen. Turning it off is no sign-out.
+     */
+    private static void network(Form.Builder form, Tr tr, State state) {
+        String k = WorkshopStrings.KEY;
+        form.separator("account.sep.network");
+        form.heading("account.network.heading", tr.get(k + "account.network"));
+        form.toggle(NETWORK, tr.get(k + "account.network.toggle"), state.networkAllowed(), true);
+        form.note("account.network.note", tr.get(k + (state.networkAllowed() ? "account.network.on" : "account.network.off")),
+                "normal");
     }
 
     private static String safe(String value) {

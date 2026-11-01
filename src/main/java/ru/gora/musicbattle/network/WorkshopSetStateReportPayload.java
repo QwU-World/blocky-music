@@ -6,7 +6,7 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import ru.gora.musicbattle.MusicBattleMod;
 
 /**
- * A client tells the server what the Workshop says about a set it holds (spec 08 A5.1): {@code current},
+ * A client tells the server what the Workshop says about a set it holds: {@code current},
  * {@code update_available}, {@code withdrawn} or {@code audio_removed}. Advisory and rate-limited: a server
  * without egress learns about a takedown this way and hides the set from votes until an operator acts.
  */

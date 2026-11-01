@@ -18,37 +18,17 @@ $dependencyJars = foreach ($group in $groups) {
 }
 $classPath = (@($outputDir, "$projectDir\build\classes\java\main",
     "$projectDir\build\moddev\artifacts\neoforge-21.1.230-merged.jar") + @($dependencyJars)) -join [IO.Path]::PathSeparator
-$javaDir = 'C:\Program Files\Eclipse Adoptium\jdk-21.0.11.10-hotspot\bin'
+$javaDir = & (Join-Path $PSScriptRoot 'find-jdk.ps1')
 
 & (Join-Path $javaDir 'javac.exe') -proc:none -encoding UTF-8 -cp $classPath -d $outputDir `
-    (Join-Path $PSScriptRoot 'SmileySoundChecks.java')
+    (Join-Path $PSScriptRoot 'SmileySoundChecks.java') (Join-Path $PSScriptRoot 'SmileySoundAssetCheck.java')
 if ($LASTEXITCODE -ne 0) { throw 'Smiley sound checks failed to compile.' }
 
+# The sound overrides, then the shipped smiley sound itself, read by the mod's own Ogg Vorbis decoder (no ffmpeg).
 $failed = $false
-& (Join-Path $javaDir 'java.exe') -cp $classPath SmileySoundChecks $projectDir
-if ($LASTEXITCODE -ne 0) { $failed = $true }
-
-$asset = Join-Path $projectDir 'src\main\resources\assets\music_battle\sounds\entity\smiley_damage.ogg'
-$ffprobe = Get-Command ffprobe -ErrorAction Stop
-$ffmpeg = Get-Command ffmpeg -ErrorAction Stop
-if (-not (Test-Path -LiteralPath $asset -PathType Leaf)) {
-    Write-Error "Missing smiley sound asset: $asset" -ErrorAction Continue
-    $failed = $true
-} else {
-    $probe = & $ffprobe.Source -v error -select_streams a:0 -show_entries stream=codec_name,channels,sample_rate `
-        -of json $asset | ConvertFrom-Json
-    $stream = @($probe.streams)[0]
-    if ($stream.codec_name -ne 'vorbis' -or [int]$stream.channels -ne 1) {
-        Write-Error "Expected mono Ogg Vorbis, got codec=$($stream.codec_name), channels=$($stream.channels)." -ErrorAction Continue
-        $failed = $true
-    }
-    & $ffmpeg.Source -v error -i $asset -f null NUL
-    if ($LASTEXITCODE -ne 0) {
-        Write-Error 'ffmpeg could not decode the complete smiley sound asset.' -ErrorAction Continue
-        $failed = $true
-    } else {
-        Write-Host "Smiley OGG decode PASS: Vorbis, mono, $($stream.sample_rate) Hz"
-    }
+foreach ($main in @('SmileySoundChecks','SmileySoundAssetCheck')) {
+    & (Join-Path $javaDir 'java.exe') -cp $classPath $main $projectDir
+    if ($LASTEXITCODE -ne 0) { $failed = $true }
 }
 
 if ($failed) { throw 'Smiley sound regression failed.' }

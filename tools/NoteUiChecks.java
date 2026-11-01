@@ -8,16 +8,14 @@ import java.util.List;
 /** Pure geometry checks. These exercise the same layout and glyph membership used by the UI. */
 public final class NoteUiChecks {
     public static void main(String[] args) throws Exception {
-        Class<?> layout;
-        try { layout = Class.forName("ru.gora.musicbattle.client.SettingsScreenLayout"); }
-        catch (ClassNotFoundException missing) {
-            throw new AssertionError("Settings preview has no reserved viewport: compact controls overlap it", missing);
-        }
-        Method create = layout.getDeclaredMethod("create", int.class, int.class);
-        create.setAccessible(true);
         int[][] sizes = {{320, 240}, {426, 240}, {640, 360}, {854, 480}, {1280, 720}, {1920, 1080}};
+        // The tabs are sized from their labels; a rough six units a character stands in for the font here, since the
+        // settings-layout check measures them with the real Nunito.
+        ru.gora.musicbattle.client.ui.TextMeasurer measurer = (text, style) -> text.length() * 6F * style.size() / 10F;
+        List<String> labels = List.of("General settings", "Calibration", "Beatmap Editor", "Guide", "Workshop");
         for (int[] size : sizes) {
-            Object value = create.invoke(null, size[0], size[1]);
+            SettingsScreenLayout.Nav nav = SettingsScreenLayout.nav(size[0], size[1], measurer, labels, 0);
+            Object value = SettingsScreenLayout.create(size[0], size[1], nav);
             Object controls = get(value, "controls");
             Object preview = get(value, "preview");
             if (size[0] < 620 && size[1] == 240) {
@@ -26,7 +24,7 @@ public final class NoteUiChecks {
             }
             for (Object rect : new Object[]{controls, preview}) {
                 require(number(rect, "x") >= 0 && number(rect, "right") <= size[0], "Viewport leaves horizontal bounds");
-                require(number(rect, "y") >= 32 && number(rect, "bottom") <= size[1] - 38,
+                require(number(rect, "y") >= nav.header() && number(rect, "bottom") <= size[1] - 38,
                         "Viewport covers tabs or footer at " + size[0] + "x" + size[1]);
                 require(number(rect, "width") > 0 && number(rect, "height") > 0, "Empty viewport");
             }

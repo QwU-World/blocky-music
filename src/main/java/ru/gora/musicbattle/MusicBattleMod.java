@@ -68,6 +68,7 @@ public final class MusicBattleMod {
         NeoForge.EVENT_BUS.addListener(DjPlaybackManager::onPlayerRespawned);
         NeoForge.EVENT_BUS.addListener(DjPlaybackManager::onPlayerChangedDimension);
         NeoForge.EVENT_BUS.addListener(DjPlaybackManager::onServerStopping);
+        NeoForge.EVENT_BUS.addListener(ru.gora.musicbattle.server.DjWorkshopCache::onServerStarted);
         NeoForge.EVENT_BUS.addListener(CameraEditorManager::onServerTick);
         NeoForge.EVENT_BUS.addListener(CameraEditorManager::onPlayerLoggedOut);
         NeoForge.EVENT_BUS.addListener(CameraEditorManager::onServerStopping);

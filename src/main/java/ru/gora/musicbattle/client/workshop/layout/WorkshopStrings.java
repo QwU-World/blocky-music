@@ -1,17 +1,22 @@
 package ru.gora.musicbattle.client.workshop.layout;
 
+import java.util.List;
 import java.util.Locale;
 
 /**
  * Wording and number formatting shared by the Workshop screens and their layout check: key prefixes, counts, sizes,
  * durations, star ratings and relative dates. Pure: every number uses {@link Locale#ROOT} and every word comes from
- * {@link Tr} (spec 06 section 11; no Cyrillic in Java literals).
+ * {@link Tr} (no Cyrillic in Java literals).
  */
 public final class WorkshopStrings {
     /** Every screen key starts here. */
     public static final String KEY = "screen.music_battle.workshop.";
     /** Status, genre, language, report and error keys. */
     public static final String DATA = "music_battle.workshop.";
+    /** What separates the parts of a card's statistics line; the card drops a part whole, never cuts it. */
+    public static final String STATS_SEPARATOR = "  ";
+    /** The roles the site marks a commenter with (admin, mod, curator). */
+    public static final List<String> COMMENT_ROLES = List.of("admin", "mod", "curator");
 
     private WorkshopStrings() {
     }
@@ -89,6 +94,21 @@ public final class WorkshopStrings {
         return tr.get(keyBase + "." + form, count(value));
     }
 
+    /**
+     * A card's statistics line: its downloads, its favourites and how long ago it was updated (left out when unknown),
+     * each count in its plural form, apart by {@link #STATS_SEPARATOR}. Cards used one form for every count, so
+     * Russian read «1234 загрузок» and «1 загрузок» and English "1 downloads", while the beatmap page counted right.
+     */
+    public static String cardStats(Tr tr, long downloads, long favourites, String updatedAt, long nowMillis) {
+        StringBuilder out = new StringBuilder();
+        out.append(plural(tr, KEY + "card.downloads", downloads));
+        out.append(STATS_SEPARATOR).append(plural(tr, KEY + "card.favourites", favourites));
+        if (updatedAt != null && !updatedAt.isEmpty()) {
+            out.append(STATS_SEPARATOR).append(relative(tr, updatedAt, nowMillis));
+        }
+        return out.toString();
+    }
+
     /** "5 hours ago" from an ISO timestamp; an unreadable or future date falls back to "just now". */
     public static String relative(Tr tr, String isoTimestamp, long nowMillis) {
         long at = epochMillis(isoTimestamp);
@@ -149,5 +169,15 @@ public final class WorkshopStrings {
     /** Upper case for pills and badges, without a locale surprise (Turkish i). */
     public static String upper(String text) {
         return text == null ? "" : text.toUpperCase(Locale.ROOT);
+    }
+
+    /**
+     * A commenter's role badge in the player's language, upper case as badges are, from the account view's own words
+     * ({@code account.role.<role>}); null for a role this version does not know. The badges used to be the site's
+     * codes upper-cased, so a Russian page read "MOD" and "CURATOR" beside the names.
+     */
+    public static String roleBadge(Tr tr, String role) {
+        String code = role == null ? "" : role.toLowerCase(Locale.ROOT);
+        return COMMENT_ROLES.contains(code) ? upper(tr.get(KEY + "account.role." + code)) : null;
     }
 }

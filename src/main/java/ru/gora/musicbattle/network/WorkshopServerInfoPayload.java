@@ -6,7 +6,7 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import ru.gora.musicbattle.MusicBattleMod;
 
 /**
- * What this server offers the Workshop screens (spec 06 section 10, review of section 9): sent on login and again
+ * What this server offers the Workshop screens: sent on login and again
  * after a config change or a grant, so the hidden "Server beatmaps" tab, the "Server comments" button and the
  * INSTALLED vote category appear exactly when the server really has them.
  */

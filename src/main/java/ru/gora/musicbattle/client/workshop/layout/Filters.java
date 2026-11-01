@@ -6,7 +6,7 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * The listing's filter rows and sort tabs, with the website's semantics (spec 03 section 4.1, 02 section 2.1): the
+ * The listing's filter rows and sort tabs, with the website's semantics: the
  * same rows, the same option ids, the same defaults and the same sort visibility rules. Pure: the screen turns these
  * into buttons, the layout check walks them, and {@code WorkshopApi.SearchQuery} is built from the same ids.
  */
@@ -81,7 +81,7 @@ public final class Filters {
         return rows;
     }
 
-    /** Sort fields visible for this query and category (02 section 2.1). */
+    /** Sort fields visible for this query and category. */
     public static List<String> visibleSorts(String query, String category) {
         List<String> out = new ArrayList<>();
         for (String field : SORTS) {

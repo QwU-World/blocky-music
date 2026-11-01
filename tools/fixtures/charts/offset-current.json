@@ -1,0 +1,300 @@
+{
+  "id": "offset_fixture_current",
+  "title": "Chart offset fixture (current format)",
+  "description": "Hand-written test beatmap for tools/ChartOffsetChecks and tools/DjCameraAlphaChecks. No song.",
+  "playerPartyOrderVersion": 2,
+  "bpm": 128,
+  "volume": 1.0,
+  "durationTicks": 480,
+  "fxRowsPerLayer": 6,
+  "notes": [
+    {
+      "owner": 0,
+      "lane": 0,
+      "tick": 40,
+      "durationTicks": 18
+    },
+    {
+      "owner": 0,
+      "lane": 1,
+      "tick": 50,
+      "durationTicks": 0
+    },
+    {
+      "owner": 0,
+      "lane": 2,
+      "tick": 60,
+      "durationTicks": 0
+    },
+    {
+      "owner": 0,
+      "lane": 3,
+      "tick": 70,
+      "durationTicks": 0
+    },
+    {
+      "owner": 0,
+      "lane": 0,
+      "tick": 80,
+      "durationTicks": 0
+    },
+    {
+      "owner": 0,
+      "lane": 1,
+      "tick": 90,
+      "durationTicks": 18
+    },
+    {
+      "owner": 0,
+      "lane": 2,
+      "tick": 100,
+      "durationTicks": 0
+    },
+    {
+      "owner": 0,
+      "lane": 3,
+      "tick": 110,
+      "durationTicks": 0
+    },
+    {
+      "owner": 1,
+      "lane": 0,
+      "tick": 120,
+      "durationTicks": 0
+    },
+    {
+      "owner": 1,
+      "lane": 1,
+      "tick": 130,
+      "durationTicks": 0
+    },
+    {
+      "owner": 1,
+      "lane": 2,
+      "tick": 140,
+      "durationTicks": 18
+    },
+    {
+      "owner": 1,
+      "lane": 3,
+      "tick": 150,
+      "durationTicks": 0
+    },
+    {
+      "owner": 1,
+      "lane": 0,
+      "tick": 160,
+      "durationTicks": 0
+    },
+    {
+      "owner": 1,
+      "lane": 1,
+      "tick": 170,
+      "durationTicks": 0
+    },
+    {
+      "owner": 1,
+      "lane": 2,
+      "tick": 180,
+      "durationTicks": 0
+    },
+    {
+      "owner": 1,
+      "lane": 3,
+      "tick": 190,
+      "durationTicks": 18
+    },
+    {
+      "owner": 0,
+      "lane": 0,
+      "tick": 200,
+      "durationTicks": 0
+    },
+    {
+      "owner": 0,
+      "lane": 1,
+      "tick": 210,
+      "durationTicks": 0
+    },
+    {
+      "owner": 0,
+      "lane": 2,
+      "tick": 220,
+      "durationTicks": 0
+    },
+    {
+      "owner": 0,
+      "lane": 3,
+      "tick": 230,
+      "durationTicks": 0
+    },
+    {
+      "owner": 0,
+      "lane": 0,
+      "tick": 240,
+      "durationTicks": 18
+    },
+    {
+      "owner": 0,
+      "lane": 1,
+      "tick": 250,
+      "durationTicks": 0
+    },
+    {
+      "owner": 0,
+      "lane": 2,
+      "tick": 260,
+      "durationTicks": 0
+    },
+    {
+      "owner": 0,
+      "lane": 3,
+      "tick": 270,
+      "durationTicks": 0
+    },
+    {
+      "owner": 1,
+      "lane": 0,
+      "tick": 280,
+      "durationTicks": 0
+    },
+    {
+      "owner": 1,
+      "lane": 1,
+      "tick": 290,
+      "durationTicks": 18
+    },
+    {
+      "owner": 1,
+      "lane": 2,
+      "tick": 300,
+      "durationTicks": 0
+    },
+    {
+      "owner": 1,
+      "lane": 3,
+      "tick": 310,
+      "durationTicks": 0
+    },
+    {
+      "owner": 1,
+      "lane": 0,
+      "tick": 320,
+      "durationTicks": 0
+    },
+    {
+      "owner": 1,
+      "lane": 1,
+      "tick": 330,
+      "durationTicks": 0
+    },
+    {
+      "owner": 1,
+      "lane": 2,
+      "tick": 340,
+      "durationTicks": 18
+    },
+    {
+      "owner": 1,
+      "lane": 3,
+      "tick": 350,
+      "durationTicks": 0
+    },
+    {
+      "owner": 0,
+      "lane": 0,
+      "tick": 40,
+      "durationTicks": 0
+    },
+    {
+      "owner": 1,
+      "lane": 3,
+      "tick": 40,
+      "durationTicks": 0
+    }
+  ],
+  "effects": [
+    {
+      "type": "fish_eye",
+      "lane": 1,
+      "layer": 0,
+      "tick": 0,
+      "durationTicks": 400,
+      "intensity": 1.0,
+      "softness": 0.5,
+      "opacity": 1.0,
+      "fishEyeStrength": 0.8,
+      "fishEyeRadius": 0.75,
+      "fishEyeZoom": 1.15,
+      "fishEyeChromatic": 0.4,
+      "fishEyeEdgeDarkening": 0.15,
+      "fishEyeRemoveBlackEdges": false,
+      "overlayInterface": true
+    },
+    {
+      "type": "vignette",
+      "lane": 1,
+      "layer": 1,
+      "tick": 0,
+      "durationTicks": 400,
+      "intensity": 0.35,
+      "softness": 0.6,
+      "opacity": 1.0,
+      "colorA": -16449527,
+      "vignetteRadius": 0.7,
+      "vignetteSoftness": 0.35,
+      "vignetteRoundness": 0.8,
+      "overlayInterface": false
+    },
+    {
+      "type": "pulse",
+      "lane": 0,
+      "layer": 0,
+      "tick": 40,
+      "durationTicks": 200,
+      "intensity": 0.6,
+      "beatReactive": true,
+      "variant": "beat"
+    },
+    {
+      "type": "flash",
+      "lane": 2,
+      "layer": 0,
+      "tick": 120,
+      "durationTicks": 10,
+      "intensity": 0.9,
+      "colorA": -1
+    },
+    {
+      "type": "text",
+      "lane": 3,
+      "layer": 0,
+      "tick": 160,
+      "durationTicks": 80,
+      "text": "Fixture",
+      "font": "minecraft:default",
+      "positionX": 0.5,
+      "positionY": 0.3,
+      "animation": "letters",
+      "exitAnimation": "fade"
+    },
+    {
+      "type": "color_correction",
+      "lane": 4,
+      "layer": 0,
+      "tick": 200,
+      "durationTicks": 120,
+      "colorSaturation": 0.6,
+      "colorContrast": 1.2
+    },
+    {
+      "type": "shake",
+      "lane": 5,
+      "layer": 0,
+      "tick": 260,
+      "durationTicks": 12,
+      "intensity": 0.5,
+      "beatReactive": true
+    }
+  ]
+}

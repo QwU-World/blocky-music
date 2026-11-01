@@ -10,7 +10,7 @@ $jars = foreach ($group in $groups) {
     if (Test-Path -LiteralPath $dir) { Get-ChildItem -LiteralPath $dir -Recurse -Filter '*.jar' | Where-Object Name -notmatch '(-sources|-javadoc|-natives-)' | Select-Object -ExpandProperty FullName }
 }
 $cp = (@($out) + @($jars)) -join [IO.Path]::PathSeparator
-$jdk = 'C:/Program Files/Eclipse Adoptium/jdk-21.0.11.10-hotspot/bin'
+$jdk = & (Join-Path $PSScriptRoot 'find-jdk.ps1')
 $sources = @("$root/src/main/java/ru/gora/musicbattle/data/VoteTiming.java")
 foreach ($name in @('TextStyle','TextMeasurer','Palette')) { $sources += "$root/src/main/java/ru/gora/musicbattle/client/ui/$name.java" }
 foreach ($name in @('Rect','Tr','TextFit','Layout','Metrics','WorkshopStrings','Filters','ShellLayout','ListingLayout','CardLayout','BattleSetup','BattleSetupLayout','BattleTracks','TrackCardLayout')) { $sources += "$root/src/main/java/ru/gora/musicbattle/client/workshop/layout/$name.java" }

@@ -14,6 +14,7 @@ import com.mojang.blaze3d.vertex.VertexFormat;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -24,8 +25,8 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
-import net.minecraft.client.gui.components.Tooltip;
 import net.minecraft.client.gui.screens.PauseScreen;
+import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.TitleScreen;
 import net.minecraft.client.gui.screens.options.OptionsScreen;
 import net.minecraft.client.model.Model;
@@ -58,9 +59,12 @@ import org.joml.Matrix4f;
 import ru.gora.musicbattle.MusicBattleMod;
 import ru.gora.musicbattle.data.BattleNote;
 import ru.gora.musicbattle.data.ChartBeat;
-import ru.gora.musicbattle.data.BattleClock;
+import ru.gora.musicbattle.data.MusicStreamRetry;
 import ru.gora.musicbattle.data.BattlePauseClock;
+import ru.gora.musicbattle.data.SongDriftAnchor;
 import ru.gora.musicbattle.data.BattleSkipClock;
+import ru.gora.musicbattle.data.MusicStartAlignment;
+import ru.gora.musicbattle.data.BattleCameraShot;
 import ru.gora.musicbattle.data.BattleScoreMath;
 import ru.gora.musicbattle.client.workshop.layout.MenuCornerButtons;
 import ru.gora.musicbattle.client.workshop.layout.Rect;
@@ -78,6 +82,7 @@ import ru.gora.musicbattle.network.BattleClientErrorPayload;
 import ru.gora.musicbattle.network.BattleStartPayload;
 import ru.gora.musicbattle.network.BattleStopPayload;
 import ru.gora.musicbattle.network.CameraEditorClosedPayload;
+import ru.gora.musicbattle.network.CameraFollowStatePayload;
 import ru.gora.musicbattle.network.ClientJudgementPayload;
 import ru.gora.musicbattle.network.NoteInputPayload;
 import ru.gora.musicbattle.network.OpenVotePayload;
@@ -85,6 +90,7 @@ import ru.gora.musicbattle.network.OpenRapGodConfigPayload;
 import ru.gora.musicbattle.network.OpenSpeakerConfigPayload;
 import ru.gora.musicbattle.network.OpenDjPanelPayload;
 import ru.gora.musicbattle.network.OpenCameraEditorPayload;
+import ru.gora.musicbattle.network.PauseSkipJumpPayload;
 import ru.gora.musicbattle.network.PauseSkipStatusPayload;
 import ru.gora.musicbattle.network.OpenChallengeSidePayload;
 import ru.gora.musicbattle.network.BattleMicrophonePayload;
@@ -113,6 +119,10 @@ public final class ClientBattleController {
     private static final int SAME_LANE_HIT_LOCKOUT_TICKS = 2;
     private static final int HOLD_RELEASE_EARLY_TICKS = 2;
     private static final int INTRO_TICKS = 40;
+    /** Share of the way to the newest frame of the automatic shot each tick; see tickBattleCameraSync. */
+    private static final float AUTOMATIC_SHOT_FOLLOW = 0.5F;
+    /** The same for a camera block's shot, whose edits arrive seldom and are worth easing in. */
+    private static final float BLOCK_SHOT_FOLLOW = 0.42F;
     private static final int MUSIC_DOWNLOAD_TIMEOUT_TICKS = 20 * 60 * 5;
     /** How long a file the player was said to already have may take to appear before the claim is disbelieved. */
     private static final int STALE_CONTENT_GRACE_TICKS = 20 * 8;
@@ -187,14 +197,35 @@ public final class ClientBattleController {
      */
     private static volatile long startAtNanos;
     private static volatile long spectatorMusicStartedAtNanos;
-    private static long musicPausedAtNanos;
+    /** Volatile because the song's stream reads the battle clock on the sound thread; see battleTickForStreamStart. */
+    private static volatile long musicPausedAtNanos;
     private static int musicClockStartTick;
+    /**
+     * The battle tick the playing song's first sample belongs to, as its stream decided when it started (see
+     * AlignedStartAudioStream); NaN until then. The drift check measures the song from here, not from the tick the
+     * seek asked for, which the stream may have moved by however long it took to open.
+     */
+    private static volatile double musicStreamStartTick = Double.NaN;
+    /**
+     * How long this machine takes from lining a battle song's stream up to the speakers starting it, in ticks: the
+     * stream is lined up that far ahead of the clock (battleTickForStreamStart). Minecraft decodes the stream's first
+     * four seconds in between, so without it every start came out that much behind. Learnt from each start
+     * (MusicStartAlignment#nextStartLead), kept for the session, read on the sound thread.
+     */
+    private static volatile double musicStartLeadTicks = MusicStartAlignment.DEFAULT_START_LEAD_TICKS;
     private static int spectatorMusicClockStartTick;
     private static PendingSpectatorMusic pendingSpectatorMusic;
     private static SpectatorMusicPayload lastSpectatorMusicPayload;
     private static boolean spectatorMusicAwaitingStart;
     private static int spectatorMusicStartWaitTicks;
     private static boolean spectatorMusicStartFreezeDisabled;
+    /**
+     * The sound engine turned the spectator stream down on the spot (see startSpectatorClockWithoutStream), so the FX
+     * and notes clock runs from the moment it was asked for instead of waiting for a stream that never comes.
+     */
+    private static boolean spectatorMusicRefused;
+    /** And it did so because the game's master volume was 0: turning the volume up brings the song in again. */
+    private static boolean spectatorMusicRefusedMuted;
     private static int spectatorMusicInactiveTicks;
     private static int spectatorMusicRecoveryCooldown;
     private static boolean preloadingTrack;
@@ -219,6 +250,8 @@ public final class ClientBattleController {
     private static int spectatorDurationTicks;
     private static int spectatorLocalTicks;
     private static int spectatorTrackBpm = 120;
+    /** Beat 1 of the watched battle or DJ song on the spectator clock, in ms at its speed (SpectatorBattlePayload). */
+    private static int spectatorBeatOffsetMs;
     private static int spectatorLeftEntityId;
     private static int spectatorRightEntityId;
     private static int spectatorCameraEntityId;
@@ -243,7 +276,18 @@ public final class ClientBattleController {
     private static float syncedCameraPitch;
     private static float syncedCameraFov;
     private static long syncedCameraRevision = -1L;
+    /** The battle uses a camera block's shot (a positive field of view); its frames are blended, not stepped. */
     private static boolean syncedCameraAvailable;
+    /**
+     * The battle uses the automatic shot, which the server now sends frame by frame with a zero field of view (the
+     * viewer's own). Kept apart from {@link #syncedCameraAvailable} because that one also decides the field of view.
+     */
+    private static boolean syncedCameraAutomatic;
+    /**
+     * Added to the battle time for the view's own slow sway, less every tick a skipped rest jumped over, so a skip
+     * does not snap the sway to where it would have stood after the rest. Reset with each battle.
+     */
+    private static float cameraSwayShift;
     private static boolean standaloneDjPlayback;
     private static BlockPos djAudienceCameraPos = BlockPos.ZERO;
     private static Vec3 djAudienceCameraTargetPosition = Vec3.ZERO;
@@ -288,13 +332,26 @@ public final class ClientBattleController {
     private static final int[] spectatorAnimationHeldMask = new int[2];
     private static final int[] spectatorAnimationInputHeldMask = new int[2];
     private static final float[] spectatorAnimationTriggerTick = {-Float.MAX_VALUE, -Float.MAX_VALUE};
+    private static final int[] spectatorAnimationJudgedSerial = new int[2];
+    private static final int[] spectatorAnimationJudgedLane = {-1, -1};
+    private static final float[] spectatorAnimationJudgedTick = {-Float.MAX_VALUE, -Float.MAX_VALUE};
     private static String activeTrackId = "";
     private static String activeAudioFile = "";
     private static String activePreviewFile = "";
     private static boolean musicPausedForGame;
     private static boolean spectatorMusicPausedForGame;
     private static long spectatorMusicPausedAtNanos;
+    /**
+     * The instant the sounds came back from the pause menu (onScreenClosing), for the battle clock's release at the end
+     * of that frame; 0 when none is waiting. See gameResumeInstant.
+     */
+    private static long gameResumedAtNanos;
+    /** The screen the one now closing makes way for, from the ScreenEvent.Opening before it; see onScreenClosing. */
+    private static Screen screenComingNext;
     private static boolean musicStarted;
+    /** The battle's song got no channel when it was last played, and whether it was silenced then; see MusicStreamRetry. */
+    private static boolean musicRefused;
+    private static boolean musicRefusedSilenced;
     private static int musicWaitTicks;
     private static boolean clientErrorReported;
     private static volatile String pendingAudioError;
@@ -306,11 +363,60 @@ public final class ClientBattleController {
     private static boolean activeHideStandardDimming;
     private static final int[][] laneFlashes = new int[2][4];
     private static final int[][] hitBursts = new int[2][4];
+    /**
+     * A mob's actions that came before their tick (BattleActionPayload#showAtTick), in the order they came, each
+     * waiting for the battle clock to reach it; see showDueActions. The spectator's queue follows the spectator clock.
+     */
+    private static final List<HeldAction> heldActions = new ArrayList<>();
+    private static final List<HeldAction> spectatorHeldActions = new ArrayList<>();
+    /** The battle song's real place against the battle clock, read once a client tick: see SongDriftAnchor. */
+    private static final SongDriftAnchor songDrift = new SongDriftAnchor();
+    /**
+     * When a short hold of the battle clock ends, 0 for none: the drift correction holds the clock back this long
+     * (musicPausedAtNanos is its start) when the song has fallen behind the chart, the song playing on meanwhile.
+     */
+    private static long clockHoldUntilNanos;
+    /**
+     * The same for the song of the battle or DJ booth this client watches, against the spectator clock: the pause
+     * menu pauses and resumes that song on OpenAL's mixing steps too, and the spectator clock is held and let go on the
+     * exact instants, so in single player the watched song drifted from its beatmap and effects by every visit, about
+     * 58 ms after twenty of them, and stayed there for the rest of the song. See followSpectatorSongPosition.
+     */
+    private static final SongDriftAnchor spectatorSongDrift = new SongDriftAnchor();
+    /** When a short hold of the spectator clock ends, 0 for none; spectatorMusicPausedAtNanos is its start. */
+    private static long spectatorClockHoldUntilNanos;
+    /** Whether that hold holds the integrated server's battle time too (BattlePauseClock): a watched battle's. */
+    private static boolean spectatorClockHoldMovesServer;
+    /** The lane flashes and hit bursts of actions shown from those queues, counted down on the battle clock. */
+    private static final TimedLaneFlashes timedLaneFlashes = new TimedLaneFlashes();
+    private static final TimedLaneFlashes spectatorTimedLaneFlashes = new TimedLaneFlashes();
+    /**
+     * The other side's actions numbered in the order they come here, which for each side is the order the server made
+     * them and the order they are shown in (a side's held actions are shown in turn, and a player's as they come), and
+     * per side the number of the action whose score and combo are on show; see showRemoteState. A spectator's refresh of
+     * the battle it watches (startSpectatorBattle) takes a number too, for both sides. Never reset: a new battle's
+     * numbers are higher.
+     *
+     * <p>An action held for its tick takes its number as it comes, not as it is shown (HeldAction): numbered when shown,
+     * a mob's actions that were still waiting when a refresh of the watched battle came took numbers after the
+     * refresh's, and their older score and combo were shown over its newer ones for up to AI_LEAD_TICKS.
+     */
+    private static long remoteStateArrivals;
+    private static final long[] activeRemoteStateShown = new long[2];
+    private static final long[] spectatorRemoteStateShown = new long[2];
     private static final int[] animationTriggerSerial = new int[2];
     private static final int[] animationTriggerLane = {-1, -1};
     private static final int[] animationHeldMask = new int[2];
     private static final int[] animationInputHeldMask = new int[2];
     private static final float[] animationTriggerTick = {-Float.MAX_VALUE, -Float.MAX_VALUE};
+    /**
+     * The judgements of key presses, kept apart from the presses above (key-downs and mobs' hits): on a side that plays
+     * with keys the key going down is the press, and its judgement, before or long after it, only confirms it. The
+     * same serial, lane and tick as a press; see ClientBattleAnimation.update.
+     */
+    private static final int[] animationJudgedSerial = new int[2];
+    private static final int[] animationJudgedLane = {-1, -1};
+    private static final float[] animationJudgedTick = {-Float.MAX_VALUE, -Float.MAX_VALUE};
     private static final String[][] laneLabels = {
             DEFAULT_LABELS.clone(),
             DEFAULT_LABELS.clone()
@@ -359,6 +465,10 @@ public final class ClientBattleController {
         CameraEditorClient.closeFromServer(payload);
     }
 
+    public static void acceptCameraFollowState(CameraFollowStatePayload payload) {
+        CameraEditorClient.acceptFollowState(payload);
+    }
+
     /** The microphone asks which side to take before a challenge to a player, or a battle with a mob, begins. */
     public static void openChallengeSide(OpenChallengeSidePayload payload) {
         Minecraft minecraft = Minecraft.getInstance();
@@ -404,10 +514,12 @@ public final class ClientBattleController {
                 // Keep an in-progress FX inspector or preset browser open while
                 // refreshing its underlying panel with authoritative server state.
                 owner.applyServerState(payload);
-            } else {
+            } else if (ru.gora.musicbattle.block.DjPanelOpenRequests.consume(payload.panelPos())) {
                 minecraft.setScreen(new DjPanelScreen(payload));
             }
-        } else {
+        } else if (ru.gora.musicbattle.block.DjPanelOpenRequests.consume(payload.panelPos())) {
+            // Only the answer to a right-click opens the panel: a refresh still on its way after Esc used to put the
+            // closed panel back on screen.
             minecraft.setScreen(new DjPanelScreen(payload));
         }
     }
@@ -447,6 +559,16 @@ public final class ClientBattleController {
         if (sameCamera && payload.revision() <= syncedCameraRevision) {
             return;
         }
+        // A trusted, identity/revision-checked server update uses zero FOV for the automatic arena shot, which keeps
+        // the viewer's own field of view; every positive camera FOV remains clamped.
+        boolean blockShot = payload.fov() > 0;
+        // A cut (another battle or camera, a switch between a camera block's shot and the automatic one, or a frame
+        // further away than any shot moves in a tick) is shown at once; anything else is the next frame of the same
+        // shot and is blended in tickBattleCameraSync. The automatic shot used to be shown here as it came, which
+        // stepped its direction twenty times a second while its position slid along with the helper stand three ticks
+        // behind: that was the jerky turning.
+        boolean cut = BattleCameraShot.isCut(sameCamera, blockShot, syncedCameraAvailable, syncedCameraAutomatic,
+                payload.x() - syncedCameraX, payload.y() - syncedCameraY, payload.z() - syncedCameraZ);
         syncedCameraBattleId = payload.battleId();
         syncedCameraEntityId = payload.cameraEntityId();
         syncedCameraX = payload.x();
@@ -454,38 +576,32 @@ public final class ClientBattleController {
         syncedCameraZ = payload.z();
         syncedCameraYaw = Mth.wrapDegrees(payload.yaw());
         syncedCameraPitch = Mth.clamp(payload.pitch(), -89.0F, 89.0F);
-        // A trusted, identity/revision-checked server update uses zero FOV to restore the
-        // ordinary entity-driven arena camera; all positive camera FOVs remain clamped.
-        syncedCameraFov = payload.fov() <= 0 ? 0 : Mth.clamp(payload.fov(), 30.0F, 110.0F);
+        syncedCameraFov = blockShot ? Mth.clamp(payload.fov(), 30.0F, 110.0F) : 0.0F;
         syncedCameraRevision = payload.revision();
-        syncedCameraAvailable = payload.fov() > 0;
-        if (activeMatch && syncedCameraAvailable && (!sameCamera || !activeCameraInterpolation.valid())) {
+        syncedCameraAvailable = blockShot;
+        syncedCameraAutomatic = !blockShot;
+        if (activeMatch && (cut || !activeCameraInterpolation.valid())) {
             activeCameraInterpolation.snap(payload.x(), payload.y(), payload.z(),
                     syncedCameraYaw, syncedCameraPitch, syncedCameraFov);
             cameraYaw = syncedCameraYaw;
             cameraPitch = syncedCameraPitch;
             cameraFov = syncedCameraFov;
-        }
-        if (!syncedCameraAvailable) {
-            if (activeMatch) {
-                activeCameraInterpolation.clear();
-                cameraFov = 0;
-                cameraYaw = startYaw = syncedCameraYaw;
-                cameraPitch = startPitch = syncedCameraPitch;
-                // The frame is drawn from the aim pair, not from cameraYaw, and the tick that copies one
-                // into the other has not run yet. Without this the view keeps the camera block's angle for
-                // the rest of the tick and then swings across to the arena, which reads as a jolt.
+            if (!blockShot) {
+                // The intro blends from startYaw, and the aim pair is what a frame falls back on: both have to be
+                // the new shot's at once, or the view keeps the camera block's angle and then swings across.
+                startYaw = cameraYaw;
+                startPitch = cameraPitch;
                 aimYawFrom = aimYawTo = cameraYaw;
                 aimPitchFrom = aimPitchTo = cameraPitch;
             }
-            if (spectatorMatch) {
-                spectatorCameraFov = 0;
-                spectatorCameraYaw = syncedCameraYaw;
-                spectatorCameraPitch = syncedCameraPitch;
-                spectatorCameraViewPosition = new Vec3(payload.x(), payload.y(), payload.z());
-                spectatorCameraViewPositionValid = true;
-                snapSpectatorCameraInterpolation();
-            }
+        }
+        if (spectatorMatch && (cut || !spectatorCameraViewPositionValid)) {
+            spectatorCameraFov = syncedCameraFov;
+            spectatorCameraYaw = syncedCameraYaw;
+            spectatorCameraPitch = syncedCameraPitch;
+            spectatorCameraViewPosition = new Vec3(payload.x(), payload.y(), payload.z());
+            spectatorCameraViewPositionValid = true;
+            snapSpectatorCameraInterpolation();
         }
     }
 
@@ -595,30 +711,12 @@ public final class ClientBattleController {
         }
     }
 
+    /**
+     * Whether a skip of the current rest is on offer and how many have voted. The skip itself arrives as a
+     * {@link PauseSkipJumpPayload}; this payload's {@code applied} flag belongs to servers before protocol 68.
+     */
     public static void updatePauseSkipStatus(PauseSkipStatusPayload payload) {
-        boolean activeBattle = battleId != null && battleId.equals(payload.battleId());
-        boolean spectatorBattle = !active && spectatorBattleId != null && spectatorBattleId.equals(payload.battleId());
-        if (!activeBattle && !spectatorBattle) {
-            return;
-        }
-        if (payload.applied()) {
-            int targetTick = Math.max(0, payload.targetTick());
-            if (activeBattle) {
-                if (startAtNanos != 0L) {
-                    // The battle clock is read from the epoch every tick, and once a second the music is seeked back
-                    // to it, so setting only the counter undid the skip within a second.
-                    long now = musicPausedAtNanos > 0L ? musicPausedAtNanos : System.nanoTime();
-                    startAtNanos = BattleSkipClock.clientEpochAfterSkip(now, targetTick, ownOneWayMillis());
-                    targetTick = Math.max(0, Mth.floor(activeVisualTick(0.0F)));
-                }
-                localTicks = targetTick;
-                musicStarted = activeAudioFile == null || activeAudioFile.isBlank() || playMusic(Minecraft.getInstance(), activeTrackId, activeAudioFile, localTicks);
-            } else {
-                spectatorMusicStartFreezeDisabled = false;
-                restartSpectatorMusicAt(targetTick);
-            }
-        }
-        if (!activeBattle) {
+        if (battleId == null || !battleId.equals(payload.battleId())) {
             return;
         }
         pauseSkipAvailable = payload.available();
@@ -627,16 +725,34 @@ public final class ClientBattleController {
     }
 
     /**
-     * This player's one-way delay as the server reckons it: the latency the server measures is what reaches every
-     * client in the player list, and the start of the battle was planned around the same figure.
+     * The server has skipped a rest, from one tick straight to another. A player moves the battle clock by exactly
+     * the same number of ticks, which keeps whatever lead over the server the start of the battle gave it, and starts
+     * the song again at the new tick; the song's own stream lines itself up with the clock however long the seek
+     * takes (AlignedStartAudioStream). A spectator, whose clock follows the song it hears, only starts the song again.
      */
-    private static int ownOneWayMillis() {
-        Minecraft minecraft = Minecraft.getInstance();
-        if (minecraft.player == null || minecraft.getConnection() == null) {
-            return 0;
+    public static void acceptPauseSkipJump(PauseSkipJumpPayload payload) {
+        boolean activeBattle = active && battleId != null && battleId.equals(payload.battleId());
+        boolean spectatorBattle = !active && spectatorBattleId != null && spectatorBattleId.equals(payload.battleId());
+        if (activeBattle || spectatorBattle) {
+            cameraSwayShift -= Math.max(0, payload.toTick() - payload.fromTick());
         }
-        net.minecraft.client.multiplayer.PlayerInfo info = minecraft.getConnection().getPlayerInfo(minecraft.player.getUUID());
-        return info == null ? 0 : BattleClock.oneWayMillis(info.getLatency());
+        if (activeBattle) {
+            int targetTick = Math.max(0, payload.toTick());
+            if (startAtNanos != 0L) {
+                // The battle clock is read from the epoch every tick, and once a second the music is seeked back to
+                // it, so setting only the counter undid the skip within a second.
+                startAtNanos = BattleSkipClock.clientEpochAfterJump(startAtNanos, payload.fromTick(), payload.toTick());
+                targetTick = Math.max(0, Mth.floor(activeVisualTick(0.0F)));
+            }
+            localTicks = targetTick;
+            pauseSkipAvailable = false;
+            pauseSkipVotes = 0;
+            musicStarted = activeAudioFile == null || activeAudioFile.isBlank()
+                    || playMusic(Minecraft.getInstance(), activeTrackId, activeAudioFile, localTicks);
+        } else if (spectatorBattle) {
+            spectatorMusicStartFreezeDisabled = false;
+            restartSpectatorMusicAt(Math.max(0, payload.toTick()));
+        }
     }
 
     public static void start(BattleStartPayload payload) {
@@ -698,6 +814,7 @@ public final class ClientBattleController {
         activeSolo = payload.rightEntityId() <= 0;
         opponentEntityId = payload.opponentEntityId();
         cameraEntityId = payload.cameraEntityId();
+        cameraSwayShift = 0.0F;
         cameraYaw = payload.cameraYaw();
         cameraPitch = payload.cameraPitch();
         cameraFov = payload.cameraFov();
@@ -750,6 +867,8 @@ public final class ClientBattleController {
             animationHeldMask[owner] = 0;
             animationInputHeldMask[owner] = 0;
             animationTriggerTick[owner] = -Float.MAX_VALUE;
+            animationJudgedLane[owner] = -1;
+            animationJudgedTick[owner] = -Float.MAX_VALUE;
             for (int lane = 0; lane < 4; lane++) {
                 laneFlashes[owner][lane] = 0;
                 hitBursts[owner][lane] = 0;
@@ -759,6 +878,10 @@ public final class ClientBattleController {
             previousLaneDown[lane] = false;
             laneHitLockoutUntil[lane] = 0;
         }
+        // Presses counted before the battle took over the keys are not this battle's.
+        BattleLaneLatch.LANES.clear();
+        heldActions.clear();
+        timedLaneFlashes.clear();
 
         if (ScreenStack.isOpen(MusicBattleVoteScreen.class)) {
             // The battle is starting: whatever the player opened over the vote goes with it.
@@ -815,6 +938,8 @@ public final class ClientBattleController {
             pauseSkipVotes = 0;
             pauseSkipSpaceDown = false;
             notes.clear();
+            heldActions.clear();
+            timedLaneFlashes.clear();
             activeEffects = List.of();
             activeDisableStageBars = false;
             activeOffsetMs = 0;
@@ -843,85 +968,219 @@ public final class ClientBattleController {
         }
     }
 
+    /**
+     * A participant's action from the server. A mob's comes a few ticks before the tick it belongs to (BattleManager's
+     * AI_LEAD_TICKS) and waits here until the battle clock reaches it, then shows in the first frame at or after that
+     * tick (showDueActions): its hit lands on its note, wherever the server's ticks fell and however long any pause
+     * was. An action that arrives on or after its tick - a player's, or a mob's held up on the way - shows at once.
+     */
     public static void acceptAction(BattleActionPayload payload) {
-        boolean handled = false;
+        // Numbered as it comes, whether it is shown now or waits for its tick: see remoteStateArrivals.
+        long arrival = ++remoteStateArrivals;
         if (active && battleId != null && battleId.equals(payload.battleId())) {
-            int owner = Mth.clamp(payload.owner(), 0, 1);
-            int lane = Mth.clamp(payload.lane(), 0, 3);
-            if (owner != ownOwner) {
-                boolean visualApplied = payload.noteIndex() < 0;
-                boolean flashAction = shouldFlashAction(notes, payload.noteIndex(), payload.hit(), payload.complete());
-                ClientNote animationNote = noteByIndex(notes, payload.noteIndex());
-                if (payload.noteIndex() >= 0) {
-                    visualApplied = applyNoteAction(notes, owner, lane, payload.noteIndex(), payload.noteTick(), localTicks, payload.hit(), payload.complete());
-                }
-                if (visualApplied) {
-                    if (animationNote != null && animationNote.durationTicks > 0) {
-                        setPlayerAnimationHeld(false, owner, lane,
-                                animationNote.started && !animationNote.resolved);
-                    }
-                    applyActiveRemoteState(owner, payload.score(), payload.combo());
-                    if (flashAction) {
-                        laneFlashes[owner][lane] = payload.hit() ? 8 : 4;
-                        triggerPlayerAnimation(false, owner, lane);
-                    }
-                    if (flashAction && payload.hit() && payload.noteIndex() >= 0) {
-                        hitBursts[owner][lane] = 8;
-                    }
-                } else {
-                    queuePendingRemoteState(notes, payload.noteIndex(), payload.leftScore(), payload.rightScore(), payload.combo());
-                }
+            float clock = activeVisualTick(0.0F);
+            // Whatever was already due goes first, so that one side's actions keep their order.
+            showDueActions(heldActions, false, clock);
+            if (waitsForItsTick(heldActions, payload, clock)) {
+                heldActions.add(new HeldAction(payload, arrival));
             } else {
-                // Our own side. The score here is predicted locally and the server normally only echoes it back, so
-                // most of these are ignored on purpose. The exception is a note the server resolved that we never
-                // did - it ran out of patience waiting for our judgement - and that used to be dropped silently:
-                // the server and the opponent saw a miss while our own HUD kept a full combo, and the two scores
-                // never met again. Now the correction lands where it belongs, and it looks like the miss it is.
-                //
-                // A note we had already resolved ourselves is excluded, because then we have counted the mistake
-                // once already and the server is only telling us about the same one.
-                ClientNote correctedNote = noteByIndex(notes, payload.noteIndex());
-                boolean countsAsOwnMistake = !payload.hit() && (correctedNote == null || !correctedNote.resolved);
-                if (payload.noteIndex() >= 0
-                        && applyNoteAction(notes, owner, lane, payload.noteIndex(), payload.noteTick(), localTicks,
-                                payload.hit(), payload.complete())) {
-                    applyOwnCorrection(owner, payload.score(), payload.combo(), countsAsOwnMistake);
-                    if (shouldFlashAction(notes, payload.noteIndex(), payload.hit(), payload.complete())) {
-                        laneFlashes[owner][lane] = payload.hit() ? 8 : 4;
-                    }
-                }
+                // Judged on the battle clock, the one the server's ticks follow, as a held action is when it is shown,
+                // not on the last client tick: a hold's completion that came after the hold's end but before the next
+                // client tick left the hold started until that tick.
+                applyActiveAction(payload, Float.NaN, Mth.floor(clock), arrival);
             }
-            handled = true;
         }
         if (spectatorBattleId != null && spectatorBattleId.equals(payload.battleId())) {
-            int owner = Mth.clamp(payload.owner(), 0, 1);
-            int lane = Mth.clamp(payload.lane(), 0, 3);
+            float clock = spectatorVisualTick(0.0F);
+            showDueActions(spectatorHeldActions, true, clock);
+            if (waitsForItsTick(spectatorHeldActions, payload, clock)) {
+                spectatorHeldActions.add(new HeldAction(payload, arrival));
+            } else {
+                applySpectatorAction(payload, Float.NaN, Mth.floor(clock), arrival);
+            }
+        }
+    }
+
+    /** An action waiting for its tick, with the number it took as it came (remoteStateArrivals). */
+    private record HeldAction(BattleActionPayload payload, long arrival) {
+    }
+
+    /**
+     * Whether an action has to wait: it belongs to a tick the clock has not reached, or an earlier action of the same
+     * side is still waiting and it has to come after that one.
+     */
+    private static boolean waitsForItsTick(List<HeldAction> held, BattleActionPayload payload, float clock) {
+        if (payload.showAtTick() > clock) {
+            return true;
+        }
+        for (HeldAction waiting : held) {
+            if (waiting.payload().owner() == payload.owner()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Shows every waiting action whose tick the clock has reached, in the order they came, as if each had arrived
+     * then: the hit and its flash at the frame that reaches the tick, the punch stamped with the tick itself, so the
+     * body moves in phase with the note even though the frame came a little after it. Run at the start of every
+     * frame (beginRenderFrame) and every client tick.
+     */
+    private static void showDueActions(List<HeldAction> held, boolean spectator, float clock) {
+        while (!held.isEmpty() && held.get(0).payload().showAtTick() <= clock) {
+            HeldAction waiting = held.remove(0);
+            BattleActionPayload payload = waiting.payload();
+            float at = payload.showAtTick();
+            // The tick the frame is in, not the last client tick's: the note is judged on the clock it is shown at.
+            int currentTick = Mth.floor(clock);
+            if (spectator) {
+                applySpectatorAction(payload, at, currentTick, waiting.arrival());
+            } else {
+                applyActiveAction(payload, at, currentTick, waiting.arrival());
+            }
+        }
+    }
+
+    /**
+     * An action in the active battle, shown now. {@code at} is the battle tick it belongs to when it waited for it, and
+     * NaN when it is shown as it came; {@code currentTick} is the tick the note is judged against, and {@code arrival}
+     * the number the action took as it came (remoteStateArrivals).
+     */
+    private static void applyActiveAction(BattleActionPayload payload, float at, int currentTick, long arrival) {
+        if (!active || battleId == null || !battleId.equals(payload.battleId())) {
+            return;
+        }
+        int owner = Mth.clamp(payload.owner(), 0, 1);
+        int lane = Mth.clamp(payload.lane(), 0, 3);
+        if (owner != ownOwner) {
             boolean visualApplied = payload.noteIndex() < 0;
-            boolean flashAction = shouldFlashAction(spectatorNotes, payload.noteIndex(), payload.hit(), payload.complete());
-            ClientNote animationNote = noteByIndex(spectatorNotes, payload.noteIndex());
+            ClientNote animationNote = noteByIndex(notes, payload.noteIndex());
+            if (breaksWaitingHold(animationNote, owner, lane, payload.hit(), payload.complete())) {
+                showWaitingHit(notes, animationNote, false, currentTick, laneFlashes, hitBursts);
+            }
+            boolean flashAction = shouldFlashAction(notes, payload.noteIndex(), payload.hit(), payload.complete());
+            boolean holdBroken = breaksStartedHold(notes, payload.noteIndex(), payload.hit(), payload.complete());
             if (payload.noteIndex() >= 0) {
-                visualApplied = applyNoteAction(spectatorNotes, owner, lane, payload.noteIndex(), payload.noteTick(), spectatorLocalTicks, payload.hit(), payload.complete());
+                visualApplied = applyNoteAction(notes, owner, lane, payload.noteIndex(), payload.noteTick(), currentTick, payload.hit(), payload.complete());
             }
             if (visualApplied) {
                 if (animationNote != null && animationNote.durationTicks > 0) {
-                    setPlayerAnimationHeld(true, owner, lane,
-                            animationNote.started && !animationNote.resolved);
+                    setPlayerAnimationHeld(false, owner, lane, holdsLane(notes, owner, lane));
                 }
-                applySpectatorRemoteState(owner, payload.leftScore(), payload.rightScore(), payload.combo());
+                showRemoteState(false, owner, payload.leftScore(), payload.rightScore(), payload.combo(), arrival);
                 if (flashAction) {
-                    spectatorLaneFlashes[owner][lane] = payload.hit() ? 8 : 4;
-                    triggerPlayerAnimation(true, owner, lane);
+                    // Timed from its tick, or from now when it comes as it is: see showLaneFlash.
+                    showLaneFlash(false, owner, lane, payload.hit() ? 8 : 4, payload.hit() && payload.noteIndex() >= 0,
+                            Float.isFinite(at) ? at : activeVisualTick(0.0F));
+                    triggerJudgementAnimation(false, owner, lane, at);
+                } else if (holdBroken) {
+                    // Timed from its tick, or from now when it comes as it is: see showLaneFlash.
+                    showLaneFlash(false, owner, lane, 4, false, Float.isFinite(at) ? at : activeVisualTick(0.0F));
                 }
-                if (flashAction && payload.hit() && payload.noteIndex() >= 0) {
-                        spectatorHitBursts[owner][lane] = 8;
-                    }
             } else {
-                queuePendingRemoteState(spectatorNotes, payload.noteIndex(), payload.leftScore(), payload.rightScore(), payload.combo());
+                queuePendingRemoteState(notes, payload.noteIndex(), payload.leftScore(), payload.rightScore(),
+                        payload.combo(), arrival);
             }
-            handled = true;
-        }
-        if (!handled) {
             return;
+        }
+        // Our own side. The score here is predicted locally and the server normally only echoes it back, so
+        // most of these are ignored on purpose. The exception is a note the server resolved that we never
+        // did - it ran out of patience waiting for our judgement - and that used to be dropped silently:
+        // the server and the opponent saw a miss while our own HUD kept a full combo, and the two scores
+        // never met again. Now the correction lands where it belongs, and it looks like the miss it is.
+        //
+        // A note we had already resolved ourselves is excluded, because then we have counted the mistake
+        // once already and the server is only telling us about the same one.
+        ClientNote correctedNote = noteByIndex(notes, payload.noteIndex());
+        boolean countsAsOwnMistake = !payload.hit() && (correctedNote == null || !correctedNote.resolved);
+        if (payload.noteIndex() >= 0
+                && applyNoteAction(notes, owner, lane, payload.noteIndex(), payload.noteTick(), currentTick,
+                        payload.hit(), payload.complete())) {
+            applyOwnCorrection(owner, payload.score(), payload.combo(), countsAsOwnMistake);
+            if (shouldFlashAction(notes, payload.noteIndex(), payload.hit(), payload.complete())) {
+                showLaneFlash(false, owner, lane, payload.hit() ? 8 : 4, false, Float.NaN);
+            }
+        }
+    }
+
+    /** The same for a battle this client watches; see {@link #applyActiveAction}. */
+    private static void applySpectatorAction(BattleActionPayload payload, float at, int currentTick, long arrival) {
+        if (spectatorBattleId == null || !spectatorBattleId.equals(payload.battleId())) {
+            return;
+        }
+        int owner = Mth.clamp(payload.owner(), 0, 1);
+        int lane = Mth.clamp(payload.lane(), 0, 3);
+        boolean visualApplied = payload.noteIndex() < 0;
+        ClientNote animationNote = noteByIndex(spectatorNotes, payload.noteIndex());
+        if (breaksWaitingHold(animationNote, owner, lane, payload.hit(), payload.complete())) {
+            showWaitingHit(spectatorNotes, animationNote, true, currentTick, spectatorLaneFlashes, spectatorHitBursts);
+        }
+        boolean flashAction = shouldFlashAction(spectatorNotes, payload.noteIndex(), payload.hit(), payload.complete());
+        boolean holdBroken = breaksStartedHold(spectatorNotes, payload.noteIndex(), payload.hit(), payload.complete());
+        if (payload.noteIndex() >= 0) {
+            visualApplied = applyNoteAction(spectatorNotes, owner, lane, payload.noteIndex(), payload.noteTick(), currentTick, payload.hit(), payload.complete());
+        }
+        if (visualApplied) {
+            if (animationNote != null && animationNote.durationTicks > 0) {
+                setPlayerAnimationHeld(true, owner, lane, holdsLane(spectatorNotes, owner, lane));
+            }
+            showRemoteState(true, owner, payload.leftScore(), payload.rightScore(), payload.combo(), arrival);
+            if (flashAction) {
+                showLaneFlash(true, owner, lane, payload.hit() ? 8 : 4, payload.hit() && payload.noteIndex() >= 0,
+                        Float.isFinite(at) ? at : spectatorVisualTick(0.0F));
+                triggerJudgementAnimation(true, owner, lane, at);
+            } else if (holdBroken) {
+                showLaneFlash(true, owner, lane, 4, false, Float.isFinite(at) ? at : spectatorVisualTick(0.0F));
+            }
+        } else {
+            queuePendingRemoteState(spectatorNotes, payload.noteIndex(), payload.leftScore(), payload.rightScore(),
+                    payload.combo(), arrival);
+        }
+    }
+
+    /**
+     * Flashes a lane, with the hit burst when {@code burst}. The other side's flashes all count down on the battle clock
+     * (TimedLaneFlashes): from the tick of an action held for it, or from the moment one shown as it came was shown. A
+     * NaN {@code at} - only one's own side now, whose correction from the server is shown here - counts down on client
+     * ticks, as every flash did, and any timed flash on the lane stops: one's own keys set those lanes directly.
+     *
+     * <p>Why the battle clock for everything of the other side: a client tick counts its untimed flashes down right
+     * after it has shown its due actions, and a frame handles its packets before its client ticks, so a flash shown
+     * either way lost its brightest step before it was ever drawn, while one's own, set by a key after that count, keeps
+     * it. Measured on the real controller in Minecraft's frame order, a remote player's bad press was first drawn at 3
+     * instead of 4 in 66% of presses at 30 fps, 33% at 60 and 8% at 240, and lit for 156-173 ms on average against
+     * one's own 200; a remote hit lost its first step of flash and burst in the same share.
+     *
+     * <p>A flash without a burst (a broken hold, a bad press) leaves the lane's burst going on: the timeline counts its
+     * burst from the same start as its flash, so the start moves back by the part of the burst the lane has shown by
+     * that tick, and the flash steps down from its own tick.
+     */
+    private static void showLaneFlash(boolean spectator, int owner, int lane, int flash, boolean burst, float at) {
+        int[][] flashes = spectator ? spectatorLaneFlashes : laneFlashes;
+        int[][] bursts = spectator ? spectatorHitBursts : hitBursts;
+        TimedLaneFlashes timed = spectator ? spectatorTimedLaneFlashes : timedLaneFlashes;
+        if (burst && Float.isFinite(at)) {
+            timed.start(owner, lane, flash, at);
+            flashes[owner][lane] = flash;
+            bursts[owner][lane] = TimedLaneFlashes.BURST_TICKS;
+            return;
+        }
+        if (Float.isFinite(at)) {
+            // A timed lane's burst was last counted by the frame or the client tick before this tick. Read as it was,
+            // the burst of a head hit three ticks before showed one step back, and for a tick longer than one's own,
+            // so the timelines are brought to this tick first; every frame counts them again at its own clock before
+            // it draws.
+            timed.apply(at, flashes, bursts);
+            int burstShown = TimedLaneFlashes.BURST_TICKS - Mth.clamp(bursts[owner][lane], 0, TimedLaneFlashes.BURST_TICKS);
+            timed.start(owner, lane, flash + burstShown, at - burstShown);
+            flashes[owner][lane] = flash;
+            return;
+        }
+        timed.stop(owner, lane);
+        flashes[owner][lane] = flash;
+        if (burst) {
+            bursts[owner][lane] = 8;
         }
     }
 
@@ -1078,6 +1337,7 @@ public final class ClientBattleController {
             spectatorLeftSpeed = NoteSpeed.clamp(payload.leftSpeed());
             spectatorRightSpeed = NoteSpeed.clamp(payload.rightSpeed());
             spectatorTrackBpm = Math.max(20, payload.bpm());
+            spectatorBeatOffsetMs = payload.beatOffsetMs();
             spectatorPlaybackSpeed = Mth.clamp(payload.speedMultiplier(), 1.0F, 2.0F);
             spectatorLeftEntityId = payload.leftEntityId();
             spectatorRightEntityId = payload.rightEntityId();
@@ -1091,6 +1351,25 @@ public final class ClientBattleController {
             spectatorRightScore = payload.rightScore();
             spectatorCombo[0] = payload.leftCombo();
             spectatorCombo[1] = payload.rightCombo();
+            // A mob's side comes as of the battle's tick, with its actions from the ticks it played ahead. This panel
+            // holds those already, from before the refresh, so the numbers of the newest of them are on show now.
+            for (BattleActionPayload lead : payload.leadActions()) {
+                int side = Mth.clamp(lead.owner(), 0, 1);
+                if (side == 0) {
+                    spectatorLeftScore = lead.score();
+                } else {
+                    spectatorRightScore = lead.score();
+                }
+                spectatorCombo[side] = lead.combo();
+            }
+            // These are the server's numbers as it sent this refresh, after every action that came before it, so both
+            // sides count them as the newest on show (showRemoteState). Numbers still waiting on a note - a hit that
+            // came before its note's tick - are older: shown at that tick, they took a side's score and combo back to
+            // before actions the refresh already counts, which this client may never have got. So are those of the
+            // actions held for their tick, which took their numbers as they came (HeldAction).
+            long refreshed = ++remoteStateArrivals;
+            spectatorRemoteStateShown[0] = refreshed;
+            spectatorRemoteStateShown[1] = refreshed;
             spectatorAnimationInputHeldMask[0] = payload.leftHeldMask();
             spectatorAnimationInputHeldMask[1] = payload.rightHeldMask();
             // DJ panels can replace their visual stack live. A same-session refresh must update
@@ -1105,7 +1384,7 @@ public final class ClientBattleController {
         boolean continuingDjAudience = standalonePayload && standaloneDjPlayback && djReleaseEndTick > 0;
         if (spectatorBattleId != null && !spectatorBattleId.equals(payload.battleId())) {
             if (djReleaseEndTick > 0) djTransitions.capture(spectatorEffects, spectatorVisualTick(0),
-                    spectatorTrackBpm, spectatorPlaybackSpeed, System.nanoTime());
+                    spectatorTrackBpm, spectatorPlaybackSpeed, spectatorBeatOrigin(), System.nanoTime());
             clearSpectatorCameraRequest(Minecraft.getInstance());
             pendingSpectatorMusic = null;
             stopSpectatorMusic(Minecraft.getInstance());
@@ -1123,6 +1402,7 @@ public final class ClientBattleController {
         clearBattleCameraSync();
         clearDjAudienceCamera();
         spectatorBattleId = payload.battleId();
+        cameraSwayShift = 0.0F;
         standaloneDjPlayback = standalonePayload;
         djReleaseEndTick = 0;
         if (standalonePayload && lastSpectatorMusicPayload != null) {
@@ -1133,6 +1413,7 @@ public final class ClientBattleController {
         spectatorLocalTicks = payload.startTick();
         spectatorMusicClockStartTick = Math.max(0, payload.startTick());
         spectatorTrackBpm = Math.max(20, payload.bpm());
+        spectatorBeatOffsetMs = payload.beatOffsetMs();
         spectatorPlaybackSpeed = Mth.clamp(payload.speedMultiplier(), 1.0F, 2.0F);
         spectatorLeftEntityId = payload.leftEntityId();
         spectatorRightEntityId = payload.rightEntityId();
@@ -1166,32 +1447,76 @@ public final class ClientBattleController {
         spectatorPanelStyles[1][5] = payload.rightNoteHeightScale();
         spectatorLeftSpeed = payload.leftSpeed();
         spectatorRightSpeed = payload.rightSpeed();
+        spectatorEffects = payload.effects();
+        for (int owner = 0; owner < 2; owner++) {
+            spectatorAnimationTriggerLane[owner] = -1;
+            spectatorAnimationTriggerTick[owner] = -Float.MAX_VALUE;
+            spectatorAnimationJudgedLane[owner] = -1;
+            spectatorAnimationJudgedTick[owner] = -Float.MAX_VALUE;
+        }
+        takeSpectatorPanel(payload);
+    }
+
+    /**
+     * The watched battle's panel as the server sends it to a new spectator: the numbers, the notes and what each of them
+     * is on the battle's tick {@code startTick}, and a mob's actions from the ticks it has played ahead, held for their
+     * tick (BattleManager.Battle#spectatorJoin).
+     *
+     * <p>A note that ended more than the hit window before is over. One the server names as settled is over too, or, if
+     * its tick is still to come - a player's hit taken early - waits for it as such a hit does when it comes as an action
+     * (applyNoteAction). A hold the server names as held is held, its pose with it, or, still to come, waits as a hold
+     * taken early. Before, the panel only had the held keys to go on, which a mob's side sends three ticks ahead and
+     * never lets go of, and every note settled in the last hit window, and every one the mob had played ahead, fell past
+     * its button unsettled for the rest of the battle.
+     */
+    private static void takeSpectatorPanel(SpectatorBattlePayload payload) {
         spectatorLeftScore = payload.leftScore();
         spectatorRightScore = payload.rightScore();
         spectatorCombo[0] = payload.leftCombo();
         spectatorCombo[1] = payload.rightCombo();
         spectatorNotes.clear();
+        spectatorHeldActions.clear();
+        spectatorTimedLaneFlashes.clear();
+        Set<Integer> settled = Set.copyOf(payload.settledNotes());
+        Set<Integer> held = Set.copyOf(payload.startedNotes());
         for (int i = 0; i < payload.notes().size(); i++) {
             BattleNote note = payload.notes().get(i);
             ClientNote clientNote = new ClientNote(i, note.owner(), note.lane(), note.tick(), note.durationTicks());
             int noteEnd = note.tick() + Math.max(0, note.durationTicks());
-            if (payload.startTick() > noteEnd + HIT_WINDOW_TICKS) {
+            boolean toCome = note.tick() > payload.startTick() + 1;
+            if (settled.contains(i)) {
+                if (toCome) {
+                    clientNote.pendingHit = true;
+                    clientNote.pendingComplete = true;
+                } else {
+                    clientNote.resolved = true;
+                }
+            } else if (payload.startTick() > noteEnd + HIT_WINDOW_TICKS) {
                 clientNote.resolved = true;
-            } else if (note.durationTicks() > 0 && payload.startTick() >= note.tick()
-                    && payload.startTick() <= noteEnd + HOLD_RELEASE_EARLY_TICKS) {
-                int heldMask = note.owner() == 0 ? payload.leftHeldMask() : payload.rightHeldMask();
-                clientNote.started = (heldMask & (1 << Mth.clamp(note.lane(), 0, 3))) != 0;
+            } else if (held.contains(i) && note.durationTicks() > 0) {
+                if (toCome) {
+                    clientNote.pendingHit = true;
+                } else {
+                    clientNote.started = true;
+                }
             }
             spectatorNotes.add(clientNote);
         }
-        spectatorEffects = payload.effects();
         for (int owner = 0; owner < 2; owner++) {
-            spectatorAnimationTriggerLane[owner] = -1;
             spectatorAnimationInputHeldMask[owner] = owner == 0 ? payload.leftHeldMask() : payload.rightHeldMask();
-            spectatorAnimationTriggerTick[owner] = -Float.MAX_VALUE;
+            int holding = 0;
             for (int lane = 0; lane < 4; lane++) {
                 spectatorLaneFlashes[owner][lane] = 0;
                 spectatorHitBursts[owner][lane] = 0;
+                if (holdsLane(spectatorNotes, owner, lane)) {
+                    holding |= 1 << lane;
+                }
+            }
+            spectatorAnimationHeldMask[owner] = holding;
+        }
+        for (BattleActionPayload lead : payload.leadActions()) {
+            if (payload.battleId().equals(lead.battleId())) {
+                spectatorHeldActions.add(new HeldAction(lead, ++remoteStateArrivals));
             }
         }
     }
@@ -1252,6 +1577,357 @@ public final class ClientBattleController {
                 && expectedBattleId.equals(pendingSpectatorMusic.payload.battleId()));
     }
 
+    /**
+     * The game has just paused or resumed (NeoForge's ClientPauseChangeEvent.Post, at the end of the frame the pause
+     * menu opened or closed in). The battle clock is held and released here, at the same frame as the music, rather
+     * than at the next client tick.
+     *
+     * <p>Minecraft pauses every sound the moment Esc opens the menu and resumes them the moment the menu closes, but the
+     * client tick that used to hold the battle clock - and the integrated server's clock with it, BattlePauseClock -
+     * runs up to a tick after either. The clock therefore ran on silently for part of a tick before the pause, and the
+     * song played for part of a tick before the clock went on: every visit to the menu moved the song against the
+     * chart and the bot by up to a tick either way, and the drift check never saw it, because it reckons the song's
+     * place from these same stamps. tools/BattleSkipSyncChecks.java replays both orders frame by frame.
+     *
+     * <p>Registered in ClientGameEvents. The client tick still holds and releases on its own, as a fallback for a pause
+     * this event does not report, and whichever comes first does the work once.
+     *
+     * <p>Even the end of the frame is late: Minecraft pauses the sounds while it handles the key or the click, and the
+     * frame then sleeps for the frame-rate limit before the pause flag changes, so each visit still moved the song
+     * against the chart by the difference of two such sleeps, a few milliseconds, and the visits added up. The pause
+     * menu's own setup therefore holds the clock already (onScreenShown), and a release counts from the instant the
+     * menu closed and the sounds came back (onScreenClosing, gameResumeInstant).
+     */
+    public static void onGamePauseChanged(boolean paused) {
+        long now = System.nanoTime();
+        long at = paused ? now : gameResumeInstant(now);
+        BattlePauseClock.GAME.observe(paused, at);
+        Minecraft minecraft = Minecraft.getInstance();
+        if (active) {
+            if (paused) {
+                holdBattleForGamePause(minecraft, at);
+            } else {
+                releaseBattleFromGamePause(minecraft, at);
+            }
+        } else if (spectatorBattleId != null) {
+            if (paused) {
+                holdSpectatorForGamePause(minecraft, at);
+            } else {
+                releaseSpectatorFromGamePause(minecraft, at);
+            }
+        }
+    }
+
+    /**
+     * A screen has just been set up (ScreenEvent.Init.Post, run last). When it is the pause menu of a single-player
+     * world that is not open to LAN - the same test Minecraft makes for the pause flag at the end of the frame -
+     * Minecraft#pauseGame pauses every sound the moment this returns, so the battle clock and the integrated server's
+     * stop here, with the song, instead of a frame-rate sleep later at the flag. The flag's own event then finds them
+     * held already. A pause that does not follow after all is let go by the next client tick, song and clock together.
+     */
+    public static void onScreenShown(Screen screen) {
+        Minecraft minecraft = Minecraft.getInstance();
+        if (minecraft == null || screen == null || minecraft.screen != screen || minecraft.isPaused()
+                || !screen.isPauseScreen() || !minecraft.hasSingleplayerServer()
+                || minecraft.getSingleplayerServer().isPublished()) {
+            return;
+        }
+        onGamePauseChanged(true);
+    }
+
+    /** ScreenEvent.Opening, run last and only if nothing cancelled it: the screen about to replace the current one. */
+    public static void onScreenOpening(Screen next) {
+        screenComingNext = next;
+    }
+
+    /**
+     * ScreenEvent.Closing, run last. Minecraft#setScreen posts Opening for the next screen before it closes the old
+     * one, and nothing when there is no next screen, so a screen that closes with no Opening before it leaves the game
+     * bare - and when the game is paused, Minecraft resumes every sound the moment this returns. That instant is kept
+     * for the battle clock's release at the end of the frame (gameResumeInstant).
+     */
+    public static void onScreenClosing(Screen closing) {
+        Screen next = screenComingNext;
+        screenComingNext = null;
+        Minecraft minecraft = Minecraft.getInstance();
+        if (next == null && minecraft != null && minecraft.isPaused()) {
+            gameResumedAtNanos = System.nanoTime();
+        }
+    }
+
+    /**
+     * The instant a pause ending at {@code now} counts as having ended: when the sounds came back from the pause menu
+     * during this pause (onScreenClosing), that instant, otherwise {@code now}. Releasing the clocks as of a moment a
+     * frame ago is safe: the integrated server does not tick while Minecraft#isPaused, which holds until the end of
+     * that frame, so the battle time it reads only ever moves on.
+     */
+    private static long gameResumeInstant(long now) {
+        long resumed = gameResumedAtNanos;
+        gameResumedAtNanos = 0L;
+        return resumed > 0L && resumed <= now && BattlePauseClock.GAME.paused()
+                && resumed >= BattlePauseClock.GAME.pausedSince() ? resumed : now;
+    }
+
+    /**
+     * Holds the battle clock at {@code now} for a pause, once. Minecraft pauses the sounds itself at about this
+     * moment - just after it, for the pause menu (onScreenShown), or just before it, at the pause flag; doing it here
+     * too covers a pause screen opened without that, so the song and the clock always stop together.
+     */
+    private static void holdBattleForGamePause(Minecraft minecraft, long now) {
+        if (musicPausedForGame) {
+            return;
+        }
+        minecraft.getSoundManager().pause();
+        musicPausedForGame = true;
+        songDrift.restart();
+        BattleSongPosition.clear();
+        if (clockHoldUntilNanos != 0L && now < clockHoldUntilNanos) {
+            // The pause comes during a short hold of the clock, which BattlePauseClock turns into the pause from where
+            // the hold began: so does this clock.
+            clockHoldUntilNanos = 0L;
+            return;
+        }
+        finishClockHold(now);
+        // Stamped whether or not the music has started. The server freezes for as long as this client does, so the
+        // battle clock has to be held back by the same amount. This used to be stamped only once the audio was
+        // playing, and a pause during the count-in or while the file was still being opened left the chart running
+        // on the wall clock while the server stood still: everything that went by in that window came back as a miss,
+        // a whole phrase lost to standing in the menu.
+        musicPausedAtNanos = now;
+    }
+
+    /** Lets the battle clock go on at {@code now} after a pause, once, together with the sounds. */
+    private static void releaseBattleFromGamePause(Minecraft minecraft, long now) {
+        if (!musicPausedForGame) {
+            return;
+        }
+        // While the clock still stands where the pause stopped it.
+        resumeLanesAfterGamePause();
+        musicPausedForGame = false;
+        minecraft.getSoundManager().resume();
+        songDrift.restart();
+        BattleSongPosition.clear();
+        // Both origins move by the whole pause, so the battle resumes on the tick it was stopped at - which is the tick
+        // the server is still on. Shifting only one of them, or neither, puts the two clocks a menu visit apart for the
+        // rest of the song.
+        long paused = musicPausedAtNanos > 0L ? Math.max(0L, now - musicPausedAtNanos) : 0L;
+        if (musicStartedAtNanos > 0L) {
+            musicStartedAtNanos += paused;
+        }
+        if (startAtNanos != 0L) {
+            startAtNanos += paused;
+        }
+        musicPausedAtNanos = 0L;
+    }
+
+    /**
+     * Gives the newest reading of where the battle song's source really is to the drift anchor and asks for the next one,
+     * once a client tick while the song plays and the clock runs. A drift the anchor finds is taken out by moving the
+     * battle clock - forward at once when the song has run ahead of the chart, held back for as long when it has fallen
+     * behind - and only where the integrated server shares the clock (BattlePauseClock), a single-player world not open
+     * to LAN: that is where the pause menu pauses the song, and the server's battle time moves with the client's, so
+     * the battle stays on one clock. On someone else's server the clock is the server's and stays as it is.
+     */
+    private static void followSongPosition(Minecraft minecraft) {
+        long now = System.nanoTime();
+        if (clockHoldUntilNanos != 0L && now >= clockHoldUntilNanos) {
+            finishClockHold(now);
+        }
+        if (music == null || musicPausedForGame || musicPausedAtNanos > 0L || musicStartedAtNanos <= 0L
+                || startAtNanos == 0L || !(music instanceof BattleMusicSoundInstance battleMusic)) {
+            BattleSongPosition.clear();
+            return;
+        }
+        BattleSongPosition.Reading reading = BattleSongPosition.take(music);
+        double streamStart = musicStreamStartTick;
+        if (reading != null && Double.isFinite(streamStart)) {
+            float pitch = Math.max(0.1F, battleMusic.getPitch());
+            double song = streamStart * 0.05D + reading.playedSeconds() / pitch;
+            double clock = (reading.atNanos() - startAtNanos) / 1_000_000_000.0D;
+            double correction = songDrift.add(music, song - clock);
+            if (correction != 0.0D && sharesClockWithServer(minecraft)) {
+                moveClockForSong(correction, now);
+            }
+        }
+        BattleSongPosition.request(minecraft, music);
+    }
+
+    private static boolean sharesClockWithServer(Minecraft minecraft) {
+        return minecraft != null && minecraft.hasSingleplayerServer() && minecraft.getSingleplayerServer() != null
+                && !minecraft.getSingleplayerServer().isPublished();
+    }
+
+    /** Moves the battle clock, and the integrated server's with it, by {@code seconds}: see followSongPosition. */
+    private static void moveClockForSong(double seconds, long now) {
+        long nanos = Math.round(Math.abs(seconds) * 1_000_000_000.0D);
+        if (nanos <= 0L) {
+            return;
+        }
+        if (seconds > 0.0D) {
+            startAtNanos -= nanos;
+            musicStartedAtNanos -= nanos;
+            BattlePauseClock.GAME.advance(nanos);
+        } else {
+            musicPausedAtNanos = now;
+            clockHoldUntilNanos = now + nanos;
+            BattlePauseClock.GAME.holdBriefly(now, nanos);
+        }
+        BattleSongPosition.clear();
+    }
+
+    /** Lets a short hold of the clock go, as of when it ran out or {@code now} if that is earlier. */
+    private static void finishClockHold(long now) {
+        long until = clockHoldUntilNanos;
+        if (until == 0L) {
+            return;
+        }
+        clockHoldUntilNanos = 0L;
+        long end = Math.min(now, until);
+        long held = musicPausedAtNanos > 0L ? Math.max(0L, end - musicPausedAtNanos) : 0L;
+        if (startAtNanos != 0L) {
+            startAtNanos += held;
+        }
+        if (musicStartedAtNanos > 0L) {
+            musicStartedAtNanos += held;
+        }
+        musicPausedAtNanos = 0L;
+        BattlePauseClock.GAME.endHold(end);
+    }
+
+    /**
+     * followSongPosition for the song of the battle or DJ booth this client watches, against the spectator clock
+     * (spectatorVisualTick), once a client tick while that song plays and the clock runs. The watched battle's mob
+     * actions, notes and effects all wait on that clock, so moving it puts them back on the song. Only in a
+     * single-player world not open to LAN, where the pause menu pauses the song: a watched battle's server time
+     * (BattlePauseClock) moves with it there, so the server's battle and the spectator's stay a constant distance
+     * apart, as before any visit; a DJ booth's show runs on server ticks, and only the spectator clock moves.
+     */
+    private static void followSpectatorSongPosition(Minecraft minecraft) {
+        long now = System.nanoTime();
+        if (spectatorClockHoldUntilNanos != 0L && now >= spectatorClockHoldUntilNanos) {
+            finishSpectatorClockHold(now);
+        }
+        SoundInstance sound = spectatorMusic;
+        long startedAt = spectatorMusicStartedAtNanos;
+        if (sound == null || spectatorBattleId == null || spectatorMusicPausedForGame
+                || spectatorMusicPausedAtNanos > 0L || startedAt <= 0L || spectatorMusicAwaitingStart
+                || spectatorMusicRefused || minecraft.isPaused()) {
+            return;
+        }
+        BattleSongPosition.Reading reading = BattleSongPosition.take(sound);
+        if (reading != null) {
+            float pitch = Math.max(0.1F, sound.getPitch());
+            // The stream's first sample belongs to spectatorMusicClockStartTick, as the clock's does: the two cancel.
+            double offset = reading.playedSeconds() / pitch - (reading.atNanos() - startedAt) / 1_000_000_000.0D;
+            double correction = spectatorSongDrift.add(sound, offset);
+            if (correction != 0.0D && sharesClockWithServer(minecraft)) {
+                moveSpectatorClockForSong(correction, now, !standaloneDjPlayback);
+            }
+        }
+        BattleSongPosition.request(minecraft, sound);
+    }
+
+    /** Moves the spectator clock by {@code seconds}, and the server's battle time with it when asked: see above. */
+    private static void moveSpectatorClockForSong(double seconds, long now, boolean server) {
+        long nanos = Math.round(Math.abs(seconds) * 1_000_000_000.0D);
+        if (nanos <= 0L) {
+            return;
+        }
+        if (seconds > 0.0D) {
+            spectatorMusicStartedAtNanos -= nanos;
+            if (server) {
+                BattlePauseClock.GAME.advance(nanos);
+            }
+        } else {
+            spectatorMusicPausedAtNanos = now;
+            spectatorClockHoldUntilNanos = now + nanos;
+            spectatorClockHoldMovesServer = server && !BattlePauseClock.GAME.paused();
+            if (spectatorClockHoldMovesServer) {
+                BattlePauseClock.GAME.holdBriefly(now, nanos);
+            }
+        }
+        BattleSongPosition.clear();
+    }
+
+    /** Lets a short hold of the spectator clock go, as of when it ran out or {@code now} if that is earlier. */
+    private static void finishSpectatorClockHold(long now) {
+        long until = spectatorClockHoldUntilNanos;
+        if (until == 0L) {
+            return;
+        }
+        spectatorClockHoldUntilNanos = 0L;
+        long end = Math.min(now, until);
+        long held = spectatorMusicPausedAtNanos > 0L ? Math.max(0L, end - spectatorMusicPausedAtNanos) : 0L;
+        if (spectatorMusicStartedAtNanos > 0L) {
+            spectatorMusicStartedAtNanos += held;
+        }
+        spectatorMusicPausedAtNanos = 0L;
+        if (spectatorClockHoldMovesServer) {
+            BattlePauseClock.GAME.endHold(end);
+        }
+        spectatorClockHoldMovesServer = false;
+    }
+
+    /**
+     * Picks the lanes up again where a real pause left them. The pause screen let go of every key mapping as it opened
+     * (KeyMapping.releaseAll), and on macOS closing it does not read them back, so each lane takes its key's state
+     * from the window's own events (ClientInputIsolation#isHeld). A lane that was down when the game paused and whose
+     * key is still down goes on as it was - a hold note in it carries on - and one whose key came up during the pause
+     * is released now, while the battle clock still stands at the pause, so the release counts at the paused song time.
+     *
+     * <p>A key that went down during the pause is not a press, held or not: the click on "Back to Game" with a lane on
+     * the mouse button is still down when the game resumes, and taken as a press it was a tap at the resume instant -
+     * a bad press, and the combo, if another lane's note was due. Off macOS, Minecraft has just set the key mappings
+     * from the keyboard (KeyMapping.setAll), so this overrides that too; the key's repeats are not presses either
+     * (ClientInputIsolation#laneKeyEvent). Such a key plays again once it is let go and pressed.
+     */
+    private static void resumeLanesAfterGamePause() {
+        KeyMapping[] keys = MusicBattleKeys.lanes();
+        for (int lane = 0; lane < keys.length && lane < previousLaneDown.length; lane++) {
+            boolean held = previousLaneDown[lane] && ClientInputIsolation.isHeld(keys[lane].getKey());
+            keys[lane].setDown(held);
+            if (previousLaneDown[lane] && !held) {
+                sendLaneState(lane, false);
+                previousLaneDown[lane] = false;
+            }
+        }
+        BattleLaneLatch.LANES.clear();
+    }
+
+    private static void holdSpectatorForGamePause(Minecraft minecraft, long now) {
+        if (spectatorMusicPausedForGame) {
+            return;
+        }
+        spectatorMusicPausedForGame = true;
+        spectatorSongDrift.restart();
+        BattleSongPosition.clear();
+        minecraft.getSoundManager().pause();
+        if (spectatorClockHoldUntilNanos != 0L && now < spectatorClockHoldUntilNanos
+                && spectatorMusicPausedAtNanos > 0L) {
+            // The pause comes during a short hold of the clock: the hold becomes the pause, from where it began, as
+            // BattlePauseClock makes it of the server's battle time when the hold holds that too.
+            spectatorClockHoldUntilNanos = 0L;
+            spectatorClockHoldMovesServer = false;
+            return;
+        }
+        finishSpectatorClockHold(now);
+        spectatorMusicPausedAtNanos = spectatorMusicStartedAtNanos > 0L ? now : 0L;
+    }
+
+    private static void releaseSpectatorFromGamePause(Minecraft minecraft, long now) {
+        if (!spectatorMusicPausedForGame) {
+            return;
+        }
+        spectatorMusicPausedForGame = false;
+        minecraft.getSoundManager().resume();
+        spectatorSongDrift.restart();
+        BattleSongPosition.clear();
+        if (spectatorMusicPausedAtNanos > 0L && spectatorMusicStartedAtNanos > 0L) {
+            spectatorMusicStartedAtNanos += Math.max(0L, now - spectatorMusicPausedAtNanos);
+        }
+        spectatorMusicPausedAtNanos = 0L;
+    }
+
     public static void acceptBattleAudience(BattleAudiencePayload payload) {
         boolean matchesActive = active && battleId != null && battleId.equals(payload.battleId());
         boolean matchesSpectator = spectatorBattleId != null && spectatorBattleId.equals(payload.battleId());
@@ -1290,24 +1966,14 @@ public final class ClientBattleController {
             tickSpectatorFxVisibility();
             tickSpectatorCamera(minecraft);
             if (spectatorBattleId != null && minecraft.isPaused()) {
-                if (!spectatorMusicPausedForGame) {
-                    spectatorMusicPausedForGame = true;
-                    spectatorMusicPausedAtNanos = spectatorMusicStartedAtNanos > 0L ? System.nanoTime() : 0L;
-                    minecraft.getSoundManager().pause();
-                }
+                holdSpectatorForGamePause(minecraft, System.nanoTime());
                 return;
             }
-            if (spectatorMusicPausedForGame) {
-                spectatorMusicPausedForGame = false;
-                minecraft.getSoundManager().resume();
-                if (spectatorMusicPausedAtNanos > 0L && spectatorMusicStartedAtNanos > 0L) {
-                    spectatorMusicStartedAtNanos += Math.max(0L, System.nanoTime() - spectatorMusicPausedAtNanos);
-                }
-                spectatorMusicPausedAtNanos = 0L;
-            }
+            releaseSpectatorFromGamePause(minecraft, System.nanoTime());
             tickSpectatorBattle();
             tryPlayPendingSpectatorMusic();
             tickSpectatorMusicRecovery(minecraft);
+            followSpectatorSongPosition(minecraft);
             return;
         }
 
@@ -1319,17 +1985,12 @@ public final class ClientBattleController {
 
         if (minecraft.isPaused()) {
             minecraft.player.setShiftKeyDown(false);
-            releaseLaneStates();
-            if (!musicPausedForGame) {
-                minecraft.getSoundManager().pause();
-                musicPausedForGame = true;
-                // Stamped whether or not the music has started. The server freezes for as long as this client
-                // does, so the battle clock has to be held back by the same amount. This used to be stamped only
-                // once the audio was playing, and a pause during the count-in or while the file was still being
-                // opened left the chart running on the wall clock while the server stood still: everything that
-                // went by in that window came back as a miss, a whole phrase lost to standing in the menu.
-                musicPausedAtNanos = System.nanoTime();
-            }
+            // A real pause - single player, not open to LAN - stops the song and the integrated server, so the lanes
+            // stop with them instead of being let go: letting go broke whatever hold note the menu was opened in,
+            // and the combo with it. resumeLanesAfterGamePause picks them up again. Where the pause menu does not
+            // pause the game, the screen branch further down still lets go, as the battle plays on behind it.
+            BattleLaneLatch.LANES.clear();
+            holdBattleForGamePause(minecraft, System.nanoTime());
             return;
         }
         if (pendingAudioError != null) {
@@ -1337,21 +1998,7 @@ public final class ClientBattleController {
             return;
         }
         minecraft.player.setShiftKeyDown(false);
-        if (musicPausedForGame) {
-            musicPausedForGame = false;
-            minecraft.getSoundManager().resume();
-            // Both origins move by the whole pause, so the battle resumes on the tick it was stopped at - which
-            // is the tick the server is still on. Shifting only one of them, or neither, puts the two clocks a
-            // menu visit apart for the rest of the song.
-            long paused = musicPausedAtNanos > 0L ? Math.max(0L, System.nanoTime() - musicPausedAtNanos) : 0L;
-            if (musicStartedAtNanos > 0L) {
-                musicStartedAtNanos += paused;
-            }
-            if (startAtNanos != 0L) {
-                startAtNanos += paused;
-            }
-            musicPausedAtNanos = 0L;
-        }
+        releaseBattleFromGamePause(minecraft, System.nanoTime());
 
         boolean hasAudio = activeAudioFile != null && !activeAudioFile.isBlank();
         if (startAtNanos != 0L) {
@@ -1383,6 +2030,10 @@ public final class ClientBattleController {
                     playMusic(minecraft, activeTrackId, activeAudioFile, Math.max(0, Mth.floor(clock)));
                 }
             }
+            if (musicStarted && hasAudio) {
+                retryRefusedMusic(minecraft, Mth.floor(clock));
+                followSongPosition(minecraft);
+            }
         } else {
             if (localTicks < 0 || !hasAudio) {
                 localTicks++;
@@ -1405,6 +2056,7 @@ public final class ClientBattleController {
                 musicWaitTicks = 0;
             }
             if (musicStarted && hasAudio) {
+                retryRefusedMusic(minecraft, musicClockStartTick);
                 if (musicStartedAtNanos <= 0L) {
                     localTicks = Math.max(0, musicClockStartTick);
                     ensureCamera(minecraft);
@@ -1415,6 +2067,8 @@ public final class ClientBattleController {
             }
         }
         ensureCamera(minecraft);
+        // Normally done at the start of each frame (beginRenderFrame); here too, for a client that draws no frames.
+        showDueActions(heldActions, false, activeVisualTick(0.0F));
         flushPendingNoteActions(notes, localTicks, laneFlashes, hitBursts, false);
         flushPendingRemoteStates(notes, false);
         if (localTicks >= 0) {
@@ -1428,6 +2082,9 @@ public final class ClientBattleController {
         }
         for (int owner = 0; owner < 2; owner++) {
             for (int lane = 0; lane < 4; lane++) {
+                if (timedLaneFlashes.timed(owner, lane)) {
+                    continue;
+                }
                 if (laneFlashes[owner][lane] > 0) {
                     laneFlashes[owner][lane]--;
                 }
@@ -1436,6 +2093,7 @@ public final class ClientBattleController {
                 }
             }
         }
+        timedLaneFlashes.apply(activeVisualTick(0.0F), laneFlashes, hitBursts);
 
         if (minecraft.screen == null) {
             boolean spaceDown = InputConstants.isKeyDown(minecraft.getWindow().getWindow(), GLFW.GLFW_KEY_SPACE);
@@ -1445,20 +2103,18 @@ public final class ClientBattleController {
             pauseSkipSpaceDown = spaceDown;
             KeyMapping[] keys = MusicBattleKeys.lanes();
             for (int lane = 0; lane < keys.length; lane++) {
-                boolean down = keys[lane].isDown();
-                if (down != previousLaneDown[lane]) {
+                // Every press since the last tick, a tap that has already come back up included, goes out once: as
+                // a key going down and, for such a tap, up again (see BattleLaneLatch).
+                int changes = BattleLaneLatch.LANES.drain(lane, previousLaneDown[lane], keys[lane].isDown());
+                for (int change = 0; change < changes; change++) {
+                    boolean down = !previousLaneDown[lane];
                     sendLaneState(lane, down);
                     previousLaneDown[lane] = down;
                 }
             }
         } else {
             pauseSkipSpaceDown = false;
-            for (int lane = 0; lane < previousLaneDown.length; lane++) {
-                if (previousLaneDown[lane]) {
-                    sendLaneState(lane, false);
-                    previousLaneDown[lane] = false;
-                }
-            }
+            releaseLaneStates();
         }
 
         if (localTicks > durationTicks + 60) {
@@ -1485,7 +2141,7 @@ public final class ClientBattleController {
         float time = prepareSpectatorPanelFrame(partial);
         ClientTrackEffects.EffectState panelState = cameraPreview ? cameraPreviewState
                 : ClientTrackEffects.sample(spectatorEffects, time,
-                        spectatorTrackBpm, spectatorPlaybackSpeed, spectatorFxVisibility);
+                        spectatorTrackBpm, spectatorPlaybackSpeed, spectatorFxVisibility, spectatorBeatOrigin());
         if (panelState.hideBattlePanels() || hidesWorldPanelHud(cameraPreview, panelState)) {
             return;
         }
@@ -1534,7 +2190,7 @@ public final class ClientBattleController {
             return preview.effectStateAt(preview.previewTrackTick());
         } else if (active) {
             return ClientTrackEffects.sample(activeEffects, activeVisualTick(partial), trackBpm,
-                    musicPlaybackSpeed);
+                    musicPlaybackSpeed, 1.0F, activeBeatOrigin());
         } else if (spectatorBattleId != null && spectatorFxVisibility > 0.001F) {
             return sampleSpectatorEffects(partial).outlineState();
         }
@@ -1547,6 +2203,7 @@ public final class ClientBattleController {
         }
         if (Minecraft.getInstance().screen instanceof TrackGameplayPreviewScreen preview
                 && Minecraft.getInstance().player == clientPlayer) {
+            ClientBattleAnimation.setBeatOrigin(preview.previewBeatOrigin());
             ClientPlayerAnimatorBridge.updateBattleAnimation(clientPlayer, preview.previewAnimationTriggerSerial(),
                     preview.previewAnimationTriggerLane(), preview.previewAnimationHeldMask(), preview.previewBpm(),
                     preview.previewTrackTick());
@@ -1564,11 +2221,16 @@ public final class ClientBattleController {
         int[] heldMasks = spectating ? spectatorAnimationHeldMask : animationHeldMask;
         int[] inputHeldMasks = spectating ? spectatorAnimationInputHeldMask : animationInputHeldMask;
         float[] triggerTicks = spectating ? spectatorAnimationTriggerTick : animationTriggerTick;
+        int[] judgedSerials = spectating ? spectatorAnimationJudgedSerial : animationJudgedSerial;
+        int[] judgedLanes = spectating ? spectatorAnimationJudgedLane : animationJudgedLane;
+        float[] judgedTicks = spectating ? spectatorAnimationJudgedTick : animationJudgedTick;
         int animationBpm = spectating ? spectatorTrackBpm : trackBpm;
         float animationTick = spectating ? spectatorVisualTick(event.getPartialTick()) : activeVisualTick(event.getPartialTick());
         int safeOwner = Mth.clamp(owner, 0, 1);
+        ClientBattleAnimation.setBeatOrigin(currentBeatOrigin(spectating));
         ClientPlayerAnimatorBridge.updateBattleAnimation(clientPlayer, triggerSerials[safeOwner], triggerLanes[safeOwner],
-                heldMasks[safeOwner] | inputHeldMasks[safeOwner], animationBpm, animationTick, triggerTicks[safeOwner]);
+                triggerTicks[safeOwner], judgedSerials[safeOwner], judgedLanes[safeOwner], judgedTicks[safeOwner],
+                heldMasks[safeOwner] | inputHeldMasks[safeOwner], animationBpm, animationTick);
     }
 
     public static void applyHumanoidAnimation(RenderLivingEvent.Pre<?, ?> event) {
@@ -1590,19 +2252,25 @@ public final class ClientBattleController {
         int[] heldMasks = spectating ? spectatorAnimationHeldMask : animationHeldMask;
         int[] inputHeldMasks = spectating ? spectatorAnimationInputHeldMask : animationInputHeldMask;
         float[] triggerTicks = spectating ? spectatorAnimationTriggerTick : animationTriggerTick;
+        int[] judgedSerials = spectating ? spectatorAnimationJudgedSerial : animationJudgedSerial;
+        int[] judgedLanes = spectating ? spectatorAnimationJudgedLane : animationJudgedLane;
+        float[] judgedTicks = spectating ? spectatorAnimationJudgedTick : animationJudgedTick;
         int animationBpm = spectating ? spectatorTrackBpm : trackBpm;
         float animationTick = spectating ? spectatorVisualTick(event.getPartialTick()) : activeVisualTick(event.getPartialTick());
         int safeOwner = Mth.clamp(owner, 0, 1);
         if (event.getRenderer().getModel() instanceof HumanoidModel<?> humanoidModel
                 && ClientHumanoidAnimatorBridge.supportsAnimation(humanoidModel)) {
             ClientMobFallbackAnimator.stop(entity);
+            ClientBattleAnimation.setBeatOrigin(currentBeatOrigin(spectating));
             ClientHumanoidAnimatorBridge.prepareBattleAnimation(entity, humanoidModel, triggerSerials[safeOwner],
-                    triggerLanes[safeOwner], heldMasks[safeOwner] | inputHeldMasks[safeOwner], animationBpm, animationTick,
-                    triggerTicks[safeOwner], event.getPartialTick());
+                    triggerLanes[safeOwner], triggerTicks[safeOwner], judgedSerials[safeOwner], judgedLanes[safeOwner],
+                    judgedTicks[safeOwner], heldMasks[safeOwner] | inputHeldMasks[safeOwner], animationBpm,
+                    animationTick, event.getPartialTick());
         } else {
             ClientHumanoidAnimatorBridge.stopBattleAnimation(entity);
             ClientMobFallbackAnimator.prepare(entity, triggerSerials[safeOwner],
-                    heldMasks[safeOwner] | inputHeldMasks[safeOwner], animationBpm, animationTick);
+                    heldMasks[safeOwner] | inputHeldMasks[safeOwner], animationBpm, animationTick,
+                    currentBeatOrigin(spectating));
         }
     }
 
@@ -1641,7 +2309,7 @@ public final class ClientBattleController {
             state = preview.effectStateAt(preview.previewTrackTick());
         } else if (active) {
             state = ClientTrackEffects.sample(activeEffects, activeVisualTick(partialTick), trackBpm,
-                    musicPlaybackSpeed);
+                    musicPlaybackSpeed, 1.0F, activeBeatOrigin());
         } else if (spectatorBattleId != null && spectatorFxVisibility > 0.001F) {
             state = sampleSpectatorEffects(partialTick);
         } else {
@@ -1674,8 +2342,28 @@ public final class ClientBattleController {
             return packedLight;
         }
         HighlightRender highlight = highlightFor(entity.getId(), partialTick);
-        return highlight != null && highlight.effect().settings().highlightModelGlow()
-                ? LightTexture.FULL_BRIGHT : packedLight;
+        if (highlight == null || !highlight.effect().settings().highlightModelGlow()) {
+            return packedLight;
+        }
+        // The body is lit exactly as strongly as its glow shell shows: ClientModelGlowEngine draws the shell with this
+        // same product of the effect's own visibility and the fade over the last blocks of the area where the music is
+        // heard. The light used to be all or nothing, so a mob in that band, or a crowd the listener walks away from,
+        // stayed fully lit while its glow faded out and then dropped to the world's light in a single frame.
+        float strength = Mth.clamp(highlight.visibility(), 0.0F, 1.0F) * FxAudibleAreaResolver.entityFade(entity.getId());
+        if (strength <= 0.001F) {
+            return packedLight;
+        }
+        if (strength >= 0.999F) {
+            return LightTexture.FULL_BRIGHT;
+        }
+        // Packed light is block light in the low half and sky light in the high half, each a lightmap coordinate the
+        // shader samples with filtering, so a value between two levels comes out as a light between them.
+        int block = packedLight & 0xFFFF;
+        int sky = packedLight >>> 16 & 0xFFFF;
+        int fullBlock = LightTexture.FULL_BRIGHT & 0xFFFF;
+        int fullSky = LightTexture.FULL_BRIGHT >>> 16 & 0xFFFF;
+        return Math.round(Mth.lerp(strength, (float) block, (float) fullBlock))
+                | Math.round(Mth.lerp(strength, (float) sky, (float) fullSky)) << 16;
     }
 
     @SuppressWarnings({"rawtypes", "unchecked"})
@@ -1715,7 +2403,8 @@ public final class ClientBattleController {
         int height = hud.height();
         float time = activeVisualTick(partial);
         float intro = introProgress(time);
-        ClientTrackEffects.EffectState effectState = ClientTrackEffects.sample(activeEffects, time, trackBpm, musicPlaybackSpeed);
+        ClientTrackEffects.EffectState effectState = ClientTrackEffects.sample(activeEffects, time, trackBpm, musicPlaybackSpeed,
+                1.0F, activeBeatOrigin());
         boolean hideHud = minecraft.options.hideGui || effectState.hidesBlockyMusicHud();
 
         if (!hud.identity()) {
@@ -1724,7 +2413,8 @@ public final class ClientBattleController {
         }
         ClientTrackEffects.canvas(width, height);
         if (!hideHud && !activeHideStandardDimming) {
-            graphics.fill(0, 0, width, height, argb(70, 0, 0, 0));
+            // The player's dimming (the old argb(70, 0, 0, 0) by default); at 0% nothing is drawn at all.
+            BattleBackdrop.dim(graphics::fill, width, height, ClientBattleSettings.worldDimmingAlpha());
         }
         if (!hideHud && !activeDisableStageBars) {
             drawStageBars(graphics, width, height);
@@ -1752,25 +2442,24 @@ public final class ClientBattleController {
         }
     }
 
+    /**
+     * The beatmap download before a battle, on the card the battle header is drawn on, in its place and at its size: the
+     * battle HUD's scale is pushed here as it is for the header, so the bar does not jump when the battle takes over.
+     */
     private static void renderPreloadBar(GuiGraphics graphics) {
-        Minecraft minecraft = Minecraft.getInstance();
-        Font font = minecraft.font;
-        int width = graphics.guiWidth();
-        int barWidth = Mth.clamp(width - 96, 160, 520);
-        int x = (width - barWidth) / 2;
-        int y = 8;
         float chartProgress = ClientTrackAssets.transferProgress(preloadTrackId, "chart", preloadChartFile, preloadChartHash);
         float audioProgress = preloadAudioFile.isBlank() ? 1.0F : ClientTrackAssets.transferProgress(preloadTrackId, "audio", preloadAudioFile, preloadAudioHash);
         int totalBytes = Math.max(1, preloadChartBytes + preloadAudioBytes);
         float progress = (chartProgress * preloadChartBytes + audioProgress * preloadAudioBytes) / totalBytes;
         String title = preloadTrackTitle == null || preloadTrackTitle.isBlank() ? preloadTrackId : preloadTrackTitle;
-        Component label = Component.literal(text("music_battle.l10n.client.003") + title + " " + Math.round(progress * 100.0F) + "%");
-        int panelColor = argb(205, 6, 12, 18);
-        int fillColor = argb(245, 56, 205, 105);
-        graphics.fill(x - 2, y - 2, x + barWidth + 2, y + 22, panelColor);
-        graphics.fill(x, y + 12, x + barWidth, y + 18, argb(220, 12, 28, 38));
-        graphics.fill(x, y + 12, x + Math.round(barWidth * Mth.clamp(progress, 0.0F, 1.0F)), y + 18, fillColor);
-        drawCenteredFittedString(graphics, font, label.getString(), width / 2, y, barWidth - 8, 0xFFFFFFFF);
+        BattleHudScale.Frame hud = BattleHudScale.frame(graphics.guiWidth(), graphics.guiHeight());
+        graphics.pose().pushPose();
+        if (!hud.identity()) {
+            graphics.pose().scale(hud.factor(), hud.factor(), 1.0F);
+        }
+        BattlePanelRenderer.drawLoading(graphics, hud.width(), title, progress);
+        graphics.flush();
+        graphics.pose().popPose();
     }
 
     public static void applyCameraAngles(ViewportEvent.ComputeCameraAngles event) {
@@ -1788,7 +2477,7 @@ public final class ClientBattleController {
         List<TrackEffect> effects = active ? activeEffects : spectatorEffects;
         ClientTrackEffects.EffectState effectState = ClientTrackEffects.sample(effects, time,
                 active ? trackBpm : spectatorTrackBpm, active ? musicPlaybackSpeed : spectatorPlaybackSpeed,
-                active ? 1.0F : spectatorFxVisibility);
+                active ? 1.0F : spectatorFxVisibility, active ? activeBeatOrigin() : spectatorBeatOrigin());
         if (!active) effectState = djTransitions.attach(effectState, System.nanoTime());
         if (!active) {
             if (spectatorCameraEnabled) {
@@ -1800,10 +2489,11 @@ public final class ClientBattleController {
                 // Battle cameras retain their subtle stage orbit. A DJ camera
                 // is an explicitly framed shot and must match the transform
                 // selected in the gallery exactly.
+                float swayTime = time + cameraSwayShift;
                 float orbitYaw = standaloneDjPlayback || spectatorLocalTicks < 0
-                        ? 0.0F : Mth.sin(time / 58.0F) * 1.35F;
+                        ? 0.0F : Mth.sin(swayTime / 58.0F) * 1.35F;
                 float orbitPitch = standaloneDjPlayback || spectatorLocalTicks < 0
-                        ? 0.0F : Mth.sin(time / 47.0F) * 0.22F;
+                        ? 0.0F : Mth.sin(swayTime / 47.0F) * 0.22F;
                 event.setYaw(renderedCameraYaw + orbitYaw + ClientTrackEffects.shakeYaw(effectState));
                 event.setPitch(renderedCameraPitch + orbitPitch + ClientTrackEffects.shakePitch(effectState));
             } else {
@@ -1819,8 +2509,9 @@ public final class ClientBattleController {
         float renderedCameraYaw = activeCamera == null ? Mth.rotLerp(partialTick, aimYawFrom, aimYawTo) : activeCamera.yaw();
         float renderedCameraPitch = activeCamera == null ? Mth.lerp(partialTick, aimPitchFrom, aimPitchTo) : activeCamera.pitch();
         float intro = introProgress(time);
-        float orbitYaw = localTicks < 0 ? 0.0F : Mth.sin(time / 58.0F) * 1.35F;
-        float orbitPitch = localTicks < 0 ? 0.0F : Mth.sin(time / 47.0F) * 0.22F;
+        float swayTime = time + cameraSwayShift;
+        float orbitYaw = localTicks < 0 ? 0.0F : Mth.sin(swayTime / 58.0F) * 1.35F;
+        float orbitPitch = localTicks < 0 ? 0.0F : Mth.sin(swayTime / 47.0F) * 0.22F;
         event.setYaw(Mth.rotLerp(intro, startYaw, renderedCameraYaw + orbitYaw) + ClientTrackEffects.shakeYaw(effectState));
         event.setPitch(Mth.lerp(intro, startPitch, renderedCameraPitch + orbitPitch) + ClientTrackEffects.shakePitch(effectState));
         event.setRoll(ClientTrackEffects.shakeRoll(effectState));
@@ -1848,7 +2539,7 @@ public final class ClientBattleController {
         double baseFov = battleCameraActive && configuredFov > 0.0F ? configuredFov : event.getFOV();
         ClientTrackEffects.EffectState state = ClientTrackEffects.sample(active ? activeEffects : spectatorEffects,
                 time, bpm, active ? musicPlaybackSpeed : spectatorPlaybackSpeed,
-                active ? 1.0F : spectatorFxVisibility);
+                active ? 1.0F : spectatorFxVisibility, active ? activeBeatOrigin() : spectatorBeatOrigin());
         if (!active) state = djTransitions.attach(state, System.nanoTime());
         baseFov += (state.cameraPulseBeat() - state.pulseBeat()) * 8.0;
         if (!active && standaloneDjPlayback && spectatorCameraEnabled) {
@@ -1864,7 +2555,9 @@ public final class ClientBattleController {
             return;
         }
         double amplitude = 2.8D + state.pulse() * 8.0D;
-        event.setFOV(baseFov + beatPulse(time, active ? sinceBeatOne(time) : time, bpm) * amplitude);
+        // A watcher's pulse lands on the same beats as the fighters': counted from the watched chart's beat 1.
+        event.setFOV(baseFov + beatPulse(time, active ? sinceBeatOne(time)
+                : (float) ChartBeat.beatTicks(time, spectatorBeatOffsetMs), bpm) * amplitude);
     }
 
     public static void hideHand(RenderHandEvent event) {
@@ -1893,7 +2586,63 @@ public final class ClientBattleController {
     }
 
     public static void beginRenderFrame() {
+        if (clockHoldUntilNanos != 0L && System.nanoTime() >= clockHoldUntilNanos) {
+            finishClockHold(System.nanoTime());
+        }
+        if (spectatorClockHoldUntilNanos != 0L && System.nanoTime() >= spectatorClockHoldUntilNanos) {
+            finishSpectatorClockHold(System.nanoTime());
+        }
         sceneVisibility.invalidate();
+        // Opening and Closing come from one Minecraft#setScreen call; one cancelled in between leaves this behind.
+        screenComingNext = null;
+        showActionsForFrame();
+    }
+
+    /**
+     * Before anything is drawn: shows every held action the battle clock has now reached (a mob's hit lands in the
+     * first frame at or after its tick, not at the next client tick), and every hit of the other side that came before
+     * its note's tick and waited for it (showWaitingHitsDue), and steps the flashes they started.
+     */
+    private static void showActionsForFrame() {
+        if (active) {
+            float clock = activeVisualTick(0.0F);
+            showWaitingHitsDue(notes, false, clock);
+            if (!heldActions.isEmpty() || timedLaneFlashes.anyTimed()) {
+                showDueActions(heldActions, false, clock);
+                timedLaneFlashes.apply(clock, laneFlashes, hitBursts);
+            }
+        }
+        if (spectatorBattleId != null) {
+            float clock = spectatorVisualTick(0.0F);
+            showWaitingHitsDue(spectatorNotes, true, clock);
+            if (!spectatorHeldActions.isEmpty() || spectatorTimedLaneFlashes.anyTimed()) {
+                showDueActions(spectatorHeldActions, true, clock);
+                spectatorTimedLaneFlashes.apply(clock, spectatorLaneFlashes, spectatorHitBursts);
+            }
+        }
+    }
+
+    /**
+     * Shows the other side's hits that came before their note's tick and wait for it (pendingHit) in the first frame
+     * whose clock has reached that tick, as a held action is shown, with the score and combo they came with. Left to the
+     * next client tick, such a hit came up to a tick after its note, and its flash, counted from the note's tick on the
+     * battle clock, was first drawn from its second step whenever no frame fell between that client tick and the next
+     * tick: in 17.7% of hits at 30 fps and 2.2% at 144. One's own waiting hits stay with the client tick, which counts
+     * one's own lanes.
+     */
+    private static void showWaitingHitsDue(List<ClientNote> noteList, boolean spectator, float clock) {
+        int currentTick = Mth.floor(clock);
+        boolean shown = false;
+        for (ClientNote note : noteList) {
+            if (note.pendingHit && !note.resolved && currentTick >= note.tick && (spectator || note.owner != ownOwner)) {
+                showWaitingHit(noteList, note, spectator, currentTick, spectator ? spectatorLaneFlashes : laneFlashes,
+                        spectator ? spectatorHitBursts : hitBursts);
+                shown = true;
+            }
+        }
+        if (shown) {
+            flushPendingRemoteStates(noteList, spectator);
+        }
     }
 
     private static SceneVisibilityCache.Flags sceneVisibilityFlags() {
@@ -1908,7 +2657,8 @@ public final class ClientBattleController {
             return preview.effectStateAt(preview.previewTrackTick());
         }
         float partial = minecraft.getTimer().getGameTimeDeltaPartialTick(false);
-        if (active) return ClientTrackEffects.sample(activeEffects, activeVisualTick(partial), trackBpm, musicPlaybackSpeed);
+        if (active) return ClientTrackEffects.sample(activeEffects, activeVisualTick(partial), trackBpm, musicPlaybackSpeed,
+                1.0F, activeBeatOrigin());
         if (spectatorBattleId != null) return sampleSpectatorEffects(partial);
         return null;
     }
@@ -1940,19 +2690,16 @@ public final class ClientBattleController {
         if (event.getScreen() instanceof TitleScreen || event.getScreen() instanceof OptionsScreen
                 || event.getScreen() instanceof PauseScreen) {
             var screen = event.getScreen();
-            Rect bounds = MenuCornerButtons.settings();
-            Button button = Button.builder(Component.literal("BM"), ignored -> Minecraft.getInstance().setScreen(new MusicBattleSettingsScreen(screen)))
-                    .bounds((int) bounds.x(), (int) bounds.y(), (int) bounds.w(), (int) bounds.h())
-                    .tooltip(Tooltip.create(Component.translatable("music_battle.options")))
-                    .build();
+            // Its hint is the toolkit's card, like the Workshop button's beside it (MenuButtonTooltips).
+            Button button = ru.gora.musicbattle.client.workshop.MenuButtonTooltips.button(MenuCornerButtons.settings(),
+                    Component.literal("BM"), "music_battle.options",
+                    ignored -> Minecraft.getInstance().setScreen(new MusicBattleSettingsScreen(screen)));
             event.addListener(button);
         }
 
         if (active && event.getScreen() instanceof PauseScreen screen) {
-            Button button = Button.builder(Component.literal(text("music_battle.l10n.client.004")), ignored -> surrender())
-                    .bounds(screen.width / 2 - 44, 8, 88, 20)
-                    .tooltip(Tooltip.create(Component.literal(text("music_battle.l10n.client.005"))))
-                    .build();
+            Button button = ru.gora.musicbattle.client.workshop.MenuButtonTooltips.button(Rect.of(screen.width / 2 - 44, 8, 88, 20),
+                    Component.literal(text("music_battle.l10n.client.004")), "music_battle.l10n.client.005", ignored -> surrender());
             event.addListener(button);
         }
     }
@@ -1992,7 +2739,8 @@ public final class ClientBattleController {
                 UUID failedBattleId = preloadBattleId;
                 preloadingTrack = false;
                 preloadBattleId = null;
-                // No local path may leave this machine: the server shows the reason to the opponent.
+                // No local path may leave this machine: the server writes the reason to its log and, when this
+                // client is a spectator, back into this player's own chat. Everyone else learns at most whose client failed.
                 PacketDistributor.sendToServer(new BattleClientErrorPayload(failedBattleId,
                         text("music_battle.l10n.client.006") + MusicBattleTracks.safeMessage(exception)));
                 return;
@@ -2077,7 +2825,11 @@ public final class ClientBattleController {
         int closestDistance = Math.max(MISS_AFTER_PANEL_EXIT_TICKS, EARLY_HIT_WINDOW_TICKS) + 1;
         int earlyHitWindow = earlyHitWindowTicks(ownSpeed);
         for (ClientNote note : notes) {
-            if (note.resolved || note.started || note.owner != ownOwner || note.lane != lane) {
+            // A note hit before its tick is hit already: only showing it waits for that tick (pendingHit), and the
+            // server took it at the hit. Taken as still open, the next press on its lane hit it a second time, its
+            // score counted twice here while the server turned the second hit down, and the note that press was for
+            // went by as a miss: at note speed 1, taps on 150 and 152 pressed on 147 and 149.
+            if (note.resolved || note.started || note.pendingHit || note.owner != ownOwner || note.lane != lane) {
                 continue;
             }
             int earlyDistance = note.tick - inputTick;
@@ -2118,7 +2870,18 @@ public final class ClientBattleController {
     private static int predictLocalRelease(int lane, int inputTick) {
         ClientNote hold = activeOwnHold(lane);
         if (hold == null) {
-            return -1;
+            hold = waitingOwnHold(lane);
+            if (hold == null) {
+                return -1;
+            }
+            // Taken two or more client ticks before its tick, the hold waits for that tick to start (applyNoteAction),
+            // and this key went up before it came. Letting go of a hold is judged here and nowhere else - the client
+            // only ever completes a hold with its key down (resolveLocalCompletedHolds) - so passed over, the hold
+            // started on its tick with the key already up, was never settled here, and the server, which had started
+            // it with the hit, completed it as a hit with its hold score once its patience ran out. Taken now, it is
+            // judged as any hold let go of: broken, with its lane flash and the combo, and the server is told.
+            hold.pendingHit = false;
+            hold.started = true;
         }
 
         int endTick = hold.tick + hold.durationTicks;
@@ -2138,9 +2901,29 @@ public final class ClientBattleController {
         return hold.index;
     }
 
+    /**
+     * One's own hold on a lane that is being held and whose release is still to be judged. A hold let go of inside its
+     * release window is judged complete at once and, with its hold score counted, stays started (pendingComplete) until
+     * its end tick settles it (flushPendingNoteActions): it is passed over here. Found again, the next release on its
+     * lane - the key pressed again for the next hold, taken early, and let go of before that hold's tick - judged it a
+     * second time and counted its hold score again, while the next hold was never let go of on this screen: the server
+     * broke it at the key-up, and every other screen showed x0 and a mistake where ours kept the combo.
+     */
     private static ClientNote activeOwnHold(int lane) {
         for (ClientNote note : notes) {
-            if (!note.resolved && note.started && note.owner == ownOwner && note.lane == lane && note.durationTicks > 0) {
+            if (!note.resolved && note.started && !note.pendingComplete && note.owner == ownOwner && note.lane == lane
+                    && note.durationTicks > 0) {
+                return note;
+            }
+        }
+        return null;
+    }
+
+    /** One's own hold on a lane that was hit before its tick and is still waiting for it (pendingHit). */
+    private static ClientNote waitingOwnHold(int lane) {
+        for (ClientNote note : notes) {
+            if (!note.resolved && !note.started && note.pendingHit && note.owner == ownOwner && note.lane == lane
+                    && note.durationTicks > 0) {
                 return note;
             }
         }
@@ -2149,7 +2932,9 @@ public final class ClientBattleController {
 
     private static boolean shouldBreakComboForBadPress(int pressedLane, int inputTick) {
         for (ClientNote note : notes) {
-            if (note.resolved || note.started || note.owner != ownOwner) {
+            // A note hit before its tick (pendingHit) is no longer due: the server, by the same rule, passes over it as
+            // started or resolved since the hit, and would turn down a bad press this one called for it.
+            if (note.resolved || note.started || note.pendingHit || note.owner != ownOwner) {
                 continue;
             }
             int earlyDistance = note.tick - inputTick;
@@ -2206,7 +2991,9 @@ public final class ClientBattleController {
         if (note == null) {
             return false;
         }
-        if (noteTick >= 0 && currentTick < note.tick - 1) {
+        // An action for a note still on its way waits for the note's tick. A hold already taken is settled whenever its
+        // action comes: the break of a hold hit early, whose waiting hit has just been shown (showWaitingHit), is one.
+        if (noteTick >= 0 && currentTick < note.tick - 1 && !note.started) {
             note.pendingHit = hit;
             note.pendingMiss = !hit;
             note.pendingComplete = complete;
@@ -2252,22 +3039,7 @@ public final class ClientBattleController {
                 continue;
             }
             if (note.pendingHit && currentTick >= note.tick) {
-                boolean held = note.durationTicks > 0 && (!note.pendingComplete || currentTick < note.tick + note.durationTicks);
-                if (held) {
-                    note.started = true;
-                } else {
-                    note.resolved = true;
-                    note.started = false;
-                }
-                setPlayerAnimationHeld(spectator, note.owner, note.lane, held);
-                triggerPlayerAnimation(spectator, note.owner, note.lane);
-                flashes[note.owner][note.lane] = 8;
-                bursts[note.owner][note.lane] = 8;
-                note.pendingHit = false;
-                if (!held || !note.pendingComplete) {
-                    note.pendingComplete = false;
-                }
-                note.pendingRemoteStateReady = true;
+                showWaitingHit(noteList, note, spectator, currentTick, flashes, bursts);
                 continue;
             }
             if (note.pendingMiss && currentTick - note.tick >= MISS_AFTER_PANEL_EXIT_TICKS) {
@@ -2280,7 +3052,8 @@ public final class ClientBattleController {
         }
     }
 
-    private static void queuePendingRemoteState(List<ClientNote> noteList, int noteIndex, int left, int right, int combo) {
+    private static void queuePendingRemoteState(List<ClientNote> noteList, int noteIndex, int left, int right, int combo,
+                                                long arrival) {
         ClientNote note = noteByIndex(noteList, noteIndex);
         if (note == null) {
             return;
@@ -2289,6 +3062,7 @@ public final class ClientBattleController {
         note.pendingLeftScore = left;
         note.pendingRightScore = right;
         note.pendingCombo = combo;
+        note.pendingArrival = arrival;
     }
 
     private static void flushPendingRemoteStates(List<ClientNote> noteList, boolean spectator) {
@@ -2296,13 +3070,35 @@ public final class ClientBattleController {
             if (!note.pendingRemoteState || !note.pendingRemoteStateReady) {
                 continue;
             }
-            if (spectator) {
-                applySpectatorRemoteState(note.owner, note.pendingLeftScore, note.pendingRightScore, note.pendingCombo);
-            } else if (note.owner != ownOwner) {
-                applyActiveRemoteState(note.owner, note.owner == 0 ? note.pendingLeftScore : note.pendingRightScore, note.pendingCombo);
-            }
             note.pendingRemoteState = false;
             note.pendingRemoteStateReady = false;
+            if (spectator || note.owner != ownOwner) {
+                showRemoteState(spectator, note.owner, note.pendingLeftScore, note.pendingRightScore, note.pendingCombo,
+                        note.pendingArrival);
+            }
+        }
+    }
+
+    /**
+     * Shows a side's score and combo from its action numbered {@code arrival} (remoteStateArrivals), unless one of its
+     * actions that came later is on show already: a side's numbers only ever go forward. A hit that came before its
+     * note's tick keeps its numbers on the note until the note gets there (queuePendingRemoteState), and these waiting
+     * numbers were shown in the order of the notes, not of the actions: the other player hits B (tick 101) at 98 with
+     * x5, then A (tick 100) with x6, and their combo read x6, then x5 again from tick 101 until their next action. A
+     * later action for the same note drops them the same way: shown after the break of a hold taken early, the early
+     * hit's x6 took the combo back up from x0.
+     */
+    private static void showRemoteState(boolean spectator, int owner, int left, int right, int combo, long arrival) {
+        long[] shown = spectator ? spectatorRemoteStateShown : activeRemoteStateShown;
+        int side = Mth.clamp(owner, 0, 1);
+        if (arrival <= shown[side]) {
+            return;
+        }
+        shown[side] = arrival;
+        if (spectator) {
+            applySpectatorRemoteState(side, left, right, combo);
+        } else {
+            applyActiveRemoteState(side, side == 0 ? left : right, combo);
         }
     }
 
@@ -2337,16 +3133,27 @@ public final class ClientBattleController {
         opponentCombo = combo;
     }
 
+    /**
+     * Takes a side's score and combo from one of its own actions. Only that side's: the other side's score in the same
+     * action is from the moment the server sent it, and a mob plays ahead of the battle, so it could be a mob's score
+     * from a tick still to come, or, in an action held for its tick, a player's from before their latest hit. A side's
+     * score only ever changes in that side's own actions, so each keeps its own up to date.
+     */
     private static void applySpectatorRemoteState(int owner, int left, int right, int combo) {
-        spectatorLeftScore = left;
-        spectatorRightScore = right;
+        if (owner == 0) {
+            spectatorLeftScore = left;
+        } else {
+            spectatorRightScore = right;
+        }
         spectatorCombo[owner] = combo;
     }
 
     private static void resolveLocalMissedNotes() {
         int inputTick = calibratedInputTick();
         for (ClientNote note : notes) {
-            if (note.resolved || note.started || note.owner != ownOwner) {
+            // A note hit before its tick (pendingHit) is not missed, however far a large negative input offset puts
+            // the input clock ahead of the tick that shows the hit.
+            if (note.resolved || note.started || note.pendingHit || note.owner != ownOwner) {
                 continue;
             }
             if (inputTick - note.tick >= MISS_AFTER_PANEL_EXIT_TICKS) {
@@ -2360,7 +3167,12 @@ public final class ClientBattleController {
     private static void resolveLocalCompletedHolds() {
         int inputTick = calibratedInputTick();
         for (ClientNote note : notes) {
-            if (note.resolved || !note.started || note.owner != ownOwner || note.durationTicks <= 0) {
+            // A hold already judged complete (pendingComplete: let go of inside its release window) has had its hold
+            // score and only waits for its end tick to be settled; a key down on its lane by then is the next note's.
+            // Completed again here, its score counted twice: with a negative input offset the input clock reaches the
+            // end before the tick that settles it.
+            if (note.resolved || !note.started || note.pendingComplete || note.owner != ownOwner
+                    || note.durationTicks <= 0) {
                 continue;
             }
             int endTick = note.tick + note.durationTicks;
@@ -2455,6 +3267,89 @@ public final class ClientBattleController {
         return !complete && !note.started;
     }
 
+    /**
+     * Whether an action breaks a hold that was being held on this panel: a miss that ends a started hold. Asked
+     * before the action is applied, as shouldFlashAction is. One's own broken hold flashes its lane once, at 4 and
+     * without a burst (breakOwnComboForMistake), so the other side's broken hold - a mob's, or another player's that
+     * the server passed on - flashes the same way here, and with no punch: letting go is not a press. A note that was
+     * never started is a missed tap and leaves the panel without a flash, as one's own does.
+     */
+    private static boolean breaksStartedHold(List<ClientNote> noteList, int noteIndex, boolean hit, boolean complete) {
+        if (hit || !complete || noteIndex < 0) {
+            return false;
+        }
+        ClientNote note = noteByIndex(noteList, noteIndex);
+        return note != null && note.durationTicks > 0 && note.started && !note.resolved;
+    }
+
+    /**
+     * Whether an action breaks a hold whose head was hit before its tick and is still waiting for that tick to be shown
+     * (pendingHit, see applyNoteAction): the other player took the hold early and let go of it early too. Their own
+     * screen showed the hit and then the broken hold, so this one shows the waiting hit first (showWaitingHit) and then
+     * the break, as any broken hold. Left waiting, the break turned the hold into a missed head, falling past its
+     * button with no flash, or made it vanish with none; and the hit's score and combo, shown at the next client tick,
+     * came after the break's and took the combo back up.
+     */
+    private static boolean breaksWaitingHold(ClientNote note, int owner, int lane, boolean hit, boolean complete) {
+        return note != null && !hit && complete && note.owner == owner && note.lane == lane && note.durationTicks > 0
+                && note.pendingHit && !note.started && !note.resolved;
+    }
+
+    /**
+     * Shows a hit that came before its note's tick and waited for it (pendingHit): the note is struck, or its hold
+     * taken, with the hit's flash, burst and judgement, and the score and combo it came with are ready to show. Done
+     * when the note reaches its tick (flushPendingNoteActions), or at once when the hold it took is broken before then
+     * (breaksWaitingHold).
+     *
+     * <p>One's own early hit flashed, burst and punched already at the press (predictLocalInput, and the key's own
+     * animation), so at its tick it is only struck and its hold taken. It used to flash and burst a second time there,
+     * and give a second, judged punch, which one's own hit on time never gets: two flashes for one press.
+     */
+    private static void showWaitingHit(List<ClientNote> noteList, ClientNote note, boolean spectator, int currentTick,
+                                       int[][] flashes, int[][] bursts) {
+        boolean held = note.durationTicks > 0 && (!note.pendingComplete || currentTick < note.tick + note.durationTicks);
+        if (held) {
+            note.started = true;
+        } else {
+            note.resolved = true;
+            note.started = false;
+        }
+        setPlayerAnimationHeld(spectator, note.owner, note.lane, holdsLane(noteList, note.owner, note.lane));
+        if (spectator || note.owner != ownOwner) {
+            triggerJudgementAnimation(spectator, note.owner, note.lane);
+            // The other side's hit lands on its note's tick and counts down from there on the battle clock, as a held
+            // action's does (showLaneFlash): set in a client tick right before that tick counts its flashes down, it
+            // was drawn from its second step every time. Shown before its tick (breaksWaitingHold), from the moment
+            // it is shown.
+            TimedLaneFlashes timed = spectator ? spectatorTimedLaneFlashes : timedLaneFlashes;
+            timed.start(note.owner, note.lane, 8, Math.min(note.tick, spectator ? spectatorVisualTick(0.0F)
+                    : activeVisualTick(0.0F)));
+            flashes[note.owner][note.lane] = 8;
+            bursts[note.owner][note.lane] = 8;
+        }
+        note.pendingHit = false;
+        if (!held || !note.pendingComplete) {
+            note.pendingComplete = false;
+        }
+        note.pendingRemoteStateReady = true;
+    }
+
+    /**
+     * Whether a side holds a hold on a lane: one of its holds there was hit and is not over. The held pose follows this
+     * rather than the note an action names. A mob's missed hold head is settled only once it has left the panel
+     * (BattleManager#resolveMissedNotes), and by then the mob can be holding the next hold on that lane; settling the
+     * miss lets go of nothing, yet it took the pose down, and a mob has no keys to hold it up (only a player's keys
+     * come as BattleLaneAnimationPayload), so it stayed down until that hold's next action, up to four ticks later.
+     */
+    private static boolean holdsLane(List<ClientNote> noteList, int owner, int lane) {
+        for (ClientNote note : noteList) {
+            if (note.owner == owner && note.lane == lane && note.durationTicks > 0 && note.started && !note.resolved) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private static int timingScore(int noteTick, int inputTick) {
         int earlyDistance = noteTick - inputTick;
         int lateDistance = inputTick - noteTick;
@@ -2477,20 +3372,6 @@ public final class ClientBattleController {
         return 26;
     }
 
-    private static float noteTravelY(float time, int noteTick, int leadTicks, float startY, float hitY, float lateY) {
-        float approach = (time - noteTick + leadTicks) / Math.max(1.0F, leadTicks);
-        if (approach <= 1.0F) {
-            return Mth.lerp(Mth.clamp(approach, 0.0F, 1.0F), startY, hitY);
-        }
-        float late = (time - noteTick) / Math.max(1.0F, HIT_WINDOW_TICKS);
-        return Mth.lerp(Mth.clamp(late, 0.0F, 1.0F), hitY, lateY);
-    }
-
-    private static boolean noteVisibleAt(float time, int noteTick, int durationTicks, int leadTicks) {
-        int endTick = noteTick + Math.max(0, durationTicks);
-        return time >= noteTick - leadTicks - 6.0F && time <= endTick + HIT_WINDOW_TICKS + 6.0F;
-    }
-
     private static void drawPanel(GuiGraphics graphics, Font font, int width, int height, float time, int owner, float intro) {
         boolean own = owner == ownOwner;
         float speed = own ? ownSpeed : opponentSpeed;
@@ -2503,7 +3384,7 @@ public final class ClientBattleController {
         int color = own ? ownColor : opponentColor;
         int score = owner == 0 ? leftScore : rightScore;
         int combo = own ? ownCombo : opponentCombo;
-        BattlePanelRenderer.draw(graphics, font, width, height, time, trackBpm, intro, notes,
+        BattlePanelRenderer.draw(graphics, font, width, height, time, trackBpm, activeBeatOrigin(), intro, notes,
                 new BattlePanelRenderer.Panel(
                         owner,
                         screenSideForOwner(owner),
@@ -2560,37 +3441,25 @@ public final class ClientBattleController {
         return owner == 0 ? (firstIsLeft ? 0 : 1) : (firstIsLeft ? 1 : 0);
     }
 
+    /**
+     * The song card over the battle: what plays, its cover, the time left and the progress, and the count-in under it
+     * before the first note. Drawn by BattlePanelRenderer in the Workshop's own panel, fonts and accent; the vanilla
+     * font this is handed is no longer needed here.
+     */
     private static void drawHeader(GuiGraphics graphics, Font font, int width, float time, float intro) {
-        int barWidth = Math.min(width - 80, 420);
-        int x = width / 2 - barWidth / 2;
-        int y = 12;
         float progress = Mth.clamp(Math.max(0.0F, time) / Math.max(1.0F, durationTicks), 0.0F, 1.0F);
-        graphics.fill(x, y, x + barWidth, y + 24, argb(150, 8, 10, 16));
-        graphics.fill(x, y + 22, x + Math.round(barWidth * progress), y + 24, argb(230, 90, 210, 235));
-        ClientTrackAssets.cachedAsset(activeTrackId, activePreviewFile).ifPresent(path -> {
-            ResourceLocation texture = ClientPreviewTextures.get(activeTrackId, path);
-            if (texture != null) {
-                int baseSize = 10;
-                int size = Math.round(baseSize * (1.0F + beatPulse(time) * 0.20F));
-                int titleLeft = width / 2 - font.width(trackTitle) / 2;
-                int imageX = titleLeft - 4 - size;
-                int imageY = y + 2 - (size - baseSize) / 2;
-                graphics.fill(imageX - 1, imageY - 1, imageX + size + 1, imageY + size + 1, 0xDDFFFFFF);
-                graphics.blit(texture, imageX, imageY, 0.0F, 0.0F, size, size, size, size);
-            }
-        });
-        graphics.drawCenteredString(font, trackTitle, width / 2, y + 4, 0xFFFFFFFF);
         int remaining = Math.max(0, (durationTicks - Math.max(0, (int) time) + 19) / 20);
-        String timer = String.format("%02d:%02d", remaining / 60, remaining % 60);
-        graphics.drawCenteredString(font, timer, width / 2, y + 14, 0xFFB8DCE8);
-        if (time < 0.0F) {
-            graphics.drawCenteredString(font, "READY " + Math.max(1, (int) Math.ceil(-time / 20.0F)), width / 2, y + 28, withAlpha(0xFFFFFFFF, Math.round(255 * intro)));
-        }
+        ResourceLocation cover = ClientTrackAssets.cachedAsset(activeTrackId, activePreviewFile)
+                .map(path -> ClientPreviewTextures.get(activeTrackId, path))
+                .orElse(null);
+        int countdown = time < 0.0F ? Math.max(1, (int) Math.ceil(-time / 20.0F)) : 0;
+        BattlePanelRenderer.drawHeader(graphics, width, new BattlePanelRenderer.Header(trackTitle, cover, progress,
+                remaining, countdown, beatPulse(time), intro));
     }
 
+    /** The standard bars as the player has set them: 36 and 30 units at alpha 185 by default, or none when off. */
     private static void drawStageBars(GuiGraphics graphics, int width, int height) {
-        graphics.fill(0, 0, width, 36, argb(185, 0, 0, 0));
-        graphics.fill(0, height - 30, width, height, argb(185, 0, 0, 0));
+        BattleBackdrop.bars(graphics::fill, width, height, ClientBattleSettings.stageBarAlpha());
     }
 
     private static boolean playMusic(Minecraft minecraft, String trackId, String audioFile, int skipTicks) {
@@ -2603,17 +3472,62 @@ public final class ClientBattleController {
             return false;
         }
 
+        // Stopping the old stream clears the music clock, the pause stamp with it; a seek made while the game sits in
+        // its pause menu must keep the battle clock held, or the clock would run on through the rest of the pause.
+        long heldPause = musicPausedForGame ? musicPausedAtNanos : 0L;
         stopMusic(minecraft);
+        musicPausedAtNanos = heldPause;
         musicClockStartTick = Math.max(0, skipTicks);
         Path audioPath = path.get();
         ClientAudioAnalyzer.activate(audioPath);
         float pitch = fallbackPlaybackPitch(audioFile, musicPlaybackSpeed);
-        int audioSkipTicks = Math.round(Math.max(0, skipTicks) * pitch);
-        music = new ExternalOggSoundInstance(trackId, audioPath.getFileName().toString(), audioPath, audioSkipTicks, true, 0.0D, 0.0D, 0.0D, SoundInstance.Attenuation.NONE,
-                trackVolume * ClientBattleSettings.musicVolume(), pitch,
+        music = new BattleMusicSoundInstance(trackId, audioPath.getFileName().toString(), audioPath, Math.max(0, skipTicks),
+                pitch, trackVolume * ClientBattleSettings.musicVolume(), ClientBattleController::battleTickForStreamStart,
                 reason -> pendingAudioError = text("music_battle.l10n.client.008") + audioFile + "': " + reason);
         minecraft.getSoundManager().play(music);
+        // A stream the engine skipped - the game or the song muted when the battle began - is asked for again by
+        // retryRefusedMusic once the volume is up; it used to stay silent until the battle ended.
+        musicRefused = !minecraft.getSoundManager().isActive(music);
+        musicRefusedSilenced = musicRefused && battleMusicSilenced(minecraft);
         return true;
+    }
+
+    /** Whether the sound engine would skip the battle's song at the volumes set now. */
+    private static boolean battleMusicSilenced(Minecraft minecraft) {
+        if (minecraft.options == null) {
+            return false;
+        }
+        return MusicStreamRetry.silenced(
+                minecraft.options.getSoundSourceVolume(net.minecraft.sounds.SoundSource.MASTER),
+                minecraft.options.getSoundSourceVolume(net.minecraft.sounds.SoundSource.PLAYERS),
+                trackVolume * ClientBattleSettings.musicVolume());
+    }
+
+    /** Plays a refused battle song again, at {@code tick}, on the first tick nothing silences it any more. */
+    private static void retryRefusedMusic(Minecraft minecraft, int tick) {
+        boolean playing = music != null && minecraft.getSoundManager().isActive(music);
+        if (MusicStreamRetry.retryNow(musicRefused, musicRefusedSilenced, battleMusicSilenced(minecraft), playing)) {
+            playMusic(minecraft, activeTrackId, activeAudioFile, Math.max(0, tick));
+        }
+    }
+
+    /**
+     * The battle tick a song stream that is lined up now will be heard from, asked on the sound thread at the stream's
+     * first read: the clock plus the time a stream takes from there to the speakers. While the game sits in its pause
+     * menu it is the held tick, with nothing added, because the stream is paused the moment it starts and resumes
+     * together with the clock. NaN when there is no shared clock to follow (a battle from a server too old to send
+     * one), in which case the stream starts where it was asked to.
+     */
+    static double battleTickForStreamStart() {
+        long epoch = startAtNanos;
+        if (!active || epoch == 0L) {
+            return Double.NaN;
+        }
+        long paused = musicPausedAtNanos;
+        if (paused > 0L) {
+            return (paused - epoch) / 50_000_000.0D;
+        }
+        return (System.nanoTime() - epoch) / 50_000_000.0D + musicStartLeadTicks;
     }
 
     private static void tryPlayPendingSpectatorMusic() {
@@ -2676,6 +3590,9 @@ public final class ClientBattleController {
             spectatorMusicInactiveTicks = 0;
             spectatorMusicRecoveryCooldown = 30;
             pendingSpectatorMusic = null;
+            if (!minecraft.getSoundManager().isActive(sound)) {
+                startSpectatorClockWithoutStream(minecraft);
+            }
             return;
         }
         if (!ClientTrackAssets.isTransferActive(payload.trackId(), "audio", payload.audioFile())) {
@@ -2684,6 +3601,37 @@ public final class ClientBattleController {
         if (pendingSpectatorMusic.ticksLeft <= 0) {
             pendingSpectatorMusic = null;
         }
+    }
+
+    /**
+     * Runs the spectator clock from now for a stream the sound engine has just turned down. SoundEngine.play takes a
+     * sound or skips it there and then: with the game's master volume at 0 it skips every sound ("master volume was
+     * zero") and gives it no channel, so isActive is false straight after the call and no PlayStreamingSourceEvent
+     * will ever come for it. The clock used to wait for that event anyway: a player who had muted the game saw a
+     * battle's or a DJ show's effects and notes stand on their seek point for SPECTATOR_STREAM_START_TIMEOUT_TICKS
+     * (6 s) and then run that far behind for the rest of the song, without the music, which the timeout also stopped.
+     *
+     * <p>The clock now starts at the seek point exactly as if the stream had started at once. The silent instance is
+     * kept, so a repeated music packet for the same song does not restart it; tickSpectatorMusicRecovery brings the song
+     * in where the clock has got to as soon as the volume is turned up, and does not retry while it is still 0.
+     */
+    private static void startSpectatorClockWithoutStream(Minecraft minecraft) {
+        long now = System.nanoTime();
+        spectatorMusicStartedAtNanos = now;
+        spectatorMusicAwaitingStart = false;
+        spectatorMusicStartWaitTicks = 0;
+        spectatorMusicRefused = true;
+        spectatorMusicRefusedMuted = masterVolumeMuted(minecraft);
+        if (spectatorMusicPausedForGame) {
+            // The same as a stream that starts while the pause menu is open: the clock waits for the resume.
+            spectatorMusicPausedAtNanos = now;
+        }
+    }
+
+    /** The volume Minecraft gives its listener; at 0 SoundEngine.play skips every sound. */
+    private static boolean masterVolumeMuted(Minecraft minecraft) {
+        return minecraft.options != null
+                && minecraft.options.getSoundSourceVolume(net.minecraft.sounds.SoundSource.MASTER) <= 0.0F;
     }
 
     /**
@@ -2771,10 +3719,14 @@ public final class ClientBattleController {
             minecraft.getSoundManager().stop(stoppedMusic);
             music = null;
         }
+        musicRefused = false;
+        musicRefusedSilenced = false;
         resetMusicClock();
     }
 
     private static void stopSpectatorMusic(Minecraft minecraft) {
+        finishSpectatorClockHold(System.nanoTime());
+        spectatorSongDrift.clear();
         if (spectatorMusic != null) {
             SoundInstance stoppedMusic = spectatorMusic;
             if (stoppedMusic instanceof ExternalOggSoundInstance external) {
@@ -2794,6 +3746,8 @@ public final class ClientBattleController {
         spectatorMusicPausedForGame = false;
         spectatorMusicInactiveTicks = 0;
         spectatorMusicRecoveryCooldown = 0;
+        spectatorMusicRefused = false;
+        spectatorMusicRefusedMuted = false;
     }
 
     /** Restarts a spectator stream if the audio engine drops it after a client stall or camera switch. */
@@ -2815,9 +3769,20 @@ public final class ClientBattleController {
             spectatorMusicInactiveTicks = 0;
             return;
         }
-        spectatorMusicInactiveTicks++;
-        if (spectatorMusicInactiveTicks < 8 || spectatorMusicRecoveryCooldown > 0) {
-            return;
+        if (spectatorMusicRefused) {
+            // A stream the engine refused is asked for again only once the reason has gone. Every retry while the game
+            // is still muted would be refused in turn and would re-seek the clock each time; a refusal for any other
+            // reason was never retried, and a later seek or song asks again anyway. Once the volume is up the song comes
+            // in at once, without the eight ticks of grace a dropped stream gets, at the place the clock has reached.
+            spectatorMusicInactiveTicks = 0;
+            if (!spectatorMusicRefusedMuted || masterVolumeMuted(minecraft)) {
+                return;
+            }
+        } else {
+            spectatorMusicInactiveTicks++;
+            if (spectatorMusicInactiveTicks < 8 || spectatorMusicRecoveryCooldown > 0) {
+                return;
+            }
         }
         int targetTick = Math.max(0, Math.min(spectatorDurationTicks, Mth.floor(spectatorVisualTick(0.0F))));
         SpectatorMusicPayload source = lastSpectatorMusicPayload;
@@ -2924,8 +3889,9 @@ public final class ClientBattleController {
         if (screen instanceof DjVisualFxScreen || screen instanceof DjPlaylistEffectsScreen) {
             return true;
         }
-        // The shared effect editor is also used for charts, where there is no rack and nothing to silence.
-        return screen instanceof TrackEffectEditScreen edit && edit.owningDjPanel() != null;
+        // The shared effect editor also edits a beatmap's effects. Its World background shows the world around the
+        // player, so a booth playing nearby would draw its stack under the effect being edited: silent there too.
+        return screen instanceof TrackEffectEditScreen;
     }
 
     public static void handleSpectatorCameraKey() {
@@ -3049,7 +4015,7 @@ public final class ClientBattleController {
         }
         keepPlayerAsCameraEntity(minecraft);
 
-        boolean synced = syncedCameraAvailable
+        boolean synced = (syncedCameraAvailable || syncedCameraAutomatic)
                 && spectatorBattleId.equals(syncedCameraBattleId)
                 && spectatorCameraEntityId == syncedCameraEntityId;
         if (!synced) {
@@ -3076,7 +4042,7 @@ public final class ClientBattleController {
         if (minecraft.level == null || spectatorCameraEntityId <= 0) {
             return false;
         }
-        boolean synced = syncedCameraAvailable
+        boolean synced = (syncedCameraAvailable || syncedCameraAutomatic)
                 && spectatorBattleId != null
                 && spectatorBattleId.equals(syncedCameraBattleId)
                 && spectatorCameraEntityId == syncedCameraEntityId;
@@ -3136,7 +4102,7 @@ public final class ClientBattleController {
     }
 
     private static void tickBattleCameraSync(Minecraft minecraft) {
-        if (!syncedCameraAvailable) {
+        if (!syncedCameraAvailable && !syncedCameraAutomatic) {
             return;
         }
         boolean activeMatch = active && battleId != null && battleId.equals(syncedCameraBattleId)
@@ -3147,20 +4113,24 @@ public final class ClientBattleController {
             return;
         }
 
+        // The automatic shot sends a frame every tick and moves smoothly, so it is followed closely; a camera block's
+        // edits come seldom and are eased in more gently. Either way every rendered frame blends between two ticks.
+        float follow = syncedCameraAutomatic ? AUTOMATIC_SHOT_FOLLOW : BLOCK_SHOT_FOLLOW;
         if (activeMatch) {
             activeCameraInterpolation.approach(syncedCameraX, syncedCameraY, syncedCameraZ,
-                    syncedCameraYaw, syncedCameraPitch, syncedCameraFov, 0.42D, 0.42F, 0.36F);
+                    syncedCameraYaw, syncedCameraPitch, syncedCameraFov, follow, follow, 0.36F);
             BattleCameraInterpolation.Sample current = activeCameraInterpolation.sample(1.0F);
             cameraYaw = current.yaw();
             cameraPitch = current.pitch();
             cameraFov = current.fov();
         } else {
-            spectatorCameraYaw = Mth.rotLerp(0.42F, spectatorCameraYaw, syncedCameraYaw);
-            spectatorCameraPitch = Mth.lerp(0.42F, spectatorCameraPitch, syncedCameraPitch);
-            spectatorCameraFov = Mth.lerp(0.36F, spectatorCameraFov, syncedCameraFov);
+            spectatorCameraYaw = Mth.rotLerp(follow, spectatorCameraYaw, syncedCameraYaw);
+            spectatorCameraPitch = Mth.lerp(follow, spectatorCameraPitch, syncedCameraPitch);
+            // Zero is "the viewer's own" and must not be blended towards: halfway there is a fish-eye.
+            spectatorCameraFov = syncedCameraAutomatic ? 0.0F : Mth.lerp(0.36F, spectatorCameraFov, syncedCameraFov);
             Vec3 target = new Vec3(syncedCameraX, syncedCameraY, syncedCameraZ);
             spectatorCameraViewPosition = spectatorCameraEnabled && spectatorCameraViewPositionValid
-                    ? lerpPosition(spectatorCameraViewPosition, target, 0.42D) : target;
+                    ? lerpPosition(spectatorCameraViewPosition, target, follow) : target;
             spectatorCameraViewPositionValid = true;
             // The render camera is detached in CameraMixin while the camera
             // entity remains the local player, so walking and Blocky Music's
@@ -3200,6 +4170,7 @@ public final class ClientBattleController {
         syncedCameraFov = 0.0F;
         syncedCameraRevision = -1L;
         syncedCameraAvailable = false;
+        syncedCameraAutomatic = false;
         activeCameraInterpolation.clear();
     }
 
@@ -3247,7 +4218,7 @@ public final class ClientBattleController {
 
     /** Optical position for active players, interpolated every rendered frame. */
     public static Vec3 activeBattleCameraPositionOverride(float partialTick) {
-        if (!active || !syncedCameraAvailable || !activeCameraInterpolation.valid()
+        if (!active || !syncedCameraAvailable && !syncedCameraAutomatic || !activeCameraInterpolation.valid()
                 || CameraEditorClient.isActive() || DjCameraPreviewRenderer.isRenderingPreview()) {
             return null;
         }
@@ -3267,6 +4238,15 @@ public final class ClientBattleController {
         }
         long now = System.nanoTime();
         if (startedSound == music) {
+            // Before the start stamp, which is what the drift check reads first.
+            musicStreamStartTick = startedSound instanceof BattleMusicSoundInstance battleMusic
+                    ? battleMusic.startTick() : Double.NaN;
+            if (startedSound instanceof BattleMusicSoundInstance battleMusic && battleMusic.alignedAtNanos() > 0L) {
+                // This event comes straight after the source starts, so the time since the stream was lined up is
+                // how long this machine took to get a stream to the speakers; the next one is lined up that far ahead.
+                musicStartLeadTicks = MusicStartAlignment.nextStartLead(musicStartLeadTicks,
+                        (now - battleMusic.alignedAtNanos()) / 50_000_000.0D);
+            }
             musicStartedAtNanos = now;
             if (musicPausedForGame) {
                 // A stream that finished opening while the game sits in the pause menu must not play on into it,
@@ -3308,6 +4288,14 @@ public final class ClientBattleController {
         long epoch = startAtNanos;
         if (epoch != 0L) {
             long now = musicPausedAtNanos > 0L ? musicPausedAtNanos : System.nanoTime();
+            long holdUntil = clockHoldUntilNanos;
+            if (holdUntil != 0L && musicPausedAtNanos > 0L) {
+                // A short hold goes on by itself once it has run out, whenever the next tick or frame lets it go.
+                long wall = System.nanoTime();
+                if (wall >= holdUntil) {
+                    now = wall - (holdUntil - musicPausedAtNanos);
+                }
+            }
             return (now - epoch) / 50_000_000.0F;
         }
         long startedAt = musicStartedAtNanos;
@@ -3328,7 +4316,8 @@ public final class ClientBattleController {
             return Float.NaN;
         }
         long now = musicPausedAtNanos > 0L ? musicPausedAtNanos : System.nanoTime();
-        return musicClockStartTick + Math.max(0L, now - startedAt) / 50_000_000.0F;
+        double start = musicStreamStartTick;
+        return (float) ((Double.isFinite(start) ? start : musicClockStartTick) + Math.max(0L, now - startedAt) / 50_000_000.0D);
     }
 
     /** A monitor shares the listener clock only for the same live DJ playback identity. */
@@ -3348,19 +4337,33 @@ public final class ClientBattleController {
             }
             return spectatorLocalTicks + Mth.clamp(partialTick, 0.0F, 1.0F);
         }
-        long now = spectatorMusicPausedAtNanos > 0L ? spectatorMusicPausedAtNanos : System.nanoTime();
+        long pausedAt = spectatorMusicPausedAtNanos;
+        long now = pausedAt > 0L ? pausedAt : System.nanoTime();
+        long holdUntil = spectatorClockHoldUntilNanos;
+        if (holdUntil != 0L && pausedAt > 0L) {
+            // A short hold goes on by itself once it has run out, whenever the next tick or frame lets it go.
+            long wall = System.nanoTime();
+            if (wall >= holdUntil) {
+                now = wall - (holdUntil - pausedAt);
+            }
+        }
         return spectatorMusicClockStartTick + Math.max(0L, now - startedAt) / 50_000_000.0F;
     }
 
     private static ClientTrackEffects.EffectState sampleSpectatorEffects(float partial) {
         return djTransitions.attach(ClientTrackEffects.sample(spectatorEffects, spectatorVisualTick(partial),
-                spectatorTrackBpm, spectatorPlaybackSpeed, spectatorFxVisibility(partial)), System.nanoTime());
+                spectatorTrackBpm, spectatorPlaybackSpeed, spectatorFxVisibility(partial), spectatorBeatOrigin()),
+                System.nanoTime());
     }
 
     private static void resetMusicClock() {
+        finishClockHold(System.nanoTime());
+        songDrift.clear();
+        BattleSongPosition.clear();
         musicStartedAtNanos = 0L;
         musicPausedAtNanos = 0L;
         musicClockStartTick = 0;
+        musicStreamStartTick = Double.NaN;
     }
 
     private static void tickSpectatorBattle() {
@@ -3380,6 +4383,7 @@ public final class ClientBattleController {
                 : spectatorMusicAwaitingStart && !spectatorMusicStartFreezeDisabled
                 ? Math.max(0, spectatorMusicClockStartTick)
                 : spectatorLocalTicks + 1;
+        showDueActions(spectatorHeldActions, true, spectatorVisualTick(0.0F));
         flushPendingNoteActions(spectatorNotes, spectatorLocalTicks, spectatorLaneFlashes, spectatorHitBursts, true);
         flushPendingRemoteStates(spectatorNotes, true);
         sanitizeAnimationHeldMasks(spectatorNotes, spectatorAnimationHeldMask, spectatorLocalTicks);
@@ -3390,6 +4394,9 @@ public final class ClientBattleController {
         }
         for (int owner = 0; owner < 2; owner++) {
             for (int lane = 0; lane < 4; lane++) {
+                if (spectatorTimedLaneFlashes.timed(owner, lane)) {
+                    continue;
+                }
                 if (spectatorLaneFlashes[owner][lane] > 0) {
                     spectatorLaneFlashes[owner][lane]--;
                 }
@@ -3398,6 +4405,7 @@ public final class ClientBattleController {
                 }
             }
         }
+        spectatorTimedLaneFlashes.apply(spectatorVisualTick(0.0F), spectatorLaneFlashes, spectatorHitBursts);
         if (spectatorLocalTicks > (djReleaseEndTick > 0 ? djReleaseEndTick : spectatorDurationTicks + 220)) {
             clearSpectatorBattle();
             stopSpectatorMusic(Minecraft.getInstance());
@@ -3414,10 +4422,15 @@ public final class ClientBattleController {
         spectatorBattleId = null;
         lastSpectatorMusicPayload = null;
         spectatorMusicStartFreezeDisabled = false;
+        finishSpectatorClockHold(System.nanoTime());
+        spectatorSongDrift.clear();
         spectatorMusicPausedAtNanos = 0L;
         spectatorMusicPausedForGame = false;
         spectatorTrackBpm = 120;
+        spectatorBeatOffsetMs = 0;
         spectatorNotes.clear();
+        spectatorHeldActions.clear();
+        spectatorTimedLaneFlashes.clear();
         spectatorEffects = List.of();
         clearBattleAudience();
         spectatorLeftEntityId = 0;
@@ -3452,21 +4465,80 @@ public final class ClientBattleController {
             spectatorAnimationHeldMask[owner] = 0;
             spectatorAnimationInputHeldMask[owner] = 0;
             spectatorAnimationTriggerTick[owner] = -Float.MAX_VALUE;
+            spectatorAnimationJudgedLane[owner] = -1;
+            spectatorAnimationJudgedTick[owner] = -Float.MAX_VALUE;
             for (int lane = 0; lane < 4; lane++) {
                 spectatorHitBursts[owner][lane] = 0;
             }
         }
     }
 
+    /** A press: a key going down, the player's own or another player's. */
     private static void triggerPlayerAnimation(boolean spectator, int owner, int lane) {
+        triggerPlayerAnimation(spectator, owner, lane, Float.NaN);
+    }
+
+    private static void triggerPlayerAnimation(boolean spectator, int owner, int lane, float at) {
+        if (spectator) {
+            trigger(spectatorAnimationTriggerSerial, spectatorAnimationTriggerLane, spectatorAnimationTriggerTick,
+                    true, owner, lane, at);
+        } else {
+            trigger(animationTriggerSerial, animationTriggerLane, animationTriggerTick, false, owner, lane, at);
+        }
+    }
+
+    /**
+     * A hit judged for this side. A mob has no keys, so its judgement is its press. A side with keys has already
+     * pressed, when its key went down: the player's own early hit is let through here up to 6 ticks after its key
+     * (more with a negative input offset), and the server judges an opponent's hit before it passes on the key,
+     * because the client sends the judgement first. Counted as a press of its own, it punched the body twice and
+     * could take it back to a lane already left, so it goes to the animation as a judgement, apart from the presses.
+     */
+    private static void triggerJudgementAnimation(boolean spectator, int owner, int lane) {
+        triggerJudgementAnimation(spectator, owner, lane, Float.NaN);
+    }
+
+    /** With {@code at}, the battle tick the hit belongs to when it was held for that tick; NaN for now. */
+    private static void triggerJudgementAnimation(boolean spectator, int owner, int lane, float at) {
+        if (!keyedSide(spectator, owner)) {
+            triggerPlayerAnimation(spectator, owner, lane, at);
+        } else if (spectator) {
+            trigger(spectatorAnimationJudgedSerial, spectatorAnimationJudgedLane, spectatorAnimationJudgedTick,
+                    true, owner, lane, at);
+        } else {
+            trigger(animationJudgedSerial, animationJudgedLane, animationJudgedTick, false, owner, lane, at);
+        }
+    }
+
+    /**
+     * Counts a trigger and stamps it with the battle clock, or with {@code at} when the trigger was held for that tick
+     * and is shown in the first frame after it: the pose and its punch then count from the note's own tick, so the
+     * body is in phase with the note however late in the frame the tick fell.
+     */
+    private static void trigger(int[] serials, int[] lanes, float[] ticks, boolean spectator, int owner, int lane,
+                                float at) {
         int safeOwner = Mth.clamp(owner, 0, 1);
-        int safeLane = Mth.clamp(lane, 0, 3);
-        int[] serials = spectator ? spectatorAnimationTriggerSerial : animationTriggerSerial;
-        int[] lanes = spectator ? spectatorAnimationTriggerLane : animationTriggerLane;
-        float[] triggerTicks = spectator ? spectatorAnimationTriggerTick : animationTriggerTick;
         serials[safeOwner]++;
-        lanes[safeOwner] = safeLane;
-        triggerTicks[safeOwner] = spectator ? spectatorVisualTick(0.0F) : activeVisualTick(0.0F);
+        lanes[safeOwner] = Mth.clamp(lane, 0, 3);
+        float now = spectator ? spectatorVisualTick(0.0F) : activeVisualTick(0.0F);
+        ticks[safeOwner] = Float.isFinite(at) ? Math.min(at, now) : now;
+    }
+
+    /**
+     * Whether this side plays with keys: our own side, or a player. Only a player sends key presses, and the server
+     * plays every other participant itself (BattleManager's ParticipantState.ai). An entity this client cannot see
+     * counts as keyless, the side whose hits then show twice rather than never; so does every side when there is no
+     * game or world to look in (a check run without Minecraft, or a frame drawn while leaving a world).
+     */
+    private static boolean keyedSide(boolean spectator, int owner) {
+        if (!spectator && owner == ownOwner) {
+            return true;
+        }
+        int entityId = spectator
+                ? owner == 0 ? spectatorLeftEntityId : spectatorRightEntityId
+                : owner == 0 ? leftEntityId : rightEntityId;
+        Minecraft minecraft = Minecraft.getInstance();
+        return minecraft != null && minecraft.level != null && minecraft.level.getEntity(entityId) instanceof Player;
     }
 
     private static void setPlayerAnimationHeld(boolean spectator, int owner, int lane, boolean held) {
@@ -3500,6 +4572,21 @@ public final class ClientBattleController {
 
     private static float beatPulse(float time) {
         return beatPulse(time, sinceBeatOne(time), trackBpm);
+    }
+
+    /** Beat 1 on the active battle's clock, in ticks: where every beat visual of the fighters counts from. */
+    private static float activeBeatOrigin() {
+        return (float) ChartBeat.originTicks(activeOffsetMs);
+    }
+
+    /** Beat 1 on the spectator clock (a watched battle or a DJ song), in ticks. */
+    private static float spectatorBeatOrigin() {
+        return (float) ChartBeat.originTicks(spectatorBeatOffsetMs);
+    }
+
+    /** Beat 1 of the active battle, or of what this client watches, for the poses and hops synced to the beat. */
+    static float currentBeatOrigin(boolean spectating) {
+        return spectating ? spectatorBeatOrigin() : activeBeatOrigin();
     }
 
     /** The active battle's time counted from beat 1, for the pulses that should land on the song's beats. */
@@ -3537,6 +4624,8 @@ public final class ClientBattleController {
         clientErrorReported = false;
         pendingAudioError = null;
         notes.clear();
+        heldActions.clear();
+        timedLaneFlashes.clear();
         activeEffects = List.of();
         activeDisableStageBars = false;
         activeOffsetMs = 0;
@@ -3559,6 +4648,9 @@ public final class ClientBattleController {
                 previousLaneDown[lane] = false;
             }
         }
+        // The lanes are not being played (a pause, a screen, the song not started): presses made meanwhile are not
+        // notes to send when play comes back.
+        BattleLaneLatch.LANES.clear();
     }
 
     private static void reportBattleError(Minecraft minecraft, String reason) {
@@ -3640,6 +4732,8 @@ public final class ClientBattleController {
         musicStarted = false;
         pendingAudioError = null;
         notes.clear();
+        heldActions.clear();
+        timedLaneFlashes.clear();
         activeEffects = List.of();
         activeDisableStageBars = false;
         activeOffsetMs = 0;
@@ -3696,7 +4790,7 @@ public final class ClientBattleController {
         float playbackSpeed = active ? musicPlaybackSpeed : spectatorPlaybackSpeed;
         float globalVisibility = active ? 1.0F : spectatorFxVisibility;
         ClientTrackEffects.EffectState state = ClientTrackEffects.sample(effects, time, bpm, playbackSpeed,
-                globalVisibility);
+                globalVisibility, active ? activeBeatOrigin() : spectatorBeatOrigin());
         if (!active) state = djTransitions.attach(state, System.nanoTime());
         return highlightForState(entityId, state, leftId, rightId);
     }
@@ -3742,7 +4836,8 @@ public final class ClientBattleController {
         }
         int owner = entityId == leftId ? 0 : 1;
         boolean soloView = rightId <= 0;
-        if (!soloView && !highlightApplies(highlight, sinceBeatOne(state.trackTick()), state.bpm(),
+        // Beats from the sampled chart's own beat 1: the fighters' chart, or the watched one for a spectator.
+        if (!soloView && !highlightApplies(highlight, state.trackTick() - state.beatOriginTicks(), state.bpm(),
                 state.playbackSpeed(), owner)) return null;
         int colorOwner = soloView && "p2".equals(highlight.variant()) ? 1 : owner;
         float reactive = highlight.beatReactive() ? 1.0F + Mth.clamp(state.pulseBeat(), 0.0F, 5.0F) * 0.22F : 1.0F;
@@ -3773,17 +4868,6 @@ public final class ClientBattleController {
     private record HighlightRender(TrackEffect effect, int color, float reactive, float visibility) { }
 
     private static void drawCenteredScaled(GuiGraphics graphics, Font font, Component text, float centerX, float y, float scale, int color) {
-        PoseStack pose = graphics.pose();
-        pose.pushPose();
-        pose.translate(centerX, y, 0.0F);
-        pose.scale(scale, scale, 1.0F);
-        graphics.drawCenteredString(font, text, 0, 0, color);
-        pose.popPose();
-    }
-
-    private static void drawCenteredFittedString(GuiGraphics graphics, Font font, String text, int centerX, int y, int maxWidth, int color) {
-        int textWidth = Math.max(1, font.width(text));
-        float scale = Math.min(1.0F, maxWidth / (float) textWidth);
         PoseStack pose = graphics.pose();
         pose.pushPose();
         pose.translate(centerX, y, 0.0F);
@@ -3842,102 +4926,102 @@ public final class ClientBattleController {
         RenderSystem.setShaderColor(1.0F, 1.0F, 1.0F, 1.0F);
 
         Matrix4f matrix = pose.last().pose();
-        drawQuad(matrix, -0.62F, -0.58F, 0.62F, 0.58F, argb(255, 4, 7, 12));
-        drawQuad(matrix, -0.60F, -0.56F, 0.60F, 0.56F, argb(255, 11, 15, 20));
-        drawQuad(matrix, -0.60F, -0.56F, 0.60F, 0.56F, withAlpha(color, 58));
-        float progress = Mth.clamp(Math.max(0.0F, time) / Math.max(1.0F, duration), 0.0F, 1.0F);
-        drawQuad(matrix, -0.56F, -0.50F, -0.56F + 1.12F * progress, -0.47F, withAlpha(color, 230));
-
-        float laneWidth = 0.24F;
-        float availableLaneWidth = laneWidth - 0.03F;
-        float firstLaneX = -0.48F;
-        NoteAppearance appearance = spectatorNoteAppearances[owner];
-        for (int lane = 0; lane < 4; lane++) {
-            float laneX = firstLaneX + lane * laneWidth;
-            int laneColor = appearance.color(lane);
-            int laneAlpha = flashes[owner][lane] > 0 ? 165 + flashes[owner][lane] * 8 : 72;
-            drawQuad(matrix, laneX, -0.40F, laneX + laneWidth - 0.03F, 0.40F, withAlpha(laneColor, laneAlpha));
-            drawWorldNoteShape(matrix, laneX + 0.105F, 0.34F, availableLaneWidth, 0.085F, 0.045F, appearance.skin(), lane, withAlpha(laneColor, 225));
-            int burst = bursts[owner][lane];
-            if (burst > 0) {
-                float pulse = burst / 8.0F;
-                float spread = 0.015F + (1.0F - pulse) * 0.035F;
-                drawWorldNoteShape(matrix, laneX + 0.105F, 0.34F, availableLaneWidth + spread * 2.0F, 0.095F + spread, 0.050F + spread, appearance.skin(), lane, withAlpha(lighten(laneColor, 255), Math.round(245 * pulse)));
+        // The panel's geometry and colours are BattlePanelRenderer.drawWorld's, which battle-panel-geometry measures;
+        // here it goes into one buffer under the panel's pose and is drawn once, in the order it was filled.
+        BufferBuilder buffer = Tesselator.getInstance().begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_COLOR);
+        BattlePanelRenderer.drawWorld(worldSink(buffer, matrix),
+                new BattlePanelRenderer.World.Panel(owner, color, spectatorNoteAppearances[owner], speed, duration,
+                        flashes[owner], bursts[owner]),
+                time, noteList, worldAspect(matrix));
+        // The panel and its score are marked, so an effect that leaves the interface uncovered leaves them too.
+        boolean marked = ClientModelGlowEngine.beginPanelFxMaskWrite();
+        try {
+            BufferUploader.drawWithShader(buffer.buildOrThrow());
+            drawWorldPanelStats(pose, score, combo, color);
+        } finally {
+            if (marked) {
+                ClientModelGlowEngine.endPanelFxMaskWrite();
             }
         }
-
-        int leadTicks = NoteSpeed.leadTicks(speed);
-        float spawnY = worldNoteSpawnY(appearance.skin());
-        for (ClientNote note : noteList) {
-            if (note.resolved || note.owner != owner) {
-                continue;
-            }
-            if (!noteVisibleAt(time, note.tick, note.durationTicks, leadTicks)) {
-                continue;
-            }
-            float laneX = firstLaneX + note.lane * laneWidth;
-            int laneColor = appearance.color(note.lane);
-            float noteY = note.started ? 0.34F : noteTravelY(time, note.tick, leadTicks, spawnY, 0.34F, 0.67F);
-            if (note.durationTicks > 0) {
-                float tailY = noteTravelY(time, note.tick + note.durationTicks, leadTicks, spawnY, 0.34F, 0.67F);
-                float top = Math.min(noteY, tailY);
-                float bottom = Math.max(noteY, tailY);
-                drawQuad(matrix, laneX + 0.08F, top, laneX + 0.13F, bottom, withAlpha(laneColor, 230));
-            }
-            if (!note.started) {
-                float noteHalf = 0.035F;
-                drawWorldNoteShape(matrix, laneX + 0.105F, noteY, availableLaneWidth, 0.075F, noteHalf + 0.005F, appearance.skin(), note.lane, withAlpha(laneColor, 245));
-                drawWorldNoteShape(matrix, laneX + 0.105F, noteY, availableLaneWidth * 0.60F, 0.045F, noteHalf * 0.5F, appearance.skin(), note.lane, lighten(laneColor, 245));
-            }
-        }
-
-        drawWorldPanelStats(pose, score, combo, color);
         RenderSystem.depthMask(true);
         RenderSystem.enableDepthTest();
         RenderSystem.enableCull();
         pose.popPose();
     }
 
+    /** The controller's name for BattlePanelRenderer.World.spawnY; world-note-shape asks it by this name. */
     private static float worldNoteSpawnY(int skin) {
-        // Full-width figures need room above their center to clear the progress strip at -0.47.
-        return skin == NoteAppearance.BARS ? -0.38F : -0.34F;
+        return BattlePanelRenderer.World.spawnY(skin);
     }
 
-    private static void drawWorldNoteShape(Matrix4f matrix, float centerX, float centerY, float availableLaneWidth, float halfWidth,
-                                           float halfHeight, int skin, int lane, int color) {
-        BufferBuilder buffer = Tesselator.getInstance().begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_COLOR);
-        emitWorldNoteShape(buffer, matrix, centerX, centerY, availableLaneWidth, halfWidth, halfHeight, skin, lane, color);
-        BufferUploader.drawWithShader(buffer.buildOrThrow());
+    /** Writes a world panel into one buffer under the panel's pose. */
+    private static BattlePanelRenderer.WorldSink worldSink(BufferBuilder buffer, Matrix4f matrix) {
+        return new BattlePanelRenderer.WorldSink() {
+            @Override
+            public void quad(float left, float top, float right, float bottom, int color) {
+                buffer.addVertex(matrix, left, bottom, 0.0F).setColor(color);
+                buffer.addVertex(matrix, right, bottom, 0.0F).setColor(color);
+                buffer.addVertex(matrix, right, top, 0.0F).setColor(color);
+                buffer.addVertex(matrix, left, top, 0.0F).setColor(color);
+            }
+
+            @Override
+            public void glyph(float centerX, float centerY, float room, float barHalfWidth, float barHalfHeight, int skin,
+                              int lane, int color) {
+                emitWorldNoteShape(buffer, matrix, centerX, centerY, room, barHalfWidth, barHalfHeight, skin, lane, color);
+            }
+
+            @Override
+            public void insetArrow(int lane, float centerX, float centerY, float halfSize, float thickness, int color) {
+                BattleNoteShape.drawInsetArrowTriangles(worldTriangles(buffer, matrix), lane, centerX, centerY, halfSize,
+                        thickness, color);
+            }
+        };
     }
 
     private static void emitWorldNoteShape(BufferBuilder buffer, Matrix4f matrix, float centerX, float centerY,
                                            float availableLaneWidth, float barHalfWidth, float barHalfHeight,
                                            int skin, int lane, int color) {
-        // Non-bar heads and receptors fill 93% of the lane; compensate any unequal X/Y pose scale.
-        float halfWidth = skin == NoteAppearance.BARS ? barHalfWidth : availableLaneWidth * 0.465F;
-        float basisX = (float)Math.sqrt(matrix.m00()*matrix.m00() + matrix.m01()*matrix.m01() + matrix.m02()*matrix.m02());
-        float basisY = (float)Math.sqrt(matrix.m10()*matrix.m10() + matrix.m11()*matrix.m11() + matrix.m12()*matrix.m12());
-        float halfHeight = skin == NoteAppearance.BARS ? barHalfHeight : halfWidth * (basisY > 0.00001F ? basisX / basisY : 1.0F);
-        BattleNoteShape.drawTriangles((x1, y1, x2, y2, x3, y3, fillColor) -> {
+        // Non-bar heads and receptors fill 93% of the lane, kept square under an unequal X/Y pose scale.
+        BattlePanelRenderer.World.Area box = BattlePanelRenderer.World.glyph(centerX, centerY, availableLaneWidth,
+                barHalfWidth, barHalfHeight, skin, worldAspect(matrix));
+        BattleNoteShape.drawTriangles(worldTriangles(buffer, matrix), skin, lane, box.left(), box.top(), box.right(),
+                box.bottom(), color);
+    }
+
+    private static BattleNoteShape.TriangleFill worldTriangles(BufferBuilder buffer, Matrix4f matrix) {
+        return (x1, y1, x2, y2, x3, y3, fillColor) -> {
             buffer.addVertex(matrix, x1, y1, 0.0F).setColor(fillColor);
             buffer.addVertex(matrix, x2, y2, 0.0F).setColor(fillColor);
             buffer.addVertex(matrix, x3, y3, 0.0F).setColor(fillColor);
             buffer.addVertex(matrix, x3, y3, 0.0F).setColor(fillColor);
-        }, skin, lane, centerX-halfWidth, centerY-halfHeight, centerX+halfWidth, centerY+halfHeight, color);
+        };
     }
 
+    /** The pose's x scale over its y scale: what keeps a world arrow or circle square on screen. */
+    private static float worldAspect(Matrix4f matrix) {
+        float basisX = (float) Math.sqrt(matrix.m00() * matrix.m00() + matrix.m01() * matrix.m01() + matrix.m02() * matrix.m02());
+        float basisY = (float) Math.sqrt(matrix.m10() * matrix.m10() + matrix.m11() * matrix.m11() + matrix.m12() * matrix.m12());
+        return basisY > 0.00001F ? basisX / basisY : 1.0F;
+    }
+
+    /**
+     * The combo and the score above a world panel: the HUD's own score line ("SCORE 12", "СЧЁТ 12") and its "x12" in the
+     * HUD's combo colour, rather than English words in every language and a combo in the panel's colour, which is
+     * near-black by default.
+     */
     private static void drawWorldPanelStats(PoseStack pose, int score, int combo, int color) {
         Minecraft minecraft = Minecraft.getInstance();
         Font font = minecraft.font;
         MultiBufferSource.BufferSource buffers = minecraft.renderBuffers().bufferSource();
-        String scoreText = "SCORE " + Math.max(0, score);
-        String comboText = "COMBO x" + Math.max(0, combo);
+        Component scoreText = Component.translatable("music_battle.settings.score", Math.max(0, score));
+        String comboText = "x" + Math.max(0, combo);
         pose.pushPose();
         pose.translate(0.0F, -0.72F, 0.01F);
         pose.scale(0.018F, 0.018F, 0.018F);
-        font.drawInBatch(scoreText, -font.width(scoreText) / 2.0F, 0.0F, 0xFFFFFFFF, false,
+        font.drawInBatch(scoreText, -font.width(scoreText) / 2.0F, 0.0F, ru.gora.musicbattle.client.ui.Palette.TEXT_1, false,
                 pose.last().pose(), buffers, Font.DisplayMode.SEE_THROUGH, 0, 0x00F000F0);
-        font.drawInBatch(comboText, -font.width(comboText) / 2.0F, -11.0F, lighten(color, 255), false,
+        font.drawInBatch(comboText, -font.width(comboText) / 2.0F, -11.0F, BattlePanelRenderer.comboColor(color, combo), false,
                 pose.last().pose(), buffers, Font.DisplayMode.SEE_THROUGH, 0, 0x00F000F0);
         buffers.endBatch();
         pose.popPose();
@@ -4049,6 +5133,8 @@ public final class ClientBattleController {
         private boolean pendingComplete;
         private boolean pendingRemoteState;
         private boolean pendingRemoteStateReady;
+        /** The number of the action whose score and combo wait here (remoteStateArrivals). */
+        private long pendingArrival;
         private int pendingLeftScore;
         private int pendingRightScore;
         private int pendingCombo;
@@ -4089,6 +5175,71 @@ public final class ClientBattleController {
         @Override
         public boolean resolved() {
             return resolved;
+        }
+    }
+
+    /**
+     * Lane flashes and hit bursts that count down on the battle clock from the tick they were shown at, one step per
+     * battle tick, instead of on client ticks. An action held for its tick is shown at a frame between two client
+     * ticks; counted down by the next client tick, its brightest step lasted anything from a moment to a whole tick,
+     * and after each pause by a different amount, since a pause moves the battle clock against the client's ticks.
+     * Lanes not started here are counted down on client ticks, as every flash always was.
+     */
+    private static final class TimedLaneFlashes {
+        static final int BURST_TICKS = 8;
+        private final float[][] startedAt = new float[2][4];
+        private final int[][] flashTicks = new int[2][4];
+
+        private TimedLaneFlashes() {
+            clear();
+        }
+
+        void start(int owner, int lane, int flash, float tick) {
+            startedAt[owner][lane] = tick;
+            flashTicks[owner][lane] = flash;
+        }
+
+        void stop(int owner, int lane) {
+            startedAt[owner][lane] = Float.NaN;
+        }
+
+        boolean timed(int owner, int lane) {
+            return !Float.isNaN(startedAt[owner][lane]);
+        }
+
+        boolean anyTimed() {
+            for (int owner = 0; owner < 2; owner++) {
+                for (int lane = 0; lane < 4; lane++) {
+                    if (timed(owner, lane)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        /** Sets every timed lane's flash and burst for the battle clock {@code clock}; a lane that has run out stops. */
+        void apply(float clock, int[][] flashes, int[][] bursts) {
+            for (int owner = 0; owner < 2; owner++) {
+                for (int lane = 0; lane < 4; lane++) {
+                    if (!timed(owner, lane)) {
+                        continue;
+                    }
+                    // A clock behind the start (a seek back) keeps the first step rather than growing past it.
+                    int elapsed = Math.max(0, Mth.floor(clock - startedAt[owner][lane]));
+                    flashes[owner][lane] = Math.max(0, flashTicks[owner][lane] - elapsed);
+                    bursts[owner][lane] = Math.max(0, BURST_TICKS - elapsed);
+                    if (flashes[owner][lane] == 0 && bursts[owner][lane] == 0) {
+                        stop(owner, lane);
+                    }
+                }
+            }
+        }
+
+        void clear() {
+            for (float[] lanes : startedAt) {
+                Arrays.fill(lanes, Float.NaN);
+            }
         }
     }
 

@@ -37,7 +37,7 @@ import ru.gora.musicbattle.server.MusicBattleTracks;
 import ru.gora.musicbattle.workshop.api.AtomicFiles;
 
 /**
- * Comments stored on this Minecraft server (spec 06 section 9.2, amended by 08 A5.2).
+ * Comments stored on this Minecraft server.
  *
  * <p>One JSON document per map under {@code <world>/blocky_music/comments/<key>.json}, where {@code key} is
  * {@code ws_<setId>} for a Workshop set (all revisions share one thread) or {@code track_<trackId>} for a legacy
@@ -204,7 +204,7 @@ public final class ServerComments {
         applyRetention();
         if (limits().enabled()) {
             MusicBattleMod.LOGGER.info(
-                    "Blocky Music server comments are on ({} maps, retention {}). You are responsible for them; "
+                    "Blocky Music server comments are on ({} beatmaps, retention {}). You are responsible for them; "
                             + "/musicbattle comments disable turns them off.",
                     documentCount,
                     limits().retentionDays() == 0
@@ -242,7 +242,7 @@ public final class ServerComments {
 
     // ---------------------------------------------------------------- keys and paths
 
-    /** The full key rule of 08 A5.2: grammar first, then existence for {@code track_} keys. */
+    /** The full key rule: grammar first, then existence for {@code track_} keys. */
     public static Optional<String> keyError(String key) {
         if (key == null || !KEY.matcher(key).matches()) {
             return Optional.of(ERROR_BAD_KEY);

@@ -95,6 +95,8 @@ public final class UploadLayout {
     private static final float CHECK = 10F;
     private static final float FIELD_H = 17F;
     private static final float SELECT_H = 17F;
+    /** The least room either side of a bar button's label before the quiet buttons move to a row of their own. */
+    private static final float BAR_TIGHT_PAD = 5F;
 
     private final TextMeasurer measurer;
     private final Tr tr;
@@ -136,11 +138,13 @@ public final class UploadLayout {
         boolean compact = Metrics.compact(width, height);
         float buttonH = compact ? 16F : 19F;
         float barPad = compact ? 4F : 6F;
-        float barH = buttonH + barPad * 2;
-        Rect viewport = new Rect(0, 0, width, Math.max(20F, height - barH));
         float outer = width < NARROW ? 6F : 10F;
         float column = Math.min(width - outer * 2 - Metrics.SCROLLBAR, MAX_COLUMN);
         float columnX = (width - column) * 0.5F;
+        float barPadX = Math.min(column < NARROW ? S4 : 32 * PX, 12F);
+        BarRows rows = barRows(column - barPadX * 2, buttonH);
+        float barH = rows.height() + barPad * 2;
+        Rect viewport = new Rect(0, 0, width, Math.max(20F, height - barH));
 
         float y = compact ? 8F : S6;
         y = header(columnX, column, y);
@@ -167,7 +171,7 @@ public final class UploadLayout {
         content.resize("panel", new Rect(columnX, panelTop, column, panelBottom - panelTop));
         content.setContentHeight(panelBottom + S6);
 
-        actions(width, height, barH, buttonH, columnX, column, padX);
+        actions(width, height, barH, barPad, buttonH, columnX + barPadX, column - barPadX * 2, rows);
         return new Page(content, bar, viewport, List.copyOf(clicks));
     }
 
@@ -882,83 +886,143 @@ public final class UploadLayout {
 
     // ---------------------------------------------------------------- the pinned bar
 
+    /** The bar's buttons: id, words and look ("primary", "secondary" or "ghost"), the quiet ones on the left. */
+    private record BarButton(String id, String label, String look, boolean left) {
+        TextStyle style() {
+            return "primary".equals(look) ? TextStyle.STRONG : TextStyle.BODY;
+        }
+    }
+
     /**
-     * The step's buttons, as the site's {@code upw-actions}: the quiet way back on the left, the one primary action
-     * on the right at the site's 200 px minimum while there is room.
+     * How the bar's buttons sit: in one row with the site's padding, in one row with less, or with the quiet buttons on
+     * a row of their own above the others; {@code pad} is the room either side of each label.
      */
-    private void actions(float width, float height, float barH, float buttonH, float columnX, float column, float padX) {
-        float top = height - barH;
-        bar.add("bar", "", Kind.PANEL, new Rect(0, top, width, barH));
-        float left = columnX + Math.min(padX, 12F);
-        float right = columnX + column - Math.min(padX, 12F);
-        float by = top + (barH - buttonH) * 0.5F;
-        List<String[]> leftButtons = new ArrayList<>();
-        List<String[]> rightButtons = new ArrayList<>();
+    private record BarRows(List<BarButton> buttons, int rows, float pad, float buttonH) {
+        float height() {
+            return rows * buttonH + (rows - 1) * S2;
+        }
+    }
+
+    /** The step's buttons, as the site's {@code upw-actions}: the quiet way back on the left, the step's action right. */
+    private List<BarButton> barButtons() {
+        List<BarButton> out = new ArrayList<>();
         switch (state.step()) {
-            case RULES -> rightButtons.add(new String[] {"bar.next", state.busy() ? tr.get(K + "accept.busy") : tr.get(K + "understood"),
-                    "primary"});
+            case RULES -> out.add(new BarButton("bar.next", state.busy() ? tr.get(K + "accept.busy") : tr.get(K + "understood"),
+                    "primary", false));
             case FILES -> {
-                leftButtons.add(new String[] {"bar.back", state.update() ? tr.get(WorkshopStrings.KEY + "cancel") : tr.get(K + "back"),
-                        "ghost"});
-                rightButtons.add(new String[] {"bar.next", tr.get(K + "files.next"), "primary"});
+                out.add(new BarButton("bar.back", state.update() ? tr.get(WorkshopStrings.KEY + "cancel") : tr.get(K + "back"),
+                        "ghost", true));
+                out.add(new BarButton("bar.next", tr.get(K + "files.next"), "primary", false));
             }
             case DETAILS -> {
-                leftButtons.add(new String[] {"bar.back", tr.get(K + "back"), "ghost"});
-                rightButtons.add(new String[] {"bar.next", tr.get(K + "details.next"), "primary"});
+                out.add(new BarButton("bar.back", tr.get(K + "back"), "ghost", true));
+                out.add(new BarButton("bar.next", tr.get(K + "details.next"), "primary", false));
             }
             case PUBLISH -> {
-                leftButtons.add(new String[] {"bar.back", tr.get(K + "back"), "ghost"});
-                rightButtons.add(new String[] {"bar.publish", state.update() ? tr.get(K + "publish.update") : tr.get(K + "publish"),
-                        "primary"});
+                out.add(new BarButton("bar.back", tr.get(K + "back"), "ghost", true));
+                out.add(new BarButton("bar.publish", state.update() ? tr.get(K + "publish.update") : tr.get(K + "publish"),
+                        "primary", false));
             }
             case PROGRESS -> {
                 if (state.resultStatus() != null) {
-                    leftButtons.add(new String[] {"bar.another", tr.get(K + "progress.another"), "ghost"});
-                    rightButtons.add(new String[] {"bar.install", tr.get(K + "install"), "secondary"});
-                    rightButtons.add(new String[] {"bar.open", tr.get(K + "open_set"), "primary"});
+                    out.add(new BarButton("bar.another", tr.get(K + "progress.another"), "ghost", true));
+                    out.add(new BarButton("bar.install", tr.get(K + "install"), "secondary", false));
+                    out.add(new BarButton("bar.open", tr.get(K + "open_set"), "primary", false));
                 } else if (state.failure() != null) {
-                    leftButtons.add(new String[] {"bar.close", tr.get(WorkshopStrings.KEY + "close"), "ghost"});
-                    rightButtons.add(new String[] {"bar.edit", tr.get(K + "progress.back_to_edit"), "primary"});
+                    out.add(new BarButton("bar.close", tr.get(WorkshopStrings.KEY + "close"), "ghost", true));
+                    out.add(new BarButton("bar.edit", tr.get(K + "progress.back_to_edit"), "primary", false));
                 } else if (state.running()) {
-                    leftButtons.add(new String[] {"bar.cancel", tr.get(WorkshopStrings.KEY + "cancel"), "ghost"});
+                    out.add(new BarButton("bar.cancel", tr.get(WorkshopStrings.KEY + "cancel"), "ghost", true));
                 }
             }
         }
-        float gap = S3;
-        float available = right - left;
+        return out;
+    }
+
+    /**
+     * One row with the site's padding while the labels fit it, then one row with {@link #BAR_TIGHT_PAD}, then the quiet
+     * buttons on a row of their own. The buttons used to shrink with their labels: in Russian at 320 units the result
+     * step's three read "Загрузить е…", "Установи…" and "Открыть страницу…".
+     */
+    private BarRows barRows(float available, float buttonH) {
+        List<BarButton> buttons = barButtons();
         float pad = buttonH >= 19F ? S6 : S4;
-        List<String[]> all = new ArrayList<>(leftButtons);
+        if (rowWidth(buttons, pad) <= available + TextFit.FIT_EPSILON) {
+            return new BarRows(buttons, 1, pad, buttonH);
+        }
+        if (rowWidth(buttons, BAR_TIGHT_PAD) <= available + TextFit.FIT_EPSILON) {
+            return new BarRows(buttons, 1, BAR_TIGHT_PAD, buttonH);
+        }
+        boolean split = buttons.stream().anyMatch(BarButton::left) && buttons.stream().anyMatch(button -> !button.left());
+        return new BarRows(buttons, split ? 2 : 1, BAR_TIGHT_PAD, buttonH);
+    }
+
+    /** The width of the buttons in one row with {@code pad} beside each label and the gaps between them. */
+    private float rowWidth(List<BarButton> buttons, float pad) {
+        float total = S3 * Math.max(0, buttons.size() - 1);
+        for (BarButton button : buttons) {
+            total += TextFit.width(measurer, button.label(), button.style()) + pad * 2;
+        }
+        return total;
+    }
+
+    /**
+     * The bar under the page: the quiet buttons on the left and the step's action on the right, at the site's 200 px
+     * minimum while there is room; on two rows the quiet ones sit above.
+     */
+    private void actions(float width, float height, float barH, float barPad, float buttonH, float left, float available,
+                         BarRows rows) {
+        float top = height - barH;
+        bar.add("bar", "", Kind.PANEL, new Rect(0, top, width, barH));
+        float right = left + available;
+        float gap = S3;
+        List<BarButton> leftButtons = rows.buttons().stream().filter(BarButton::left).toList();
+        List<BarButton> rightButtons = rows.buttons().stream().filter(button -> !button.left()).toList();
+        if (rows.rows() == 2) {
+            row(leftButtons, List.of(), left, right, top + barPad, gap, rows.pad(), buttonH);
+            row(List.of(), rightButtons, left, right, top + barPad + buttonH + S2, gap, rows.pad(), buttonH);
+        } else {
+            row(leftButtons, rightButtons, left, right, top + barPad, gap, rows.pad(), buttonH);
+        }
+    }
+
+    /** One row of the bar: {@code leftButtons} from the left edge, {@code rightButtons} against the right one. */
+    private void row(List<BarButton> leftButtons, List<BarButton> rightButtons, float left, float right, float by, float gap,
+                     float pad, float buttonH) {
+        List<BarButton> all = new ArrayList<>(leftButtons);
         all.addAll(rightButtons);
+        float available = right - left;
         float[] widths = new float[all.size()];
-        float natural = gap * Math.max(0, all.size() - 1) + (leftButtons.isEmpty() || rightButtons.isEmpty() ? 0 : gap);
+        float natural = gap * Math.max(0, all.size() - 1);
         for (int i = 0; i < all.size(); i++) {
-            TextStyle style = "primary".equals(all.get(i)[2]) ? TextStyle.STRONG : TextStyle.BODY;
-            widths[i] = TextFit.width(measurer, all.get(i)[1], style) + pad * 2;
+            widths[i] = TextFit.width(measurer, all.get(i).label(), all.get(i).style()) + pad * 2;
             natural += widths[i];
         }
         // The site's 200 px minimum for the big buttons, only while it leaves the row room.
         float minPrimary = Math.min(200 * PX * 0.8F, available * 0.45F);
         for (int i = 0; i < all.size(); i++) {
-            if ("primary".equals(all.get(i)[2]) && widths[i] < minPrimary && natural + (minPrimary - widths[i]) <= available) {
+            if ("primary".equals(all.get(i).look()) && widths[i] < minPrimary && natural + (minPrimary - widths[i]) <= available) {
                 natural += minPrimary - widths[i];
                 widths[i] = minPrimary;
             }
         }
-        if (natural > available) {
-            float scale = (available - gap * Math.max(0, all.size())) / Math.max(1F, natural - gap * Math.max(0, all.size()));
+        if (natural > available + TextFit.FIT_EPSILON) {
+            // Only a language whose words do not fit even one to a row gets here; the workshop-text check proves the
+            // shipped ones never do from 320 units up.
+            float scale = (available - gap * Math.max(0, all.size() - 1)) / Math.max(1F, natural - gap * Math.max(0, all.size() - 1));
             for (int i = 0; i < widths.length; i++) {
                 widths[i] *= scale;
             }
         }
         float x = left;
         for (int i = 0; i < leftButtons.size(); i++) {
-            button(all.get(i), x, by, widths[i], buttonH);
+            button(all.get(i), x, by, widths[i], buttonH, pad);
             x += widths[i] + gap;
         }
         x = right;
         for (int i = all.size() - 1; i >= leftButtons.size(); i--) {
             x -= widths[i];
-            button(all.get(i), x, by, widths[i], buttonH);
+            button(all.get(i), x, by, widths[i], buttonH, pad);
             x -= gap;
         }
     }
@@ -972,11 +1036,12 @@ public final class UploadLayout {
         };
     }
 
-    private void button(String[] spec, float x, float y, float w, float h) {
-        String id = spec[0];
-        TextStyle style = "primary".equals(spec[2]) ? TextStyle.STRONG : TextStyle.BODY;
+    private void button(BarButton spec, float x, float y, float w, float h, float pad) {
+        String id = spec.id();
+        TextStyle style = spec.style();
         bar.add(id, "bar", Kind.BUTTON, new Rect(x, y, w, h));
-        bar.labelCentered(id + ".text", id, x + w * 0.5F, y + (h - style.capHeight()) * 0.5F, Math.max(1, w - 6), spec[1], style);
+        bar.labelCentered(id + ".text", id, x + w * 0.5F, y + (h - style.capHeight()) * 0.5F, Math.max(1, w - pad * 2),
+                spec.label(), style);
         clicks.add(id);
     }
 }

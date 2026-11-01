@@ -54,16 +54,17 @@ public final class SmileyMotionChecks {
     }
 
     private static void instantNotesInterruptIdleFade() {
+        float released = 1 + ClientBattleAnimation.pressPoseTicks(120);
         for (int from = 0; from < 4; from++) for (int to = 0; to < 4; to++) {
             var holder = ClientBattleAnimation.createLayer();
             ClientBattleAnimation.update(holder, 10, from, 0, 120, 0);
             ClientBattleAnimation.update(holder, 11, from, 0, 120, 1);
-            ClientBattleAnimation.update(holder, 11, from, 0, 120, 10);
-            // The preceding tap has just returned to idle; its fade has not ticked out.
-            ClientBattleAnimation.update(holder, 12, to, 0, 120, 10.25F);
+            ClientBattleAnimation.update(holder, 11, from, 0, 120, released + 0.25F);
+            // The preceding tap's window has just ended and it is still easing back to idle.
+            ClientBattleAnimation.update(holder, 12, to, 0, 120, released + 0.5F);
             var direct = ClientBattleAnimation.createLayer();
-            ClientBattleAnimation.update(direct, 0, to, 0, 120, 10.25F);
-            ClientBattleAnimation.update(direct, 1, to, 0, 120, 10.25F);
+            ClientBattleAnimation.update(direct, 0, to, 0, 120, released + 0.5F);
+            ClientBattleAnimation.update(direct, 1, to, 0, 120, released + 0.5F);
             samePose(holder, direct, "lane " + from + " -> idle fade -> " + to);
         }
     }
@@ -74,7 +75,9 @@ public final class SmileyMotionChecks {
 
         var direct = ClientBattleAnimation.createLayer();
         ClientBattleAnimation.update(direct, 0, 2, 0, 120, 5.0F);
-        ClientBattleAnimation.update(direct, 1, 2, 0, 120, 6.0F);
+        // The same press seen as it happened and drawn at the same moment: the same pose, and as much of its punch.
+        ClientBattleAnimation.update(direct, 1, 2, 0, 120, 5.5F, 5.5F);
+        ClientBattleAnimation.update(direct, 1, 2, 0, 120, 6.0F, 5.5F);
         samePose(late, direct, "fresh trigger survives a lazily attached player layer");
 
         var stale = ClientBattleAnimation.createLayer();
@@ -91,10 +94,13 @@ public final class SmileyMotionChecks {
             int both = (1 << from) | (1 << to);
             ClientBattleAnimation.update(holder, 0, from, 0, 120, 0);
             ClientBattleAnimation.update(holder, 1, from, both, 120, 1);
-            // Releasing the preferred key selects the other held direction without a new press.
-            ClientBattleAnimation.update(holder, 1, from, 1 << to, 120, 1.5F);
+            // Releasing the preferred key selects the other held direction without a new press, once the press
+            // has had its window: a tap released at once keeps its pose that long instead of flashing for a frame.
+            float released = 1 + ClientBattleAnimation.pressPoseTicks(120) + 0.5F;
+            ClientBattleAnimation.update(holder, 1, from, both, 120, released - 0.25F);
+            ClientBattleAnimation.update(holder, 1, from, 1 << to, 120, released);
             var direct = ClientBattleAnimation.createLayer();
-            ClientBattleAnimation.update(direct, 0, to, 1 << to, 120, 1.5F);
+            ClientBattleAnimation.update(direct, 0, to, 1 << to, 120, released);
             samePose(holder, direct, "hold " + from + " -> " + to);
         }
     }
@@ -112,8 +118,11 @@ public final class SmileyMotionChecks {
         var holder = ClientBattleAnimation.createLayer();
         ClientBattleAnimation.update(holder, 0, 0, 0, 120, 0);
         ClientBattleAnimation.update(holder, 1, 0, 0, 120, 1);
+        // Both samples come after the press's punch has settled, so only the clip's own motion can move the head.
+        float settled = 1 + ClientBattleAnimation.PRESS_PUNCH_TICKS;
+        ClientBattleAnimation.update(holder, 1, 0, 0, 120, settled);
         Vec3f before = transform(holder, "head", TransformType.ROTATION, 0);
-        ClientBattleAnimation.update(holder, 1, 0, 0, 120, 2.25F);
+        ClientBattleAnimation.update(holder, 1, 0, 0, 120, settled + 1.25F);
         Vec3f after = transform(holder, "head", TransformType.ROTATION, 0);
         check(distance(before, after) > 0.001, "instant clip changes must preserve motion inside the selected clip");
     }
@@ -175,7 +184,10 @@ public final class SmileyMotionChecks {
         // These coordinates are independently derived from the authored pivot/rotation.
         for (int heldMask : new int[]{0, 1}) {
             var holder = ClientBattleAnimation.createLayer();
-            ClientBattleAnimation.update(holder, 0, 0, 0, 120, 0);
+            // Pressed long enough before tick zero for its punch to have settled into the clip's own pose.
+            float pressed = -ClientBattleAnimation.PRESS_PUNCH_TICKS - 1;
+            ClientBattleAnimation.update(holder, 0, 0, 0, 120, pressed);
+            ClientBattleAnimation.update(holder, 1, 0, heldMask, 120, pressed);
             ClientBattleAnimation.update(holder, 1, 0, heldMask, 120, 0);
             Vec3f head = transform(holder, "head", TransformType.POSITION, 0);
             near(head.getX(), -0.382664F, "updated first button head X, held=" + heldMask);
@@ -196,7 +208,10 @@ public final class SmileyMotionChecks {
             ClientBattleAnimation.update(holder, 0, 0, 0, 120, battleTick);
         } else {
             int lane = Integer.parseInt(clip.substring("lane_".length()));
-            ClientBattleAnimation.update(holder, 0, lane, 0, 120, battleTick);
+            // The approved values are the clip's own: sample after the press's punch has settled.
+            float pressed = battleTick - ClientBattleAnimation.PRESS_PUNCH_TICKS - 1;
+            ClientBattleAnimation.update(holder, 0, lane, 0, 120, pressed);
+            ClientBattleAnimation.update(holder, 1, lane, held ? 1 << lane : 0, 120, pressed);
             ClientBattleAnimation.update(holder, 1, lane, held ? 1 << lane : 0, 120, battleTick);
         }
         for (int partIndex = 0; partIndex < PLAYER_PARTS.size(); partIndex++) {

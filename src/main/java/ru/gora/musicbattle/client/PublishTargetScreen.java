@@ -10,7 +10,7 @@ import ru.gora.musicbattle.server.MusicBattleTracks;
 
 /**
  * Where does this track go: to the Minecraft server you are on (the existing publish flow), or to the Workshop as a
- * beatmap (spec 06 section 5, "Publish to Workshop" on local rows of the track library)?
+ * beatmap ("Publish to Workshop" on local rows of the track library)?
  */
 public final class PublishTargetScreen extends WorkshopDialogScreen {
     PublishTargetScreen(TrackLibraryScreen parent, MusicBattleTracks.Track track) {

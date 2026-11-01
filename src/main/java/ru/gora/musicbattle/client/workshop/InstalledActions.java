@@ -28,16 +28,14 @@ import ru.gora.musicbattle.workshop.api.WorkshopApi;
 import ru.gora.musicbattle.workshop.api.WorkshopApiException;
 
 /**
- * What the Installed tab and the set page do with a set on disk (spec 06 sections 6.1 and 8.4): open its folder,
+ * What the Installed tab and the set page do with a set on disk: open its folder,
  * copy it into {@code my_tracks}, choose the audio file of a bring-your-own-audio set, and delete the local copy.
  *
- * <p>"Copy to my tracks" is a transfer in the sense of 08 A5.1: it is refused for a withdrawn set or one whose last
- * installed-check is older than seven days, and it checks online first when it can.
+ * <p>"Copy to my tracks" is a transfer like handing a set to a server: it is refused for a withdrawn set or one whose
+ * last installed-check is older than seven days, and it checks online first when it can.
  */
 public final class InstalledActions {
     private static final long MAX_COPY_BYTES = 256L * 1024 * 1024;
-    /** A local audio file may differ from the declared duration by this much and still be accepted (spec 06 section 8.4). */
-    private static final long DURATION_TOLERANCE_MS = 1500;
 
     private InstalledActions() {
     }
@@ -179,8 +177,10 @@ public final class InstalledActions {
     }
 
     /**
-     * "Choose audio file" for a set with external audio (spec 06 section 8.4 with the review's rules): an Ogg Vorbis
-     * file whose SHA-256 matches is taken as is; otherwise the duration must match within ±1.5 s.
+     * "Choose audio file" for a set with external audio (the checks themselves are
+     * {@link ChosenAudio}): an Ogg Vorbis file whose SHA-256 matches is taken as it is; any other song
+     * the mod reads (MP3, FLAC, WAV, M4A, Opus and the rest) is converted to Ogg Vorbis by the mod itself, off the
+     * render thread, with a "Converting the song" message; then the length must match within ±1.5 s.
      */
     public static void chooseAudio(WorkshopScreen screen, WorkshopClient client, long setId) {
         WorkshopCatalog.InstalledSet set = client.catalog().bySetId(setId).orElse(null);
@@ -191,37 +191,45 @@ public final class InstalledActions {
         if (picked == null) {
             return;
         }
-        client.io().execute(() -> {
+        String shown = String.valueOf(picked.getFileName());
+        // Not on the Workshop IO thread: a conversion takes a second or two, and the inbox and installed-check queue
+        // behind that thread.
+        Util.nonCriticalIoPool().execute(() -> {
             try {
                 BeatmapManifest.Audio declared = set.manifest().audio();
-                String name = String.valueOf(picked.getFileName()).toLowerCase(Locale.ROOT);
-                if (!name.endsWith(".ogg")) {
-                    screen.later(() -> screen.showMessage(Component.translatable(WorkshopStrings.KEY + "audio.not_ogg_title"),
-                            Component.translatable(WorkshopStrings.KEY + "audio.not_ogg")));
-                    return;
-                }
-                String sha = sha256(picked);
-                boolean exact = sha.equalsIgnoreCase(declared.sha256());
-                boolean byDuration = false;
-                if (!exact) {
-                    long duration = MusicBattleTracks.readOggDurationTicks(picked) * 50L;
-                    byDuration = Math.abs(duration - declared.durationMs()) <= DURATION_TOLERANCE_MS;
-                }
-                if (!exact && !byDuration) {
-                    screen.later(() -> screen.showMessage(Component.translatable(WorkshopStrings.KEY + "audio.mismatch_title"),
-                            Component.translatable(WorkshopStrings.KEY + "audio.mismatch")));
-                    return;
-                }
                 Path target = set.directory().resolve(WorkshopLayout.audioFileName(setId));
-                Files.copy(picked, target, StandardCopyOption.REPLACE_EXISTING);
-                client.catalog().refresh();
-                ru.gora.musicbattle.client.ClientTrackAssets.refreshHashIndex();
-                boolean matchedBySha = exact;
-                screen.later(() -> {
-                    screen.onCatalogChanged();
-                    screen.showMessage(Component.translatable(WorkshopStrings.KEY + "audio.added_title"),
-                            Component.translatable(WorkshopStrings.KEY + (matchedBySha ? "audio.added_exact" : "audio.added_duration")));
-                });
+                ChosenAudio.Result result = ChosenAudio.adopt(picked, target, declared.sha256(), declared.durationMs(),
+                        () -> screen.showMessage(Component.translatable(WorkshopStrings.KEY + "audio.converting_title"),
+                                Component.translatable(WorkshopStrings.KEY + "audio.converting", shown)));
+                switch (result.kind()) {
+                    case EXACT, BY_DURATION -> {
+                        client.catalog().refresh();
+                        ru.gora.musicbattle.client.ClientTrackAssets.refreshHashIndex();
+                        String key = result.kind() == ChosenAudio.Kind.EXACT ? "audio.added_exact"
+                                : result.converted() ? "audio.added_converted" : "audio.added_duration";
+                        screen.later(() -> {
+                            screen.onCatalogChanged();
+                            screen.showMessage(Component.translatable(WorkshopStrings.KEY + "audio.added_title"),
+                                    Component.translatable(WorkshopStrings.KEY + key));
+                        });
+                    }
+                    case MISMATCH -> screen.later(() -> screen.showMessage(
+                            Component.translatable(WorkshopStrings.KEY + "audio.mismatch_title"),
+                            Component.translatable(WorkshopStrings.KEY + "audio.mismatch")));
+                    case UNSUPPORTED -> screen.later(() -> screen.showMessage(
+                            Component.translatable(WorkshopStrings.KEY + "audio.unsupported_title"),
+                            result.formatName() == null
+                                    ? Component.translatable(WorkshopStrings.KEY + "audio.unsupported", shown)
+                                    : Component.translatable(WorkshopStrings.KEY + "audio.unsupported_named", shown,
+                                            result.formatName())));
+                    case CONVERSION_FAILED -> {
+                        MusicBattleMod.LOGGER.warn("Converting the chosen song failed: {}", result.reason());
+                        screen.later(() -> screen.showMessage(
+                                Component.translatable(WorkshopStrings.KEY + "audio.convert_failed_title"),
+                                Component.translatable(WorkshopStrings.KEY + "audio.convert_failed", shown,
+                                        String.valueOf(result.reason()))));
+                    }
+                }
             } catch (IOException | RuntimeException exception) {
                 MusicBattleMod.LOGGER.warn("Choosing audio failed: {}", MusicBattleTracks.safeMessage(exception));
                 screen.later(() -> screen.showError("install_failed"));

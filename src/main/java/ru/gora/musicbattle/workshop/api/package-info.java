@@ -1,5 +1,5 @@
 /**
- * The Workshop client core without screens (spec 06 sections 4, 7, 8): the HTTP client ({@code WorkshopApi}) and its
+ * The Workshop client core without screens: the HTTP client ({@code WorkshopApi}) and its
  * records, sign-in ({@code WorkshopSession}, {@code DeviceFlow}, {@code MinecraftSignIn}), downloads and installed
  * state ({@code WorkshopDownloader}, {@code InstalledCheck}), the inbox ({@code WorkshopInbox}) and the consent file
  * ({@code WorkshopConfig}).

@@ -20,7 +20,7 @@ public final class ClientPayloadBridgeChecks {
 
     private static final String BRIDGE = "src/main/java/ru/gora/musicbattle/network/ClientPayloadBridge.java";
     private static final String CONTROLLER = "ru.gora.musicbattle.client.ClientBattleController";
-    /** The second owner, added in wave M3: everything the server's Workshop features send (spec 06 section 10). */
+    /** The second owner: everything the server's Workshop features send. */
     private static final String WORKSHOP_HOOKS = "ru.gora.musicbattle.client.workshop.WorkshopClientHooks";
 
     public static void main(String[] args) throws Exception {

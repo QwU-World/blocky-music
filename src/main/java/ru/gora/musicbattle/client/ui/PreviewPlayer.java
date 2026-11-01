@@ -13,7 +13,7 @@ import ru.gora.musicbattle.MusicBattleMod;
 import ru.gora.musicbattle.client.ExternalOggSoundInstance;
 
 /**
- * One Workshop audio preview at a time (research section 9): a non-positional Ogg Vorbis stream through the
+ * One Workshop audio preview at a time: a non-positional Ogg Vorbis stream through the
  * mod's existing {@link ExternalOggSoundInstance} path, from a file or from bytes held in memory.
  *
  * <ul>
@@ -36,13 +36,23 @@ public final class PreviewPlayer {
     public static final long MAX_PREVIEW_BYTES = 8L * 1024 * 1024;
 
     private static volatile PreviewSound current;
+    /** The key of the last preview that ended because it could not be played; cleared when that key starts again. */
+    private static volatile String failedKey;
 
     private PreviewPlayer() {
     }
 
     /** Plays an Ogg Vorbis file. Replaces any preview that is playing. */
     public static void play(String key, Path file, long durationMs, float volume) {
-        start(new PreviewSound(key, () -> Files.newInputStream(file), String.valueOf(file), durationMs, volume));
+        play(key, file, durationMs, volume, 0L);
+    }
+
+    /**
+     * Plays an Ogg Vorbis file from {@code startMs} into it, as the site's upload page plays the chosen 30-second
+     * window: the frames before it are decoded and skipped, so {@link #progress} runs over the window, not the song.
+     */
+    public static void play(String key, Path file, long durationMs, float volume, long startMs) {
+        start(new PreviewSound(key, () -> Files.newInputStream(file), String.valueOf(file), durationMs, volume, startMs));
     }
 
     /** Plays Ogg Vorbis bytes from memory. Replaces any preview that is playing. */
@@ -50,13 +60,16 @@ public final class PreviewPlayer {
         if (ogg == null || ogg.length == 0 || ogg.length > MAX_PREVIEW_BYTES) {
             return;
         }
-        start(new PreviewSound(key, () -> new ByteArrayInputStream(ogg), "preview bytes " + key, durationMs, volume));
+        start(new PreviewSound(key, () -> new ByteArrayInputStream(ogg), "preview bytes " + key, durationMs, volume, 0L));
     }
 
     private static void start(PreviewSound sound) {
         stop();
         Minecraft minecraft = Minecraft.getInstance();
         minecraft.getMusicManager().stopPlaying();
+        if (sound.key.equals(failedKey)) {
+            failedKey = null;
+        }
         current = sound;
         sound.requestedNanos = Util.getNanos();
         minecraft.getSoundManager().play(sound);
@@ -130,8 +143,23 @@ public final class PreviewPlayer {
         boolean finished = sound.startedNanos != 0L && progress(sound.startedNanos, now, sound.durationMs) >= 1.0F;
         boolean stuck = sound.startedNanos == 0L && now - sound.requestedNanos > START_TIMEOUT_NANOS;
         if (finished || stuck || sound.failed.get()) {
+            if (stuck || sound.failed.get()) {
+                failedKey = sound.key;
+            }
             stop();
         }
+    }
+
+    /**
+     * Whether the preview for {@code key} ended because it could not be played (the decoder refused it, or its channel
+     * never started), once: the answer is consumed, so a screen that says so says it once.
+     */
+    public static boolean takeFailure(String key) {
+        if (key != null && key.equals(failedKey)) {
+            failedKey = null;
+            return true;
+        }
+        return false;
     }
 
     /** Game bus, sound thread: the channel for a preview has started playing. */
@@ -152,13 +180,15 @@ public final class PreviewPlayer {
         volatile long startedNanos;
         volatile long requestedNanos;
 
-        PreviewSound(String key, AudioSource audio, String description, long durationMs, float volume) {
-            this(key, audio, description, durationMs, volume, new AtomicBoolean());
+        PreviewSound(String key, AudioSource audio, String description, long durationMs, float volume, long startMs) {
+            this(key, audio, description, durationMs, volume, startMs, new AtomicBoolean());
         }
 
-        private PreviewSound(String key, AudioSource audio, String description, long durationMs, float volume, AtomicBoolean failed) {
+        private PreviewSound(String key, AudioSource audio, String description, long durationMs, float volume, long startMs,
+                             AtomicBoolean failed) {
             super(MusicBattleMod.id("workshop_preview/" + Integer.toHexString(key.toLowerCase(Locale.ROOT).hashCode())),
-                    SoundSource.MASTER, audio, description, Math.max(0.0F, Math.min(1.0F, volume)), message -> failed.set(true));
+                    SoundSource.MASTER, audio, description, Math.max(0.0F, Math.min(1.0F, volume)), Math.max(0L, startMs),
+                    message -> failed.set(true));
             this.key = key;
             this.durationMs = durationMs > 0 ? durationMs : DEFAULT_DURATION_MS;
             this.failed = failed;

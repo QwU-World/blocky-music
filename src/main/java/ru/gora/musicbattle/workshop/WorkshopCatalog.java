@@ -26,7 +26,7 @@ import java.util.regex.Pattern;
  * {@code beatmap.meta}. It is the source of truth for "installed" (like lazer's realm), indexed by set id and by
  * {@code contentSha256}.
  *
- * <p><b>Isolation (spec 06 section 8.2):</b> this is client-only state. Nothing here references MusicBattleTracks,
+ * <p><b>Isolation:</b> this is client-only state. Nothing here references MusicBattleTracks,
  * and installed sets are never added to its {@code availableTracks()}: in singleplayer the integrated server shares
  * the JVM, and a leak would turn every player's downloads into server tracks. The {@code workshop-catalog-isolation}
  * check proves it.
@@ -59,7 +59,7 @@ public final class WorkshopCatalog {
             return manifest.revision();
         }
 
-        /** The offline card data (spec 08 A5.5), or empty when the set was installed without it (drop, inbox). */
+        /** The offline card data, or empty when the set was installed without it (drop, inbox). */
         public Optional<JsonObject> cardJson() {
             return Optional.ofNullable(card).map(JsonObject::deepCopy);
         }
@@ -215,7 +215,7 @@ public final class WorkshopCatalog {
         return Optional.ofNullable(snapshot.bySetId().get(setId));
     }
 
-    /** The hash index: which installed set has exactly this content (spec 01 section 6.4 fingerprint). */
+    /** The hash index: which installed set has exactly this content (its fingerprint). */
     public Optional<InstalledSet> byContentSha256(String contentSha256) {
         return contentSha256 == null ? Optional.empty() : Optional.ofNullable(snapshot.byContent().get(contentSha256));
     }
@@ -235,7 +235,7 @@ public final class WorkshopCatalog {
     }
 
     /**
-     * Rebuilds a {@code .blockymap} from an installed set (review of 06 section 9.1): the original
+     * Rebuilds a {@code .blockymap} from an installed set: the original
      * {@code beatmap.meta}, every declared file re-hashed against the manifest, and the site's {@code beatmap.sig}
      * when the set was installed from a signed package. There is no package cache and no second download; a file
      * that no longer matches its declared hash aborts the repack instead of shipping altered bytes.
@@ -302,7 +302,7 @@ public final class WorkshopCatalog {
         return chunkSize > 0 && size % chunkSize == 0;
     }
 
-    /** Whether the installed copy still carries the site's signature, so it may be offered to a server (08 A5.3). */
+    /** Whether the installed copy still carries the site's signature, so it may be offered to a server. */
     public boolean signed(long setId) {
         return bySetId(setId).filter(set -> {
             Path signature = set.directory().resolve(WorkshopLayout.SIGNATURE_FILE_NAME);

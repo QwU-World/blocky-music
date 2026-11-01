@@ -4,7 +4,8 @@ param(
     [ValidateSet('Compile', 'Check', 'Build', 'Deploy', 'Full', 'FullDeploy')]
     [string]$Mode = 'Compile',
 
-    [string]$ModsDir = 'Z:\Modrinth\profiles\test\mods'
+    # Deploy and FullDeploy install the jar here: the mods folder of the Minecraft instance you test with.
+    [string]$ModsDir = $env:BLOCKY_MODS_DIR
 )
 
 Set-StrictMode -Version Latest
@@ -19,17 +20,12 @@ function Get-GradleCommand {
         return $wrapper
     }
 
-    $knownGradle = 'C:\Gradle\gradle-8.14.4\bin\gradle.bat'
-    if (Test-Path -LiteralPath $knownGradle -PathType Leaf) {
-        return $knownGradle
-    }
-
     $command = Get-Command 'gradle.bat' -ErrorAction SilentlyContinue
     if ($null -ne $command) {
         return $command.Source
     }
 
-    throw 'Gradle was not found. Install Gradle 8.14.4 or add gradlew.bat to the project.'
+    throw 'Gradle was not found: there is no gradlew.bat in the project and no gradle.bat on PATH.'
 }
 
 function Get-ProjectProperty {
@@ -185,6 +181,10 @@ $gradleArguments = switch ($Mode) {
     'Deploy'     { @('assemble', '--build-cache', '--configuration-cache', '--console=plain') }
     'Full'       { @('clean', 'build', '--build-cache', '--configuration-cache', '--stacktrace', '--console=plain') }
     'FullDeploy' { @('clean', 'build', '--build-cache', '--configuration-cache', '--stacktrace', '--console=plain') }
+}
+
+if ($Mode -in @('Deploy', 'FullDeploy') -and [string]::IsNullOrWhiteSpace($ModsDir)) {
+    throw "$Mode needs the mods folder of your test instance: pass -ModsDir <folder> or set BLOCKY_MODS_DIR."
 }
 
 $timer = [System.Diagnostics.Stopwatch]::StartNew()

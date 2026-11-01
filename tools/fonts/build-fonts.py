@@ -7,7 +7,7 @@ only when a style, a tier or the character set changes.
     python3 tools/fonts/build-fonts.py                     # downloads the pinned Google Fonts files
     python3 tools/fonts/build-fonts.py --source Nunito[wght].ttf --ofl OFL.txt
 
-Why each step (docs: blocky-music-workshop/docs/research/mc-gui-feasibility.md, section 4):
+Why each step:
 - Minecraft's TTF provider cannot choose a weight on a variable font, and Nunito[wght].ttf defaults to
   wght 200 (ExtraLight), so every weight is instanced to its own static file.
 - FreeType in 1.21.1 refuses anything that is not "TrueType", so outlines stay quadratic (glyf).

@@ -20,7 +20,7 @@ import ru.gora.musicbattle.MusicBattleMod;
  * style's font ({@code Font.width(String)} does not), ellipsis and wrapping with our own line height, and
  * queued drawing that does not flush. Render thread only.
  *
- * <p>Rules (research section 4): no pose scaling of text; no bold style (it smears by one GUI unit) and no
+ * <p>Rules: no pose scaling of text; no bold style (it smears by one GUI unit) and no
  * shadow; draw user text as components so bidi reordering applies; skip text whose alpha is below 4, which
  * Minecraft would otherwise draw opaque. Edit boxes keep the vanilla font, because {@code EditBox} measures
  * its caret with it; see {@link #editBox}.

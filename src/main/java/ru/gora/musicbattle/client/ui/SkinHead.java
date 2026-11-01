@@ -33,8 +33,7 @@ import net.minecraft.resources.ResourceLocation;
 import ru.gora.musicbattle.MusicBattleMod;
 
 /**
- * Heads of server-comment authors (spec 06 section 9.3 as amended by the 17 September 2026 review; owner rule:
- * by nickname, Steve without a licensed account).
+ * Heads of server-comment authors (owner rule: by nickname, Steve without a licensed account).
  *
  * <ol>
  *   <li>Textures with a signature that Minecraft verifies as secure: that skin.</li>

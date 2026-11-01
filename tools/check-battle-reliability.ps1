@@ -4,7 +4,7 @@ $ErrorActionPreference = 'Stop'
 $projectDir = Split-Path -Parent $PSScriptRoot
 $outputDir = Join-Path $projectDir 'build\battle-reliability-checks'
 New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
-$javaDir = 'C:\Program Files\Eclipse Adoptium\jdk-21.0.11.10-hotspot\bin'
+$javaDir = & (Join-Path $PSScriptRoot 'find-jdk.ps1')
 # The note-numbering round trip runs the real server order, the real chart writer and the real client reader, so
 # this check needs the compiled mod and Minecraft on the classpath - the pure sources below are still compiled
 # here, because they are what the clock and camera checks are about.
@@ -14,7 +14,8 @@ $jars = foreach ($group in $groups) {
     if (Test-Path -LiteralPath $dir) { Get-ChildItem -LiteralPath $dir -Recurse -Filter '*.jar' | Where-Object Name -notmatch '(-sources|-javadoc|-natives-)' | Select-Object -ExpandProperty FullName }
 }
 $jars = @($jars | Where-Object { [IO.Path]::GetFileName($_) -ne 'fastutil-8.3.1.jar' })
-$classes = if ($Packaged) { "$projectDir/build/libs/blocky_music-0.1.0.jar" } else { "$projectDir/build/classes/java/main" }
+$modVersion = (Select-String -LiteralPath "$projectDir/gradle.properties" -Pattern '^mod_version=(.+)$').Matches[0].Groups[1].Value.Trim()
+$classes = if ($Packaged) { "$projectDir/build/libs/blocky_music-$modVersion.jar" } else { "$projectDir/build/classes/java/main" }
 $cp = (@($outputDir, $classes, "$projectDir/build/moddev/artifacts/neoforge-21.1.230-merged.jar", "$projectDir/build/moddev/artifacts/neoforge-21.1.230-client-extra-aka-minecraft-resources.jar") + @($jars)) -join [IO.Path]::PathSeparator
 $sources = @(
     'src/main/java/ru/gora/musicbattle/client/BattleCameraInterpolation.java',

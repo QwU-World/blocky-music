@@ -8,8 +8,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.ArrayDeque;
+import java.util.Collection;
 import java.util.Deque;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Comparator;
 import java.util.HashSet;
@@ -29,7 +29,9 @@ import ru.gora.musicbattle.client.ui.TextField;
 import ru.gora.musicbattle.client.ui.TextStyle;
 import ru.gora.musicbattle.client.ui.TextStyles;
 import ru.gora.musicbattle.client.ui.UiClip;
+import ru.gora.musicbattle.client.ui.UiTooltip;
 import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.gui.screens.inventory.tooltip.ClientTooltipPositioner;
 import net.minecraft.client.renderer.texture.DynamicTexture;
 import net.minecraft.client.resources.sounds.SoundInstance;
 import net.minecraft.network.chat.Component;
@@ -62,6 +64,33 @@ public final class TrackEditorScreen extends Screen {
     /** Height of the bar that holds the title, Exit and Save; the editor scrolls beneath it. */
     private static final int TOP_BAR = 30;
     private static final int SCROLL_STEP = 24;
+    /** The beat-1 field's label; the editor-layout check measures it across the field and its "1" button. */
+    private static final String OFFSET_LABEL = "music_battle.l10n.editor.beat_one_at";
+    /** The form's fixed field widths: BPM holds three digits, the offset a few, and the volume slider only a knob. */
+    private static final int BPM_WIDTH = 56;
+    private static final int OFFSET_WIDTH = 50;
+    private static final int BEAT_ONE_WIDTH = 20;
+    private static final int VOLUME_WIDTH = 90;
+    /** Where the audio path starts in the wide form's right column and in the narrow form's BPM row. */
+    private static final int WIDE_AUDIO_X = BPM_WIDTH + 6 + VOLUME_WIDTH + 8;
+    private static final int NARROW_AUDIO_X = BPM_WIDTH + 4 + OFFSET_WIDTH + 2 + BEAT_ONE_WIDTH + 6 + VOLUME_WIDTH + 8;
+    /**
+     * The narrowest the audio path's field may be: it holds its label ("Audio from music_battle_raw") and its hint in
+     * either language at every GUI scale. Below it the narrow form gives the path a row of its own, and the wide form
+     * stays one column. editor-layout measures every label and hint against its field with the game's own metrics.
+     */
+    private static final int AUDIO_FIELD_MIN = 116;
+    /** P1 blue and P2 red, the sides the battle's default panels colour that way; one hue each in every state. */
+    private static final int P1_COLOR = 0xFF55DDF5;
+    private static final int P2_COLOR = 0xFFFF6680;
+    /** Selection outlines and the hold grab bars; gold, so they never read as either player's colour. */
+    private static final int SELECTION_COLOR = Palette.ST_FEATURED;
+    /**
+     * The line of beat 1 and the "Bar 1" over it: the accent, bright among the grey bar lines. Not yellow, which is
+     * the playhead's colour, so the line that only marks where bar 1 starts is never taken for the one that can be
+     * dragged.
+     */
+    private static final int BEAT_ONE_COLOR = Palette.ACCENT;
     private final Screen parent;
     /** Labels of the form fields, placed by init() beside the fields they name. */
     private final List<FieldLabel> fieldLabels = new ArrayList<>();
@@ -117,6 +146,7 @@ public final class TrackEditorScreen extends Screen {
     private boolean initialTrackLoaded;
     private float editorVolume;
     private String status = "";
+    private StatusLevel statusLevel = StatusLevel.INFO;
     private int statusTicks;
     private TrackEffect.Type effectType = TrackEffect.Type.FLASH;
     /** Zero-based absolute FX row shown at the top of the six-row viewport. */
@@ -163,7 +193,9 @@ public final class TrackEditorScreen extends Screen {
     private final Set<TrackEffect> selectedEffects = new HashSet<>();
     private final Deque<EditorSnapshot> undoHistory = new ArrayDeque<>();
     private final Deque<EditorSnapshot> redoHistory = new ArrayDeque<>();
-    private ClipboardData clipboard = new ClipboardData(List.of(), List.of(), 0);
+    private ChartEdits.Clipboard clipboard = ChartEdits.Clipboard.EMPTY;
+    /** The fine line the copied group's first item last stood on: where it was copied from, then each paste of it. */
+    private long clipboardAnchor;
     private int draggedEffectIndex = -1;
     private DragMode effectDragMode = DragMode.MOVE;
     private int dragGrabOffsetTicks;
@@ -184,6 +216,24 @@ public final class TrackEditorScreen extends Screen {
     private double pendingNoteMouseX;
     private double pendingNoteMouseY;
     private int pendingNoteButton;
+    /** A Ctrl press on the grid: a still release toggles what is under it, a drag draws a selection rectangle. */
+    private boolean selectPressPending;
+    /**
+     * The button that press came with, so its drag and release are recognised: the left button, or on a Mac the right
+     * one, because Minecraft turns a physical Ctrl + left press there into a right click (see macControlClick).
+     */
+    private int selectPressButton;
+    private boolean selectDragging;
+    /** Ctrl+Shift adds the rectangle to what was selected; Ctrl alone replaces the selection with it. */
+    private boolean selectAdds;
+    private double selectPressX;
+    private double selectPressY;
+    private double selectDragX;
+    private double selectDragY;
+    /** The editor as the Ctrl press found it: the selection a rectangle adds to, and the step Ctrl+Z returns to. */
+    private EditorSnapshot selectionBefore;
+    /** The beat-1 offset the player was last told about, so a typed change can say what it did; -1 before the first. */
+    private int shownOffsetMs = -1;
     private boolean timelineScrubbing;
     private boolean resumePreviewAfterScrub;
     /** A left press on the playhead: a drag moves the play position, a still release is an ordinary grid click. */
@@ -194,6 +244,15 @@ public final class TrackEditorScreen extends Screen {
     /** The hand cursor this screen set itself; HandCursor only serves Workshop layers and resets it every frame. */
     private static long playheadHandCursor;
     private boolean playheadCursorShown;
+    /**
+     * The hints of the beat-1 field, its "1" button and the grid button, drawn in the toolkit's look; see
+     * {@link #setTooltipForNextRenderPass}. Each is made once and kept: init() runs again on every page scroll, and a
+     * new vanilla tooltip per run would pile up in the holder.
+     */
+    private final UiTooltip.Deferred tooltips = new UiTooltip.Deferred();
+    private Tooltip beatOneAtTooltip;
+    private Tooltip beatOneTooltip;
+    private final Tooltip[] gridTooltips = new Tooltip[GRID_DIVISIONS.length];
     private TrackEffect effectTooltipHoverEffect;
     private int effectTooltipHoverIndex = -1;
     private double effectTooltipMouseX = Double.NaN;
@@ -238,12 +297,19 @@ public final class TrackEditorScreen extends Screen {
             titleBox = addBox(slots.title(), Component.translatable("music_battle.l10n.editor.text_026"), "music_battle.l10n.editor.hint_title", defaultTitle());
             descriptionBox = addBox(slots.description(), Component.translatable(descriptionLabel), "music_battle.l10n.editor.hint_description", defaultDescription());
             bpmBox = addBox(slots.bpm(), Component.literal("BPM"), "music_battle.l10n.editor.hint_bpm", defaultBpm());
-            offsetBox = addBox(slots.offset(), Component.translatable("music_battle.l10n.editor.offset"), "music_battle.l10n.editor.hint_offset", defaultOffset());
-            offsetBox.setTooltip(Tooltip.create(Component.translatable("music_battle.l10n.editor.offset_tooltip")));
+            // The field and its "1" button are one control, so their label names what both set and spans them both.
             FieldSlot beatOne = slots.beatOne();
+            offsetBox = addBox(slots.offset(), Component.translatable(OFFSET_LABEL), "music_battle.l10n.editor.hint_offset", defaultOffset());
+            fieldLabels.set(fieldLabels.size() - 1, new FieldLabel(Component.translatable(OFFSET_LABEL), slots.offset().x(),
+                    slots.offset().y(), beatOne.x() + beatOne.width() - slots.offset().x()));
+            if (beatOneAtTooltip == null) {
+                beatOneAtTooltip = tooltips.create(Component.translatable("music_battle.l10n.editor.beat_one_at_hint"));
+                beatOneTooltip = tooltips.create(Component.translatable("music_battle.l10n.editor.beat_one_hint"));
+            }
+            offsetBox.setTooltip(beatOneAtTooltip);
             Button beatOneButton = this.addRenderableWidget(FancyButton.create(Component.translatable("music_battle.l10n.editor.beat_one"),
                     button -> setBeatOneAtPlayhead(), beatOne.x(), beatOne.y(), beatOne.width(), 18));
-            beatOneButton.setTooltip(Tooltip.create(Component.translatable("music_battle.l10n.editor.beat_one_tooltip")));
+            beatOneButton.setTooltip(beatOneTooltip);
             volumeSlider = this.addRenderableWidget(new VolumeSlider(slots.volume().x(), slots.volume().y(), slots.volume().width(), 18));
             audioBox = addBox(slots.audio(), Component.translatable("music_battle.l10n.editor.text_029"), "music_battle.l10n.editor.hint_audio", audioValue);
             previewBox = addBox(slots.preview(), Component.translatable("music_battle.l10n.editor.text_030"), "music_battle.l10n.editor.hint_preview", previewValue);
@@ -278,7 +344,8 @@ public final class TrackEditorScreen extends Screen {
             triggerPreviewNoteEffects(renderTick);
         }
         ClientTrackEffects.EffectState effectState = previewPlaying
-                ? ClientTrackEffects.sample(effects, renderTick, bpm())
+                ? ClientTrackEffects.sample(effects, renderTick, bpm(), 1.0F, 1.0F,
+                        (float) ChartBeat.originTicks(offsetMs()))
                 : ClientTrackEffects.sample(List.of(), -1.0F);
         graphics.pose().pushPose();
         try {
@@ -297,9 +364,10 @@ public final class TrackEditorScreen extends Screen {
                     drawPreviewImage(graphics);
                 }
                 drawGrid(graphics);
-                if (editorPage == EditorPage.NOTES) {
+                if (editorPage == EditorPage.NOTES && !selectDragging) {
                     renderHoveredNoteHandles(graphics, mouseX, mouseY);
                 }
+                drawSelectionRectangle(graphics);
                 int contentMouseY = mouseY < TOP_BAR ? -1 : mouseY;
                 for (Renderable renderable : this.renderables) {
                     if (renderable != exitButton && renderable != saveButton) {
@@ -314,14 +382,19 @@ public final class TrackEditorScreen extends Screen {
         } finally {
             graphics.pose().popPose();
         }
+        // Both tips go in the tip layer, above the controls' own: in it the BPM and beat-1 boxes' shadowed values,
+        // drawn 0.03 forward, printed through a card lying over them.
         if (editorPage == EditorPage.FX) {
-            ClientUiForeground.render(graphics.pose(), graphics::flush,
+            ClientUiForeground.renderTip(graphics.pose(), graphics::flush,
                     () -> renderEffectTooltip(graphics, mouseX, mouseY));
         }
+        // The hints of the beat-1 controls and the grid button, after everything so the card lies over the controls.
+        ClientUiForeground.renderTip(graphics.pose(), graphics::flush,
+                () -> tooltips.draw(graphics, mouseX, mouseY, this.width, this.height, getFocused()));
         // The Leave dialog renders this screen behind itself; only the screen on top may change the cursor.
         if (this.minecraft != null && this.minecraft.screen == this) {
             showPlayheadCursor(playheadDragging || (draggedNote == null && draggedEffectIndex < 0 && !timelineScrubbing
-                    && overPlayhead(mouseX, mouseY) && (editorPage == EditorPage.FX
+                    && !selectPressPending && overPlayhead(mouseX, mouseY) && (editorPage == EditorPage.FX
                             ? hoveredEffectInfo(mouseX, mouseY) == null : hoveredNoteInfo(mouseX, mouseY) == null)));
         }
     }
@@ -341,6 +414,7 @@ public final class TrackEditorScreen extends Screen {
                 status = "";
             }
         }
+        reportTypedOffset();
         if (!previewPlaying) {
             return;
         }
@@ -352,7 +426,7 @@ public final class TrackEditorScreen extends Screen {
                 return;
             }
             previewStartedAtNanos = audioSignal;
-            setStatus("OK: " + I18n.get("music_battle.l10n.editor.audio_started", previewStartedAtTick));
+            setStatus(StatusLevel.OK, I18n.get("music_battle.l10n.editor.audio_started", previewStartedAtTick));
         }
 
         float exactTick = currentPreviewTick();
@@ -386,20 +460,11 @@ public final class TrackEditorScreen extends Screen {
             beginTimelineScrub(mouseX);
             return true;
         }
-        if (button == 0 && hasControlDown()) {
-            if (editorPage == EditorPage.FX) {
-                HoveredEffect hovered = hoveredEffectInfo(mouseX, mouseY);
-                if (hovered != null) {
-                    toggleSelection(selectedEffects, hovered.effect());
-                    return true;
-                }
-            } else {
-                HoveredNote hovered = hoveredNoteInfo(mouseX, mouseY);
-                if (hovered != null) {
-                    toggleSelection(selectedNotes, hovered.note());
-                    return true;
-                }
-            }
+        // Ctrl (on a Mac Ctrl or Cmd) with the left button selects: a click toggles what is under it, a drag draws a
+        // rectangle.
+        if ((button == 0 && EditorShortcuts.shortcutDown() || macControlClick(button)) && overSelectionArea(mouseX, mouseY)) {
+            beginSelectionPress(mouseX, mouseY, button);
+            return true;
         }
         if (editorPage == EditorPage.FX && button == 0) {
             HoveredEffect hovered = hoveredEffectInfo(mouseX, mouseY);
@@ -412,9 +477,11 @@ public final class TrackEditorScreen extends Screen {
             HoveredNote hovered = hoveredNoteInfo(mouseX, mouseY);
             if (hovered != null) {
                 if (!selectedNotes.contains(hovered.note())) {
-                    selectedNotes.clear();
-                    selectedEffects.clear();
-                    selectedNotes.add(hovered.note());
+                    changeSelection(() -> {
+                        selectedNotes.clear();
+                        selectedEffects.clear();
+                        selectedNotes.add(hovered.note());
+                    });
                 }
                 beginNoteSelectionDrag(hovered, mouseX, mouseY);
                 return true;
@@ -436,13 +503,172 @@ public final class TrackEditorScreen extends Screen {
             pendingNoteButton = button;
             return true;
         }
-        if (insideGrid(mouseX, mouseY)) {
-            pushUndoSnapshot();
-        }
         if (toggleGridNote(mouseX, mouseY, button)) {
             return true;
         }
         return super.mouseClicked(mouseX, mouseY, button);
+    }
+
+    /** The grid, or a selected hold's handles where they overhang it: where a Ctrl press selects rather than clicks. */
+    private boolean overSelectionArea(double mouseX, double mouseY) {
+        return insideGrid(mouseX, mouseY) || (editorPage == EditorPage.FX
+                ? hoveredEffectInfo(mouseX, mouseY) != null : hoveredNoteInfo(mouseX, mouseY) != null);
+    }
+
+    /**
+     * On a Mac, Minecraft hands a screen a physical Ctrl + left press as a right click (MouseHandler's fake right
+     * button), and Screen.hasControlDown() there means Cmd. Without this, Ctrl+click turned a note into a hold and
+     * Ctrl+drag selected nothing, so a Mac player could select only with Cmd. Ctrl held at the press is what makes it
+     * a selection, the same physical key the guide names and the one the letter shortcuts take (EditorShortcuts).
+     */
+    private static boolean macControlClick(int button) {
+        return button == GLFW.GLFW_MOUSE_BUTTON_RIGHT && EditorShortcuts.onMac() && EditorShortcuts.controlDown();
+    }
+
+    private void beginSelectionPress(double mouseX, double mouseY, int button) {
+        pendingNotePlacement = false;
+        clearNoteSelectionDrag();
+        clearEffectDrag();
+        selectPressPending = true;
+        selectPressButton = button;
+        selectDragging = false;
+        selectAdds = EditorShortcuts.shiftDown();
+        selectPressX = mouseX;
+        selectPressY = mouseY;
+        selectDragX = mouseX;
+        selectDragY = mouseY;
+        selectionBefore = snapshotTimeline();
+    }
+
+    /** The rectangle replaces the selection, or with Shift joins it, live while the mouse moves. */
+    private void applySelectionRectangle() {
+        double left = Math.min(selectPressX, selectDragX);
+        double right = Math.max(selectPressX, selectDragX);
+        double top = Math.min(selectPressY, selectDragY);
+        double bottom = Math.max(selectPressY, selectDragY);
+        selectedNotes.clear();
+        selectedEffects.clear();
+        if (selectAdds && selectionBefore != null) {
+            selectedNotes.addAll(selectionBefore.selectedNotes());
+            selectedEffects.addAll(selectionBefore.selectedEffects());
+        }
+        if (editorPage == EditorPage.FX) {
+            selectedEffects.addAll(effectsInRectangle(left, top, right, bottom));
+        } else {
+            selectedNotes.addAll(notesInRectangle(left, top, right, bottom));
+        }
+    }
+
+    /**
+     * A still Ctrl click toggles the note or effect under it, as before; a drag keeps what its rectangle took. Either
+     * way the selection it replaced becomes a Ctrl+Z step, so a wrong selection is undone like a wrong edit.
+     */
+    private void finishSelectionPress(double mouseX, double mouseY) {
+        EditorSnapshot before = selectionBefore;
+        if (selectDragging) {
+            selectDragX = mouseX;
+            selectDragY = mouseY;
+            applySelectionRectangle();
+        } else if (editorPage == EditorPage.FX) {
+            HoveredEffect hovered = hoveredEffectInfo(selectPressX, selectPressY);
+            if (hovered != null) {
+                toggleSelection(selectedEffects, hovered.effect());
+            }
+        } else {
+            HoveredNote hovered = hoveredNoteInfo(selectPressX, selectPressY);
+            if (hovered != null) {
+                toggleSelection(selectedNotes, hovered.note());
+            }
+        }
+        boolean dragged = selectDragging;
+        clearSelectionPress();
+        if (before != null && selectionDiffers(before)) {
+            pushUndoSnapshot(before);
+        }
+        if (dragged) {
+            setStatus(StatusLevel.OK, I18n.get("music_battle.l10n.editor.selected_count", selectedNotes.size() + selectedEffects.size()));
+        }
+    }
+
+    private void clearSelectionPress() {
+        selectPressPending = false;
+        selectDragging = false;
+        selectAdds = false;
+        selectionBefore = null;
+    }
+
+    /**
+     * The edited player's notes whose drawn shape the rectangle touches, a hold anywhere from its press to its release:
+     * what is seen is what is taken. The other player's notes, drawn faintly for reference, are never taken.
+     */
+    private Set<BattleNote> notesInRectangle(double left, double top, double right, double bottom) {
+        Grid grid = grid();
+        int laneHeight = Math.max(1, grid.height / NOTE_LANES);
+        int step = stepTicks();
+        ensureTimelineCache();
+        Set<BattleNote> inside = new HashSet<>();
+        for (BattleNote note : cachedPageNotes) {
+            if (note.owner() != owner) {
+                continue;
+            }
+            NoteBounds bounds = noteBounds(note, grid, laneHeight, step);
+            if (bounds.left() <= right && bounds.right() >= left && bounds.top() <= bottom && bounds.bottom() >= top) {
+                inside.add(note);
+            }
+        }
+        return inside;
+    }
+
+    /** The effects in the visible rows whose drawn bar meets the rectangle. */
+    private Set<TrackEffect> effectsInRectangle(double left, double top, double right, double bottom) {
+        Grid grid = grid();
+        int laneHeight = Math.max(1, grid.height / FX_LANES);
+        int step = stepTicks();
+        ensureTimelineCache();
+        Set<TrackEffect> inside = new HashSet<>();
+        for (TrackEffect effect : cachedPageEffects) {
+            EffectBounds bounds = effectBounds(effect, grid, laneHeight, step);
+            if (bounds.left() <= right && bounds.right() >= left && bounds.top() <= bottom && bounds.bottom() >= top) {
+                inside.add(effect);
+            }
+        }
+        return inside;
+    }
+
+    private void drawSelectionRectangle(GuiGraphics graphics) {
+        if (!selectDragging) {
+            return;
+        }
+        Grid grid = grid();
+        float left = (float) Mth.clamp(Math.min(selectPressX, selectDragX), grid.x, grid.x + grid.width);
+        float right = (float) Mth.clamp(Math.max(selectPressX, selectDragX), grid.x, grid.x + grid.width);
+        float top = (float) Mth.clamp(Math.min(selectPressY, selectDragY), grid.y, grid.y + grid.height);
+        float bottom = (float) Mth.clamp(Math.max(selectPressY, selectDragY), grid.y, grid.y + grid.height);
+        if (right - left < 1.0F || bottom - top < 1.0F) {
+            return;
+        }
+        RoundedRect.fill(graphics, left, top, right - left, bottom - top, Palette.RADIUS_SM, Palette.withAlpha(Palette.ACCENT, 0.16F));
+        RoundedRect.stroke(graphics, left, top, right - left, bottom - top, Palette.RADIUS_SM, 1.0F, Palette.ACCENT);
+    }
+
+    /** Ctrl+A: every note of the player being edited that starts on this page, or every effect in the visible rows. */
+    private void selectPage() {
+        int pageEnd = pageStartTick + pageTicks();
+        changeSelection(() -> {
+            selectedNotes.clear();
+            selectedEffects.clear();
+            if (editorPage == EditorPage.FX) {
+                ensureTimelineCache();
+                for (TrackEffect effect : cachedPageEffects) {
+                    if (effect.tick() >= pageStartTick && effect.tick() < pageEnd) {
+                        selectedEffects.add(effect);
+                    }
+                }
+            } else {
+                selectedNotes.addAll(ChartEdits.pageSelection(notes, owner, pageStartTick, pageEnd));
+            }
+        });
+        setStatus(StatusLevel.OK, I18n.get("music_battle.l10n.editor.selected_page", selectedNotes.size() + selectedEffects.size()));
     }
 
     @Override
@@ -466,7 +692,7 @@ public final class TrackEditorScreen extends Screen {
         pendingEffectStartTick = -1;
         pendingEffectLane = -1;
         cachedFirstVisibleFxRow = -1;
-        setStatus(I18n.get("music_battle.l10n.editor.visible_rows", firstVisibleFxRow + 1, firstVisibleFxRow + FX_LANES));
+        setStatus(StatusLevel.OK, I18n.get("music_battle.l10n.editor.visible_rows", firstVisibleFxRow + 1, firstVisibleFxRow + FX_LANES));
         return true;
     }
 
@@ -474,7 +700,7 @@ public final class TrackEditorScreen extends Screen {
     private boolean scrollPage(double wheel) {
         int max = maxScroll();
         if (max <= 0 || wheel == 0.0D || timelineScrubbing || playheadDragging || playheadPressPending
-                || draggedNote != null || draggedEffectIndex >= 0) {
+                || draggedNote != null || draggedEffectIndex >= 0 || selectPressPending) {
             return false;
         }
         int next = Mth.clamp(this.scrollY - (int) Math.round(wheel * SCROLL_STEP), 0, max);
@@ -491,37 +717,39 @@ public final class TrackEditorScreen extends Screen {
         if (this.getFocused() instanceof EditorField field && field.isFocused()) {
             return super.keyPressed(keyCode, scanCode, modifiers);
         }
-        if (hasControlDown() && keyCode == GLFW.GLFW_KEY_Z) {
-            if (hasShiftDown()) {
+        // Ctrl on every system, and on a Mac Cmd too: Screen.hasControlDown() there is Cmd only, and the guide says Ctrl.
+        boolean shortcut = EditorShortcuts.shortcutDown();
+        if (shortcut && keyCode == GLFW.GLFW_KEY_Z) {
+            if (EditorShortcuts.shiftDown()) {
                 redo();
             } else {
                 undo();
             }
             return true;
         }
-        if (hasControlDown() && keyCode == GLFW.GLFW_KEY_C) {
+        if (shortcut && keyCode == GLFW.GLFW_KEY_C) {
             copySelection();
             return true;
         }
-        if (hasControlDown() && keyCode == GLFW.GLFW_KEY_V) {
+        if (shortcut && keyCode == GLFW.GLFW_KEY_V) {
             pasteSelection();
             return true;
         }
-        if (keyCode == GLFW.GLFW_KEY_DELETE) {
+        if (shortcut && keyCode == GLFW.GLFW_KEY_A) {
+            selectPage();
+            return true;
+        }
+        // Backspace too: a click no longer removes a note, so the key is the way to, and a Mac laptop's "delete" key
+        // sends Backspace (its forward Delete needs fn). A focused text field took the key above, before this.
+        if (keyCode == GLFW.GLFW_KEY_DELETE || keyCode == GLFW.GLFW_KEY_BACKSPACE) {
             deleteSelection();
             return true;
         }
         if (!selectedNotes.isEmpty() || !selectedEffects.isEmpty()) {
             if (keyCode == GLFW.GLFW_KEY_LEFT || keyCode == GLFW.GLFW_KEY_RIGHT || keyCode == GLFW.GLFW_KEY_UP || keyCode == GLFW.GLFW_KEY_DOWN) {
-                // The earliest selected item steps to the neighbouring line and the rest keep their distance to it; a
-                // fixed step would walk off a fine grid whose cells are not all the same width.
-                int anchor = Math.min(selectedNotes.stream().mapToInt(BattleNote::tick).min().orElse(Integer.MAX_VALUE),
-                        selectedEffects.stream().filter(this::isFxRowVisible).mapToInt(TrackEffect::tick).min().orElse(Integer.MAX_VALUE));
-                int tickDelta = anchor == Integer.MAX_VALUE ? 0
-                        : keyCode == GLFW.GLFW_KEY_LEFT ? gridTickBefore(anchor) - anchor
-                        : keyCode == GLFW.GLFW_KEY_RIGHT ? gridTickAfter(anchor) - anchor : 0;
+                int lineSteps = keyCode == GLFW.GLFW_KEY_LEFT ? -1 : keyCode == GLFW.GLFW_KEY_RIGHT ? 1 : 0;
                 int laneDelta = keyCode == GLFW.GLFW_KEY_UP ? -1 : keyCode == GLFW.GLFW_KEY_DOWN ? 1 : 0;
-                moveSelection(tickDelta, laneDelta);
+                moveSelection(lineSteps, laneDelta);
                 return true;
             }
         }
@@ -531,6 +759,17 @@ public final class TrackEditorScreen extends Screen {
     @Override
     public boolean mouseDragged(double mouseX, double mouseY, int button, double dragX, double dragY) {
         resetEffectTooltipDwell();
+        if (selectPressPending && button == selectPressButton) {
+            if (!selectDragging && Math.hypot(mouseX - selectPressX, mouseY - selectPressY) >= 3.0D) {
+                selectDragging = true;
+            }
+            if (selectDragging) {
+                selectDragX = mouseX;
+                selectDragY = mouseY;
+                applySelectionRectangle();
+            }
+            return true;
+        }
         if (button == 0 && timelineScrubbing) {
             updateTimelineScrub(mouseX);
             return true;
@@ -549,7 +788,7 @@ public final class TrackEditorScreen extends Screen {
         }
         if (pendingNotePlacement && Math.hypot(mouseX - pendingNoteMouseX, mouseY - pendingNoteMouseY) >= 3.0D) {
             pendingNotePlacement = false;
-            setStatus(I18n.get("music_battle.l10n.editor.text_001"));
+            setStatus(StatusLevel.OK, I18n.get("music_battle.l10n.editor.text_001"));
             return true;
         }
         if (button == 0 && draggedNote != null) {
@@ -566,6 +805,10 @@ public final class TrackEditorScreen extends Screen {
     @Override
     public boolean mouseReleased(double mouseX, double mouseY, int button) {
         resetEffectTooltipDwell();
+        if (selectPressPending && button == selectPressButton) {
+            finishSelectionPress(mouseX, mouseY);
+            return true;
+        }
         if (button == 0 && timelineScrubbing) {
             finishTimelineScrub(mouseX);
             return true;
@@ -575,11 +818,8 @@ public final class TrackEditorScreen extends Screen {
             return true;
         }
         if (button == 0 && playheadPressPending) {
-            // It never moved: the same click the grid gets anywhere else, a note or an effect toggled under it.
+            // It never moved: the same click the grid gets anywhere else, a note or an effect placed under it.
             playheadPressPending = false;
-            if (insideGrid(playheadPressX, playheadPressY)) {
-                pushUndoSnapshot();
-            }
             toggleGridNote(playheadPressX, playheadPressY, 0);
             return true;
         }
@@ -589,7 +829,6 @@ public final class TrackEditorScreen extends Screen {
             double clickY = pendingNoteMouseY;
             pendingNotePlacement = false;
             if (place) {
-                pushUndoSnapshot();
                 toggleGridNote(clickX, clickY, button);
             }
             return true;
@@ -648,6 +887,8 @@ public final class TrackEditorScreen extends Screen {
      */
     private static final class LeaveDialog extends ru.gora.musicbattle.client.workshop.WorkshopDialogScreen {
         private final TrackEditorScreen editor;
+        /** True while the editor draws itself behind the dialog; see {@link #setTooltipForNextRenderPass}. */
+        private boolean drawingEditor;
 
         private LeaveDialog(TrackEditorScreen editor) {
             super(editor, Component.translatable("music_battle.l10n.editor.discard_title"),
@@ -671,7 +912,7 @@ public final class TrackEditorScreen extends Screen {
             if (editor.width != this.width || editor.height != this.height) {
                 editor.init(this.minecraft, this.width, this.height);
             }
-            editor.render(graphics, -1, -1, partialTick);
+            behind(() -> editor.render(graphics, -1, -1, partialTick));
             graphics.flush();
             // The editor draws its panels on a raised layer (ClientUiForeground, z 800), and depth testing kept them
             // in front of anything drawn later at the screen's own depth - this dialog included, which is why the
@@ -679,6 +920,37 @@ public final class TrackEditorScreen extends Screen {
             com.mojang.blaze3d.systems.RenderSystem.clear(org.lwjgl.opengl.GL11.GL_DEPTH_BUFFER_BIT,
                     net.minecraft.client.Minecraft.ON_OSX);
             graphics.fill(0, 0, this.width, this.height, 0xA0080610);
+        }
+
+        /** Runs {@code draw} as the editor behind the dialog: any tip its widgets ask for meanwhile is dropped. */
+        void behind(Runnable draw) {
+            drawingEditor = true;
+            try {
+                draw.run();
+            } finally {
+                drawingEditor = false;
+            }
+        }
+
+        /**
+         * A widget asks the screen on top for its tip, and with the dialog open that is this dialog, not the editor. The
+         * editor is drawn with the pointer away (-1, -1), but a control the keyboard had reached (Tab, then Escape to
+         * leave) still counts as focused, so its hint came up in vanilla's frame over the dialog's warning. Behind the
+         * dialog the editor shows no hints; the dialog's own tips are untouched.
+         */
+        @Override
+        public void setTooltipForNextRenderPass(Tooltip tooltip, ClientTooltipPositioner positioner, boolean focused) {
+            if (!drawingEditor) {
+                super.setTooltipForNextRenderPass(tooltip, positioner, focused);
+            }
+        }
+
+        @Override
+        public void setTooltipForNextRenderPass(List<net.minecraft.util.FormattedCharSequence> tooltip,
+                                                ClientTooltipPositioner positioner, boolean focused) {
+            if (!drawingEditor) {
+                super.setTooltipForNextRenderPass(tooltip, positioner, focused);
+            }
         }
     }
 
@@ -736,10 +1008,10 @@ public final class TrackEditorScreen extends Screen {
         if (onDisk > notes.size()) {
             // The loader keeps the first MAX_NOTES notes of a chart, so the end of this one is not here, and saving
             // would make that final. Before, nothing said so.
-            setStatus("WARN: " + I18n.get("music_battle.l10n.editor.opened_truncated", onDisk, notes.size()));
+            setStatus(StatusLevel.WARN, I18n.get("music_battle.l10n.editor.opened_truncated", onDisk, notes.size()));
             return;
         }
-        setStatus("OK: " + I18n.get("music_battle.l10n.editor.opened", initialTrack.title()));
+        setStatus(StatusLevel.OK, I18n.get("music_battle.l10n.editor.opened", initialTrack.title()));
     }
 
     /** How many notes the chart file itself lists, which is more than were loaded only for an over-long chart. */
@@ -777,18 +1049,72 @@ public final class TrackEditorScreen extends Screen {
     }
 
     /**
-     * Puts beat 1 where the playhead stands, so the grid's bar lines fall on the music from there; the offset is
-     * folded back by whole bars because the grid also runs on backwards from beat 1.
+     * Puts beat 1 where the playhead stands, so bar 1 starts there and the grid's bar lines fall on the music from
+     * there. It used to fold the time into the first bar, which kept the grid but put bar 1 a few bars before the
+     * place the player had chosen; now the time is kept as it is unless a chart cannot store it (past 12 s). The
+     * page turns to the one that starts on beat 1, so the bar-1 line is in sight, and the status says that
+     * only the grid moved.
      */
     private void setBeatOneAtPlayhead() {
         float tick = previewPlaying ? currentPreviewTick() : previewTick;
-        int offset = ChartBeat.offsetForBeatAt(tick * (double) ChartBeat.MS_PER_TICK, bpm());
+        double wantedMs = tick * (double) ChartBeat.MS_PER_TICK;
+        int offset = ChartBeat.storableOffsetMs(wantedMs, bpm());
         if (offsetBox != null) {
             offsetBox.setValue(Integer.toString(offset));
         }
         draftOffset = Integer.toString(offset);
+        shownOffsetMs = offset;
         alignPageToBpm();
+        pageStartTick = pageStartForTick(Math.max(0, Math.round(tick)));
         invalidateTimelineCache();
+        if (Math.abs(wantedMs - offset) < 1.0D) {
+            setStatus(StatusLevel.OK, I18n.get("music_battle.l10n.editor.beat_one_set", seconds(offset)));
+        } else {
+            setStatus(StatusLevel.WARN, I18n.get("music_battle.l10n.editor.offset_folded", Math.round(wantedMs), offset));
+        }
+    }
+
+    /**
+     * Says what a beat-1 value typed into the field did, once it settles on a new number: a field that silently moved
+     * the whole grid under the notes was what made the offset look broken.
+     */
+    private void reportTypedOffset() {
+        int offset = offsetMs();
+        if (offset == shownOffsetMs) {
+            return;
+        }
+        boolean first = shownOffsetMs < 0;
+        shownOffsetMs = offset;
+        if (first || offsetBox == null || !offsetBox.isFocused()) {
+            return;
+        }
+        String typed = offsetBox.getValue() == null ? "" : offsetBox.getValue().trim();
+        Double typedMs = parseOffset(typed);
+        if (typedMs == null) {
+            setStatus(StatusLevel.WARN, I18n.get("music_battle.l10n.editor.offset_unreadable", typed));
+        } else if (Math.abs(typedMs - offset) >= 1.0D) {
+            setStatus(StatusLevel.WARN, I18n.get("music_battle.l10n.editor.offset_folded", Math.round(typedMs), offset));
+        } else {
+            setStatus(StatusLevel.OK, I18n.get("music_battle.l10n.editor.offset_set", seconds(offset)));
+        }
+    }
+
+    /** Milliseconds as seconds with three decimals, the way the status messages show beat 1. */
+    private static String seconds(int milliseconds) {
+        return String.format(java.util.Locale.ROOT, "%.3f", milliseconds / 1000.0D);
+    }
+
+    /** What the beat-1 field holds, or {@code null} when it holds something that is not a number. */
+    private static Double parseOffset(String value) {
+        if (value == null || value.isBlank()) {
+            return 0.0D;
+        }
+        try {
+            double parsed = Double.parseDouble(value.trim());
+            return Double.isFinite(parsed) ? parsed : null;
+        } catch (NumberFormatException exception) {
+            return null;
+        }
     }
 
     private String defaultBpm() {
@@ -800,9 +1126,30 @@ public final class TrackEditorScreen extends Screen {
     }
 
     private void addControlButtons(EditorLayout layout) {
+        for (ControlSlot slot : controlSlots(layout)) {
+            addControl(slot);
+        }
+    }
+
+    /**
+     * One button of the controls panel: what it does, by id, and where it sits. {@link #controlSlots} places them and
+     * {@link #controlLabels} says every label each can show, so editor-layout measures the words against the very
+     * widths the screen builds.
+     */
+    private record ControlSlot(String id, int x, int y, int width, int height) {
+    }
+
+    /**
+     * Where the controls go: six columns on a wide panel, thirds on a narrow one. The two FX switches and the osu!
+     * difficulty take the widest cells there are - their labels are the longest - and on a narrow panel each switch
+     * takes a whole row. In a third, "Disable default bars" was cut in English up to 417 units and "Отключить
+     * стандартные полосы" up to 617, and in a sixth "Сложность osu: авто" from 600 to 761.
+     */
+    private List<ControlSlot> controlSlots(EditorLayout layout) {
+        List<ControlSlot> out = new ArrayList<>();
         int left = layout.left;
         int y = layout.controlsY;
-        int buttonHeight = layout.buttonHeight;
+        int h = layout.buttonHeight;
         int rowStep = layout.rowStep;
         if (layout.wideControls) {
             int gap = layout.compactHeight ? 6 : 10;
@@ -811,87 +1158,175 @@ public final class TrackEditorScreen extends Screen {
             for (int i = 0; i < x.length; i++) {
                 x[i] = left + i * (col + gap);
             }
+            int two = col * 2 + gap;
+            int three = col * 3 + gap * 2;
             if (editorPage == EditorPage.NOTES) {
-                addOwnerButton(x[0], y, col, buttonHeight);
-                addTimelinePageButton(x[1], y, col, buttonHeight, -1);
-                addTimelinePageButton(x[2], y, col, buttonHeight, 1);
-                audioSelectButton = this.addRenderableWidget(FancyButton.create(Component.translatable("music_battle.l10n.editor.button_audio"), button -> chooseAudio(audioBox), x[3], y, col, buttonHeight));
-                previewSelectButton = this.addRenderableWidget(FancyButton.create(Component.translatable("music_battle.l10n.editor.button_image"), button -> choosePreview(previewBox), x[4], y, col, buttonHeight));
-                fnfSelectButton = this.addRenderableWidget(FancyButton.create(Component.translatable("music_battle.l10n.editor.button_chart"), button -> chooseChart(importBox), x[5], y, col, buttonHeight));
+                String[] first = {"owner", "page_previous", "page_next", "audio", "image", "chart"};
+                for (int i = 0; i < first.length; i++) {
+                    out.add(new ControlSlot(first[i], x[i], y, col, h));
+                }
                 y += rowStep;
-                this.addRenderableWidget(FancyButton.create(Component.translatable("music_battle.l10n.editor.button_load"), button -> loadPreview(), x[0], y, col, buttonHeight));
-                playButton = this.addRenderableWidget(FancyButton.create(Component.translatable(previewPlaying ? "music_battle.l10n.editor.button_stop" : "music_battle.l10n.editor.button_play"), button -> togglePreview(), x[1], y, col, buttonHeight));
-                osuDifficultyButton = this.addRenderableWidget(FancyButton.create(osuDifficultyLabel(), button -> cycleOsuDifficulty(), x[2], y, col, buttonHeight));
-                this.addRenderableWidget(FancyButton.create(Component.translatable("music_battle.l10n.editor.button_import"), button -> importChart(), x[3], y, col, buttonHeight));
-                this.addRenderableWidget(FancyButton.create(Component.translatable("music_battle.l10n.editor.button_game_preview"), button -> startGameplayPreview(), x[4], y, col, buttonHeight));
-                this.addRenderableWidget(FancyButton.create(Component.literal("P1 ↔ P2"), button -> convertSelectedNoteOwners(), x[5], y, col, buttonHeight));
+                String[] second = {"load", "play", "import", "game_preview", "owners_swap", "grid"};
+                for (int i = 0; i < second.length; i++) {
+                    out.add(new ControlSlot(second[i], x[i], y, col, h));
+                }
                 y += rowStep;
-                this.addRenderableWidget(FancyButton.create(Component.translatable("music_battle.l10n.editor.text_002"), button -> switchEditorPage(EditorPage.FX), x[0], y, col * 2 + gap, buttonHeight));
-                gridDivisionButton = this.addRenderableWidget(createGridDivisionButton(x[2], y, col * 2 + gap, buttonHeight));
-                this.addRenderableWidget(FancyButton.create(Component.translatable("music_battle.l10n.editor.text_003"), button -> clearSelection(), x[4], y, col * 2 + gap, buttonHeight));
+                out.add(new ControlSlot("fx_page", x[0], y, two, h));
+                out.add(new ControlSlot("osu_difficulty", x[2], y, two, h));
+                out.add(new ControlSlot("clear_selection", x[4], y, two, h));
             } else {
-                this.addRenderableWidget(FancyButton.create(Component.translatable("music_battle.l10n.editor.text_004"), button -> switchEditorPage(EditorPage.NOTES), x[0], y, col, buttonHeight));
-                addTimelinePageButton(x[1], y, col, buttonHeight, -1);
-                addTimelinePageButton(x[2], y, col, buttonHeight, 1);
-                this.addRenderableWidget(FancyButton.create(Component.translatable("music_battle.l10n.editor.button_load"), button -> loadPreview(), x[3], y, col, buttonHeight));
-                fxPlayButton = this.addRenderableWidget(FancyButton.create(Component.translatable(previewPlaying ? "music_battle.l10n.editor.button_stop" : "music_battle.l10n.editor.button_play"), button -> togglePreview(), x[4], y, col, buttonHeight));
-                effectModeButton = this.addRenderableWidget(FancyButton.create(effectModeLabel(), button -> cycleEffectMode(), x[5], y, col, buttonHeight));
+                String[] first = {"notes_page", "page_previous", "page_next", "load", "fx_play", "effect_mode"};
+                for (int i = 0; i < first.length; i++) {
+                    out.add(new ControlSlot(first[i], x[i], y, col, h));
+                }
                 y += rowStep;
-                this.addRenderableWidget(FancyButton.create(Component.translatable("music_battle.l10n.editor.text_005"), button -> openEffectTemplateEditor(), x[0], y, col * 4 + gap * 3, buttonHeight));
-                this.addRenderableWidget(FancyButton.create(Component.translatable("music_battle.l10n.editor.button_game_preview"), button -> startGameplayPreview(), x[4], y, col * 2 + gap, buttonHeight));
+                out.add(new ControlSlot("fx_brush", x[0], y, two, h));
+                out.add(new ControlSlot("game_preview", x[2], y, two, h));
+                out.add(new ControlSlot("grid", x[4], y, col, h));
+                out.add(new ControlSlot("clear", x[5], y, col, h));
                 y += rowStep;
-                stageBarsButton = this.addRenderableWidget(FancyButton.create(stageBarsLabel(), button -> toggleStageBars(), x[0], y, col * 2 + gap, buttonHeight));
-                standardDimmingButton = this.addRenderableWidget(FancyButton.create(standardDimmingLabel(), button -> toggleStandardDimming(), x[2], y, col * 2 + gap, buttonHeight));
-                gridDivisionButton = this.addRenderableWidget(createGridDivisionButton(x[4], y, col, buttonHeight));
-                this.addRenderableWidget(FancyButton.create(Component.translatable("music_battle.l10n.editor.text_006"), button -> clearSelection(), x[5], y, col, buttonHeight));
+                out.add(new ControlSlot("stage_bars", x[0], y, three, h));
+                out.add(new ControlSlot("standard_dimming", x[3], y, three, h));
             }
-            return;
+            return out;
         }
 
         int gap = 6;
         int third = Math.max(48, (layout.panelWidth - gap * 2) / 3);
+        int wide = third * 2 + gap;
+        int full = third * 3 + gap * 2;
+        int[] x = {left, left + third + gap, left + (third + gap) * 2};
         if (editorPage == EditorPage.NOTES) {
             // File work first, under the fields it fills; play and paging last, right above the grid, so a scrolled
             // small window shows the transport and the notes together.
-            int wide = third * 2 + gap;
-            audioSelectButton = this.addRenderableWidget(FancyButton.create(Component.translatable("music_battle.l10n.editor.button_audio"), button -> chooseAudio(audioBox), left, y, third, buttonHeight));
-            previewSelectButton = this.addRenderableWidget(FancyButton.create(Component.translatable("music_battle.l10n.editor.button_image"), button -> choosePreview(previewBox), left + third + gap, y, third, buttonHeight));
-            fnfSelectButton = this.addRenderableWidget(FancyButton.create(Component.translatable("music_battle.l10n.editor.button_chart"), button -> chooseChart(importBox), left + (third + gap) * 2, y, third, buttonHeight));
+            out.add(new ControlSlot("audio", x[0], y, third, h));
+            out.add(new ControlSlot("image", x[1], y, third, h));
+            out.add(new ControlSlot("chart", x[2], y, third, h));
             y += rowStep;
-            this.addRenderableWidget(FancyButton.create(Component.translatable("music_battle.l10n.editor.button_load"), button -> loadPreview(), left, y, third, buttonHeight));
-            this.addRenderableWidget(FancyButton.create(Component.translatable("music_battle.l10n.editor.button_import"), button -> importChart(), left + third + gap, y, third, buttonHeight));
-            this.addRenderableWidget(FancyButton.create(Component.translatable("music_battle.l10n.editor.button_game_preview"), button -> startGameplayPreview(), left + (third + gap) * 2, y, third, buttonHeight));
+            out.add(new ControlSlot("load", x[0], y, third, h));
+            out.add(new ControlSlot("import", x[1], y, third, h));
+            out.add(new ControlSlot("game_preview", x[2], y, third, h));
             y += rowStep;
-            osuDifficultyButton = this.addRenderableWidget(FancyButton.create(osuDifficultyLabel(), button -> cycleOsuDifficulty(), left, y, wide, buttonHeight));
-            this.addRenderableWidget(FancyButton.create(Component.literal("P1 ↔ P2"), button -> convertSelectedNoteOwners(), left + wide + gap, y, third, buttonHeight));
+            out.add(new ControlSlot("osu_difficulty", x[0], y, wide, h));
+            out.add(new ControlSlot("owners_swap", x[2], y, third, h));
             y += rowStep;
-            this.addRenderableWidget(FancyButton.create(Component.translatable("music_battle.l10n.editor.text_007"), button -> switchEditorPage(EditorPage.FX), left, y, wide, buttonHeight));
-            gridDivisionButton = this.addRenderableWidget(createGridDivisionButton(left + wide + gap, y, third, buttonHeight));
+            out.add(new ControlSlot("fx_page", x[0], y, wide, h));
+            out.add(new ControlSlot("grid", x[2], y, third, h));
             y += rowStep;
-            addOwnerButton(left, y, third, buttonHeight);
-            this.addRenderableWidget(FancyButton.create(Component.translatable("music_battle.l10n.editor.text_003"), button -> clearSelection(), left + third + gap, y, wide, buttonHeight));
+            out.add(new ControlSlot("owner", x[0], y, third, h));
+            out.add(new ControlSlot("clear_selection", x[1], y, wide, h));
             y += rowStep;
-            addTimelinePageButton(left, y, third, buttonHeight, -1);
-            playButton = this.addRenderableWidget(FancyButton.create(Component.translatable(previewPlaying ? "music_battle.l10n.editor.button_stop" : "music_battle.l10n.editor.button_play"), button -> togglePreview(), left + third + gap, y, third, buttonHeight));
-            addTimelinePageButton(left + (third + gap) * 2, y, third, buttonHeight, 1);
+            out.add(new ControlSlot("page_previous", x[0], y, third, h));
+            out.add(new ControlSlot("play", x[1], y, third, h));
+            out.add(new ControlSlot("page_next", x[2], y, third, h));
         } else {
-            this.addRenderableWidget(FancyButton.create(Component.translatable("music_battle.l10n.editor.text_004"), button -> switchEditorPage(EditorPage.NOTES), left, y, third, buttonHeight));
-            addTimelinePageButton(left + third + gap, y, third, buttonHeight, -1);
-            addTimelinePageButton(left + (third + gap) * 2, y, third, buttonHeight, 1);
+            out.add(new ControlSlot("notes_page", x[0], y, third, h));
+            out.add(new ControlSlot("page_previous", x[1], y, third, h));
+            out.add(new ControlSlot("page_next", x[2], y, third, h));
             y += rowStep;
-            this.addRenderableWidget(FancyButton.create(Component.translatable("music_battle.l10n.editor.button_load"), button -> loadPreview(), left, y, third, buttonHeight));
-            fxPlayButton = this.addRenderableWidget(FancyButton.create(Component.translatable(previewPlaying ? "music_battle.l10n.editor.button_stop" : "music_battle.l10n.editor.button_play"), button -> togglePreview(), left + third + gap, y, third, buttonHeight));
-            effectModeButton = this.addRenderableWidget(FancyButton.create(effectModeLabel(), button -> cycleEffectMode(), left + (third + gap) * 2, y, third, buttonHeight));
+            out.add(new ControlSlot("load", x[0], y, third, h));
+            out.add(new ControlSlot("fx_play", x[1], y, third, h));
+            out.add(new ControlSlot("effect_mode", x[2], y, third, h));
             y += rowStep;
-            this.addRenderableWidget(FancyButton.create(Component.translatable("music_battle.l10n.editor.text_005"), button -> openEffectTemplateEditor(), left, y, third, buttonHeight));
-            this.addRenderableWidget(FancyButton.create(Component.translatable("music_battle.l10n.editor.button_game_preview"), button -> startGameplayPreview(), left + third + gap, y, third * 2 + gap, buttonHeight));
+            out.add(new ControlSlot("fx_brush", x[0], y, third, h));
+            out.add(new ControlSlot("game_preview", x[1], y, wide, h));
             y += rowStep;
-            stageBarsButton = this.addRenderableWidget(FancyButton.create(stageBarsLabel(), button -> toggleStageBars(), left, y, third, buttonHeight));
-            standardDimmingButton = this.addRenderableWidget(FancyButton.create(standardDimmingLabel(), button -> toggleStandardDimming(), left + third + gap, y, third * 2 + gap, buttonHeight));
+            out.add(new ControlSlot("stage_bars", x[0], y, full, h));
             y += rowStep;
-            gridDivisionButton = this.addRenderableWidget(createGridDivisionButton(left, y, third, buttonHeight));
-            this.addRenderableWidget(FancyButton.create(Component.translatable("music_battle.l10n.editor.text_003"), button -> clearSelection(), left + third + gap, y, third * 2 + gap, buttonHeight));
+            out.add(new ControlSlot("standard_dimming", x[0], y, full, h));
+            y += rowStep;
+            out.add(new ControlSlot("grid", x[0], y, third, h));
+            out.add(new ControlSlot("clear_selection", x[1], y, wide, h));
         }
+        return out;
+    }
+
+    /** Every label a control can show, in all its states; the osu! difficulty's chosen title is the player's own. */
+    private static List<Component> controlLabels(String id) {
+        String e = "music_battle.l10n.editor.";
+        return switch (id) {
+            case "owner" -> List.of(Component.translatable(e + "owner", "P1"), Component.translatable(e + "owner", "P2"));
+            case "page_previous" -> List.of(Component.translatable(e + "page_previous"));
+            case "page_next" -> List.of(Component.translatable(e + "page_next"));
+            case "audio" -> List.of(Component.translatable(e + "button_audio"));
+            case "image" -> List.of(Component.translatable(e + "button_image"));
+            case "chart" -> List.of(Component.translatable(e + "button_chart"));
+            case "load" -> List.of(Component.translatable(e + "button_load"));
+            case "play", "fx_play" -> List.of(Component.translatable(e + "button_play"), Component.translatable(e + "button_stop"));
+            case "import" -> List.of(Component.translatable(e + "button_import"));
+            case "game_preview" -> List.of(Component.translatable(e + "button_game_preview"));
+            case "owners_swap" -> List.of(Component.literal("P1 \u2194 P2"));
+            case "grid" -> List.of(Component.translatable(e + "text_010"), Component.translatable(e + "text_011"));
+            case "fx_page" -> List.of(Component.translatable(e + "text_002"), Component.translatable(e + "text_007"));
+            case "osu_difficulty" -> List.of(Component.translatable(e + "osu_difficulty_auto"));
+            case "clear_selection" -> List.of(Component.translatable(e + "text_003"));
+            case "notes_page" -> List.of(Component.translatable(e + "text_004"));
+            case "effect_mode" -> List.of(Component.translatable(e + "mode", Component.translatable(e + "text_138")),
+                    Component.translatable(e + "mode", Component.translatable(e + "text_139")),
+                    Component.translatable(e + "mode", Component.translatable(e + "text_140")));
+            case "fx_brush" -> List.of(Component.translatable(e + "text_005"));
+            case "clear" -> List.of(Component.translatable(e + "text_006"));
+            case "stage_bars" -> List.of(Component.translatable(e + "text_014"), Component.translatable(e + "text_015"));
+            case "standard_dimming" -> List.of(Component.translatable(e + "text_016"), Component.translatable(e + "text_017"));
+            default -> throw new IllegalArgumentException("no control " + id);
+        };
+    }
+
+    /** Builds the control a slot names, in the state the editor is in. */
+    private void addControl(ControlSlot slot) {
+        int x = slot.x();
+        int y = slot.y();
+        int w = slot.width();
+        int h = slot.height();
+        String e = "music_battle.l10n.editor.";
+        String play = previewPlaying ? e + "button_stop" : e + "button_play";
+        switch (slot.id()) {
+            case "owner" -> addOwnerButton(x, y, w, h);
+            case "page_previous" -> addTimelinePageButton(x, y, w, h, -1);
+            case "page_next" -> addTimelinePageButton(x, y, w, h, 1);
+            case "audio" -> audioSelectButton = this.addRenderableWidget(FancyButton.create(
+                    Component.translatable(e + "button_audio"), button -> chooseAudio(audioBox), x, y, w, h));
+            case "image" -> previewSelectButton = this.addRenderableWidget(FancyButton.create(
+                    Component.translatable(e + "button_image"), button -> choosePreview(previewBox), x, y, w, h));
+            case "chart" -> fnfSelectButton = this.addRenderableWidget(FancyButton.create(
+                    Component.translatable(e + "button_chart"), button -> chooseChart(importBox), x, y, w, h));
+            case "load" -> this.addRenderableWidget(FancyButton.create(Component.translatable(e + "button_load"),
+                    button -> loadPreview(), x, y, w, h));
+            case "play" -> playButton = this.addRenderableWidget(FancyButton.create(Component.translatable(play),
+                    button -> togglePreview(), x, y, w, h));
+            case "fx_play" -> fxPlayButton = this.addRenderableWidget(FancyButton.create(Component.translatable(play),
+                    button -> togglePreview(), x, y, w, h));
+            case "import" -> this.addRenderableWidget(FancyButton.create(Component.translatable(e + "button_import"),
+                    button -> importChart(), x, y, w, h));
+            case "game_preview" -> this.addRenderableWidget(FancyButton.create(Component.translatable(e + "button_game_preview"),
+                    button -> startGameplayPreview(), x, y, w, h));
+            case "owners_swap" -> this.addRenderableWidget(FancyButton.create(Component.literal("P1 \u2194 P2"),
+                    button -> convertSelectedNoteOwners(), x, y, w, h));
+            case "grid" -> gridDivisionButton = this.addRenderableWidget(createGridDivisionButton(x, y, w, h));
+            case "fx_page" -> this.addRenderableWidget(FancyButton.create(Component.translatable(
+                    layoutWideControls() ? e + "text_002" : e + "text_007"), button -> switchEditorPage(EditorPage.FX), x, y, w, h));
+            case "osu_difficulty" -> osuDifficultyButton = this.addRenderableWidget(FancyButton.create(osuDifficultyLabel(),
+                    button -> cycleOsuDifficulty(), x, y, w, h));
+            case "clear_selection" -> this.addRenderableWidget(FancyButton.create(Component.translatable(e + "text_003"),
+                    button -> clearSelection(), x, y, w, h));
+            case "notes_page" -> this.addRenderableWidget(FancyButton.create(Component.translatable(e + "text_004"),
+                    button -> switchEditorPage(EditorPage.NOTES), x, y, w, h));
+            case "effect_mode" -> effectModeButton = this.addRenderableWidget(FancyButton.create(effectModeLabel(),
+                    button -> cycleEffectMode(), x, y, w, h));
+            case "fx_brush" -> this.addRenderableWidget(FancyButton.create(Component.translatable(e + "text_005"),
+                    button -> openEffectTemplateEditor(), x, y, w, h));
+            case "clear" -> this.addRenderableWidget(FancyButton.create(Component.translatable(e + "text_006"),
+                    button -> clearSelection(), x, y, w, h));
+            case "stage_bars" -> stageBarsButton = this.addRenderableWidget(FancyButton.create(stageBarsLabel(),
+                    button -> toggleStageBars(), x, y, w, h));
+            case "standard_dimming" -> standardDimmingButton = this.addRenderableWidget(FancyButton.create(standardDimmingLabel(),
+                    button -> toggleStandardDimming(), x, y, w, h));
+            default -> throw new IllegalArgumentException("no control " + slot.id());
+        }
+    }
+
+    private boolean layoutWideControls() {
+        return layout().wideControls;
     }
 
     private void toggleStageBars() {
@@ -912,7 +1347,7 @@ public final class TrackEditorScreen extends Screen {
             gridDivisionButton.setMessage(gridDivisionLabel());
             gridDivisionButton.setTooltip(gridDivisionTooltip());
         }
-        setStatus(gridDivision() == STANDARD_GRID_DIVISION
+        setStatus(StatusLevel.OK, gridDivision() == STANDARD_GRID_DIVISION
                 ? I18n.get("music_battle.l10n.editor.text_008")
                 : I18n.get("music_battle.l10n.editor.text_009"));
     }
@@ -925,8 +1360,23 @@ public final class TrackEditorScreen extends Screen {
 
     /** The label has room for "1/4" only; the tooltip says what that is a fraction of and what a click switches to. */
     private Tooltip gridDivisionTooltip() {
-        int next = GRID_DIVISIONS[(Mth.clamp(gridDivisionIndex, 0, GRID_DIVISIONS.length - 1) + 1) % GRID_DIVISIONS.length];
-        return Tooltip.create(Component.translatable("music_battle.l10n.editor.grid_tooltip", gridDivision(), next));
+        int index = Mth.clamp(gridDivisionIndex, 0, GRID_DIVISIONS.length - 1);
+        if (gridTooltips[index] == null) {
+            int next = GRID_DIVISIONS[(index + 1) % GRID_DIVISIONS.length];
+            gridTooltips[index] = tooltips.create(Component.translatable("music_battle.l10n.editor.grid_tooltip", gridDivision(), next));
+        }
+        return gridTooltips[index];
+    }
+
+    /**
+     * A tooltip made by {@link #tooltips} is drawn by this screen in the toolkit's look, over every control; any other
+     * stays vanilla's. The editor's own hints were the vanilla purple frame in the pixel font, the last ones in it.
+     */
+    @Override
+    public void setTooltipForNextRenderPass(Tooltip tooltip, ClientTooltipPositioner positioner, boolean focused) {
+        if (!tooltips.offer(tooltip, positioner)) {
+            super.setTooltipForNextRenderPass(tooltip, positioner, focused);
+        }
     }
 
     private int gridDivision() {
@@ -939,14 +1389,16 @@ public final class TrackEditorScreen extends Screen {
 
     private void clearSelection() {
         int cleared = selectedNotes.size() + selectedEffects.size();
-        selectedNotes.clear();
-        selectedEffects.clear();
+        changeSelection(() -> {
+            selectedNotes.clear();
+            selectedEffects.clear();
+        });
         pendingNotePlacement = false;
         pendingEffectStartTick = -1;
         pendingEffectLane = -1;
         clearNoteSelectionDrag();
         clearEffectDrag();
-        setStatus(cleared > 0 ? I18n.get("music_battle.l10n.editor.text_012") : I18n.get("music_battle.l10n.editor.text_013"));
+        setStatus(StatusLevel.OK, cleared > 0 ? I18n.get("music_battle.l10n.editor.text_012") : I18n.get("music_battle.l10n.editor.text_013"));
     }
 
     private Component stageBarsLabel() {
@@ -1018,7 +1470,7 @@ public final class TrackEditorScreen extends Screen {
         pendingEffectStartTick = -1;
         pendingEffectLane = -1;
         if (page == EditorPage.FX) {
-            setStatus(I18n.get("music_battle.l10n.editor.text_018"));
+            setStatus(StatusLevel.OK, I18n.get("music_battle.l10n.editor.text_018"));
         }
         this.minecraft.setScreen(this);
     }
@@ -1091,7 +1543,7 @@ public final class TrackEditorScreen extends Screen {
         pendingEffectStartTick = -1;
         pendingEffectLane = -1;
         invalidateTimelineCache();
-        setStatus(I18n.get("music_battle.l10n.editor.text_019"));
+        setStatus(StatusLevel.OK, I18n.get("music_battle.l10n.editor.text_019"));
     }
 
     private Component effectTypeLabel() {
@@ -1196,8 +1648,7 @@ public final class TrackEditorScreen extends Screen {
         }
         if (volumeSlider != null && volumeSlider.visible) {
             // The value sits above the slider, at its right end, where the knob can never cover it.
-            net.minecraft.util.FormattedCharSequence value = TextStyles.text(
-                    String.format(java.util.Locale.ROOT, "%.2f", volume()), TextStyle.LABEL).getVisualOrderText();
+            net.minecraft.util.FormattedCharSequence value = TextStyles.text(volumeText(), TextStyle.LABEL).getVisualOrderText();
             float valueWidth = TextStyles.width(value);
             float y = volumeSlider.getY() - labelLift;
             TextStyles.queue(graphics, TextStyles.ellipsize(TextStyles.translated("music_battle.l10n.editor.text_028", TextStyle.CAPTION),
@@ -1211,8 +1662,8 @@ public final class TrackEditorScreen extends Screen {
             return;
         }
         int maxWidth = Math.max(80, Math.min(this.width - 28, 560));
-        // Wrapped rather than cut: the messages that explain what to do (a song that needs ffmpeg, a chart that is
-        // too long) are the ones that do not fit on one line, and their second half is the useful part.
+        // Wrapped rather than cut: the messages that explain what to do (a song in a format the mod cannot read, a
+        // chart that is too long) are the ones that do not fit on one line, and their second half is the useful part.
         List<net.minecraft.util.FormattedCharSequence> lines = TextStyles.wrap(TextStyles.text(status, TextStyle.BODY), maxWidth);
         if (lines.size() > 4) {
             lines = lines.subList(0, 4);
@@ -1226,8 +1677,13 @@ public final class TrackEditorScreen extends Screen {
         float boxHeight = lines.size() * lineHeight + 10;
         float x = this.width / 2.0F - boxWidth / 2.0F;
         float y = this.height - 8 - boxHeight;
-        int colour = status.startsWith("OK") ? 0xFF80FFB0 : status.startsWith("WARN") ? Palette.WARN : Palette.DANGER;
-        RoundedRect.fill(graphics, x, y, boxWidth, boxHeight, Palette.RADIUS_MD, 0xEE101820);
+        int colour = switch (statusLevel) {
+            case OK -> 0xFF80FFB0;
+            case INFO -> Palette.TEXT_1;
+            case WARN -> Palette.WARN;
+            case ERROR -> Palette.DANGER;
+        };
+        RoundedRect.fill(graphics, x, y, boxWidth, boxHeight, Palette.RADIUS_MD, Palette.withAlpha(Palette.BG_2, 0.95F));
         RoundedRect.stroke(graphics, x, y, boxWidth, boxHeight, Palette.RADIUS_MD, 1.0F, Palette.LINE);
         for (int i = 0; i < lines.size(); i++) {
             TextStyles.queueCentered(graphics, lines.get(i), this.width / 2.0F,
@@ -1235,8 +1691,26 @@ public final class TrackEditorScreen extends Screen {
         }
     }
 
-    private void setStatus(String message) {
-        status = message == null ? "" : message;
+    /**
+     * How a status line reads: the level gives its colour, and the line itself carries no "OK:", "WARN:" or "ERR:" in
+     * any language (they used to be English words at the start of every Russian line). A level word still found at the
+     * start of a text, from a language file merged from elsewhere, is taken as the level's mark and left out.
+     */
+    private enum StatusLevel {
+        OK, INFO, WARN, ERROR
+    }
+
+    /** "OK:", "WARN:" or "ERR:" at the start of a line: a level mark, never shown. */
+    private static final java.util.regex.Pattern STATUS_MARK = java.util.regex.Pattern.compile("^\\s*(?:OK|WARN|ERR)\\s*:\\s*");
+
+    /** The line as shown: without a level mark. */
+    static String statusText(String message) {
+        return message == null ? "" : STATUS_MARK.matcher(message).replaceFirst("");
+    }
+
+    private void setStatus(StatusLevel level, String message) {
+        statusLevel = level;
+        status = statusText(message);
         // Six seconds for a short line, longer for one that takes reading, so an explanation is not gone half-read.
         statusTicks = status.isBlank() ? 0 : 20 * Mth.clamp(status.length() / 18, 6, 20);
     }
@@ -1246,30 +1720,46 @@ public final class TrackEditorScreen extends Screen {
         if (editorPage == EditorPage.FX) {
             drawEffectLayerLabels(graphics, grid);
         }
-        graphics.fill(grid.x, grid.y, grid.x + grid.width, grid.y + grid.height, editorPage == EditorPage.FX ? 0xEE030407 : 0xAA06080C);
-        // With a first-beat offset the first page begins before the song does; that stretch is shaded, not editable.
-        if (pageOriginTick() < 0.0D) {
-            int songStartX = gridLineX(grid, -pageOriginTick() / pageSpanTicks());
-            graphics.fill(grid.x, grid.y, songStartX, grid.y + grid.height, 0x99000000);
-        }
+        graphics.fill(grid.x, grid.y, grid.x + grid.width, grid.y + grid.height,
+                Palette.withAlpha(Palette.BG_0, editorPage == EditorPage.FX ? 0.96F : 0.88F));
         int columns = gridColumns();
         int columnWidth = Math.max(1, grid.width / columns);
         int visibleLanes = editorPage == EditorPage.FX ? FX_LANES : NOTE_LANES;
         int laneHeight = Math.max(1, grid.height / visibleLanes);
         // Lines stand at the exact beat fractions, evenly spaced, so they follow the music at any BPM; notes are
-        // drawn on the line they were placed on (timelineTickX). Bar lines are the brightest, then beats.
+        // drawn on the line they were placed on (timelineTickX). Bar lines are the brightest, then beats, and the line
+        // of beat 1 itself is the accent: it is where the beat-1 field and its "1" button put bar 1.
         int precision = gridPrecisionMultiplier();
         int beatColumns = STANDARD_GRID_DIVISION * precision;
+        long firstCell = pageFromBeatOne() * columns;
         for (int column = 0; column <= columns; column++) {
-            int color = column % (4 * beatColumns) == 0 ? 0xDD7FB4CC
-                    : column % beatColumns == 0 ? 0xAA5A8CA0
-                    : column % precision == 0 ? 0x77405058 : 0x4437444C;
             int x = gridLineX(grid, column / (double) columns);
+            if (firstCell + column == 0L) {
+                graphics.fill(x, grid.y, x + 2, grid.y + grid.height, BEAT_ONE_COLOR);
+                continue;
+            }
+            int color = column % (ChartBeat.BEATS_PER_BAR * beatColumns) == 0 ? Palette.withAlpha(Palette.TEXT_3, 0.8F)
+                    : column % beatColumns == 0 ? Palette.withAlpha(Palette.TEXT_MUTE, 0.45F)
+                    : column % precision == 0 ? Palette.withAlpha(Palette.LINE, 0.9F) : Palette.withAlpha(Palette.LINE, 0.45F);
             graphics.fill(x, grid.y, x + 1, grid.y + grid.height, color);
         }
         for (int lane = 0; lane <= visibleLanes; lane++) {
             int y = grid.y + lane * laneHeight;
-            graphics.fill(grid.x, y, grid.x + grid.width, y + 1, 0x88607080);
+            graphics.fill(grid.x, y, grid.x + grid.width, y + 1, Palette.withAlpha(Palette.LINE, 0.6F));
+        }
+        // With a first-beat offset the first page begins before the song does. That stretch is shaded over its lines,
+        // so they read as out of use, and labelled, because a page that is mostly dark for no stated reason is what
+        // made the offset look broken. The label goes on last: drawn under the lines, it had them cut through its
+        // letters.
+        if (pageOriginTick() < 0.0D) {
+            int songStartX = gridLineX(grid, -pageOriginTick() / pageSpanTicks());
+            graphics.fill(grid.x, grid.y, songStartX, grid.y + grid.height, 0xB3050407);
+            net.minecraft.util.FormattedCharSequence beforeSong = TextStyles.translated(
+                    "music_battle.l10n.editor.before_song", TextStyle.CAPTION).getVisualOrderText();
+            if (TextStyles.width(beforeSong) + 8 <= songStartX - grid.x) {
+                TextStyles.queueCentered(graphics, beforeSong, (grid.x + songStartX) / 2.0F,
+                        TextStyles.centeredCapY(TextStyle.CAPTION, grid.y, grid.height), Palette.TEXT_MUTE);
+            }
         }
         // Keep the playhead behind notes. When it was drawn over their handles it
         // looked interactive inside the grid, while the click actually resized the
@@ -1303,9 +1793,63 @@ public final class TrackEditorScreen extends Screen {
         }
 
         drawTimelineScrubber(graphics, grid);
+        drawTimelineHeader(graphics, grid);
+    }
+
+    /**
+     * Above the grid: the number of each bar that starts on this page, counted from beat 1 (bar 1 in the accent, over
+     * the accent line), and on the right the grid step and where the playhead stands. The page's own tick used to
+     * lead this line; bar numbers are what shows the offset at work, since moving beat 1 renumbers the bars and moves
+     * no note.
+     */
+    private void drawTimelineHeader(GuiGraphics graphics, Grid grid) {
+        int columns = gridColumns();
+        int barColumns = ChartBeat.BEATS_PER_BAR * STANDARD_GRID_DIVISION * gridPrecisionMultiplier();
+        long firstCell = pageFromBeatOne() * columns;
+        float y = grid.y - 25;
+        float labelsRight = grid.x;
+        float infoRight = grid.x + grid.width;
+        for (int column = 0; column <= columns; column += barColumns) {
+            long bar = ChartBeat.barOfCell(firstCell + column, STANDARD_GRID_DIVISION * gridPrecisionMultiplier());
+            if (bar < 1L) {
+                continue;
+            }
+            boolean beatOne = bar == 1L;
+            net.minecraft.util.FormattedCharSequence label = TextStyles.translated("music_battle.l10n.editor.bar",
+                    beatOne ? TextStyle.LABEL : TextStyle.CAPTION, bar).getVisualOrderText();
+            float x = gridLineX(grid, column / (double) columns);
+            if (column == columns) {
+                // The page's closing line is the next page's first: on the lead-in page it is beat 1, named from its left.
+                if (beatOne) {
+                    TextStyles.queueRight(graphics, label, x - 3, y, BEAT_ONE_COLOR);
+                    infoRight = x - 3 - TextStyles.width(label) - 8;
+                }
+                continue;
+            }
+            TextStyles.queue(graphics, label, x + 3, y, beatOne ? BEAT_ONE_COLOR : Palette.TEXT_2);
+            labelsRight = Math.max(labelsRight, x + 3 + TextStyles.width(label));
+        }
         String preview = I18n.get(previewPlaying ? "music_battle.l10n.editor.preview_playing" : "music_battle.l10n.editor.preview_stopped", previewTick);
-        TextStyles.queue(graphics, TextStyles.ellipsize(TextStyles.translated("music_battle.l10n.editor.timeline_info",
-                TextStyle.CAPTION, pageStartTick, exactStepLabel(), preview), grid.width), grid.x, grid.y - 25, Palette.TEXT_2);
+        String info = timelineInfo(TextStyles.measurer(), I18n.get("music_battle.l10n.editor.timeline_step", exactStepLabel(), preview),
+                infoRight - labelsRight - 10);
+        if (info != null) {
+            TextStyles.queueRight(graphics, TextStyles.text(info, TextStyle.CAPTION).getVisualOrderText(), infoRight, y, Palette.TEXT_3);
+        }
+    }
+
+    /** Between the timeline header's facts in every language: the grid step, then where the playhead stands. */
+    static final String TIMELINE_INFO_SEPARATOR = " · ";
+
+    /**
+     * What the timeline header's right end shows in {@code room}: its facts, the grid step and where the playhead
+     * stands, as many of them as fit whole, or nothing. Cut with an ellipsis, a narrow editor read "Step: 2.5 ticks ·
+     * stoppe…" and "Шаг в тиках: 2.5 · сто…".
+     */
+    static String timelineInfo(ru.gora.musicbattle.client.ui.TextMeasurer measurer, String text, float room) {
+        String shown = ru.gora.musicbattle.client.workshop.layout.TextFit.wholeParts(measurer, text, TIMELINE_INFO_SEPARATOR,
+                TextStyle.CAPTION, room);
+        return shown != null && !shown.isEmpty()
+                && ru.gora.musicbattle.client.workshop.layout.TextFit.fits(measurer, shown, TextStyle.CAPTION, room) ? shown : null;
     }
 
     /** The real cell length, 3.125 at 96 BPM: showing the rounded 3 would hide why lines and ticks differ. */
@@ -1314,6 +1858,11 @@ public final class TrackEditorScreen extends Screen {
                 .setScale(3, java.math.RoundingMode.HALF_UP).stripTrailingZeros().toPlainString();
     }
 
+    /**
+     * A note is a rounded box from its line to the next. A hold is two boxes - the press, filled, and the release,
+     * hollow - joined by its tail, because the battle releases a hold on the line its tail reaches: drawn only up to
+     * that line, as before, every hold looked one cell shorter in the editor than it plays.
+     */
     private void drawTimelineNote(GuiGraphics graphics, BattleNote note, Grid grid,
                                   int laneHeight, int step, boolean activeParty) {
         int noteEndTick = note.tick() + note.durationTicks();
@@ -1326,49 +1875,60 @@ public final class TrackEditorScreen extends Screen {
             return;
         }
         NoteBounds bounds = noteBounds(note, grid, laneHeight, step, displayLane);
-        int x = bounds.headLeft();
-        int y = bounds.top();
-        int color = editorPage == EditorPage.FX
-                ? (note.owner() == 0 ? 0x4455DDF5 : 0x44FF6680)
-                : activeParty
-                ? (note.owner() == 0 ? 0xFF55DDF5 : Palette.DANGER)
-                : (note.owner() == 0 ? 0x5555DDF5 : 0x55FF6680);
+        int base = note.owner() == 0 ? P1_COLOR : P2_COLOR;
+        // The other player's part is a faint reference behind the active one, and on the FX page both are.
+        float strength = editorPage == EditorPage.FX ? 0.27F : activeParty ? 1.0F : 0.33F;
+        int color = Palette.withAlpha(base, strength);
+        int top = bounds.top();
+        int height = bounds.bottom() - bounds.top();
         if (note.durationTicks() > 0) {
-            int tailColor = editorPage == EditorPage.FX || !activeParty
-                    ? (note.owner() == 0 ? 0x3355DDF5 : 0x33FF6680)
-                    : (note.owner() == 0 ? 0x9955DDF5 : 0x99FF6680);
-            graphics.fill(bounds.left(), y + laneHeight / 2 - 2,
-                    Math.max(bounds.left() + 2, bounds.right()), y + laneHeight / 2 + 3, tailColor);
+            int from = bounds.headVisible() ? (bounds.headLeft() + bounds.headRight()) / 2 : grid.x;
+            int to = bounds.releaseVisible() ? (bounds.releaseLeft() + bounds.releaseRight()) / 2 : grid.x + grid.width;
+            int middle = top + height / 2;
+            graphics.fill(from, middle - 2, Math.max(from + 1, to), middle + 3, Palette.withAlpha(base, strength * 0.6F));
+            if (bounds.releaseVisible()) {
+                float width = bounds.releaseRight() - bounds.releaseLeft();
+                RoundedRect.fill(graphics, bounds.releaseLeft(), top, width, height, Palette.RADIUS_SM,
+                        Palette.withAlpha(Palette.mix(Palette.BG_0, base, 0.35F), strength));
+                RoundedRect.stroke(graphics, bounds.releaseLeft(), top, width, height, Palette.RADIUS_SM, 1.5F, color);
+            }
         }
         if (bounds.headVisible()) {
-            graphics.fill(x, y, bounds.headRight(), bounds.bottom(), color);
+            RoundedRect.fill(graphics, bounds.headLeft(), top, bounds.headRight() - bounds.headLeft(), height,
+                    Palette.RADIUS_SM, color);
         }
         if (selectedNotes.contains(note)) {
-            drawNoteHandles(graphics, bounds);
+            drawNoteHandles(graphics, bounds, true);
         }
         if (editorPage == EditorPage.NOTES && bounds.headVisible()) {
-            int textColor = activeParty ? Palette.BG_0 : 0x99101018;
-            graphics.drawCenteredString(this.font, note.owner() == 0 ? "P1" : "P2",
-                    x + (bounds.headRight() - x) / 2, y + 4, textColor);
-        }
-        if (editorPage == EditorPage.NOTES && note.durationTicks() > 0 && bounds.headVisible()) {
-            graphics.drawString(this.font, "H", bounds.headRight() - 9, bounds.bottom() - 9,
-                    activeParty ? Palette.BG_0 : 0x99101018, false);
+            net.minecraft.util.FormattedCharSequence label = TextStyles.text(note.owner() == 0 ? "P1" : "P2",
+                    TextStyle.LABEL).getVisualOrderText();
+            // A fine grid at a fast tempo leaves a box narrower than its label; the colour still says whose note it is.
+            if (TextStyles.width(label) + 2 <= bounds.headRight() - bounds.headLeft()) {
+                TextStyles.queueCentered(graphics, label, (bounds.headLeft() + bounds.headRight()) / 2.0F,
+                        TextStyles.centeredCapY(TextStyle.LABEL, top, height),
+                        activeParty ? Palette.BG_0 : Palette.withAlpha(Palette.BG_0, 0.6F));
+            }
         }
     }
 
-    private void drawNoteHandles(GuiGraphics graphics, NoteBounds bounds) {
-        graphics.fill(bounds.left() - NOTE_HANDLE_OVERHANG, bounds.top() - NOTE_HANDLE_OVERHANG,
-                bounds.right() + NOTE_HANDLE_OVERHANG, bounds.top(), 0xFFFFFF55);
-        graphics.fill(bounds.left() - NOTE_HANDLE_OVERHANG, bounds.bottom(),
-                bounds.right() + NOTE_HANDLE_OVERHANG, bounds.bottom() + NOTE_HANDLE_OVERHANG, 0xFFFFFF55);
+    /**
+     * A selected note gets a gold outline; a hold also gets grab bars on the edges that resize it, which a hovered
+     * hold shows on their own so the player can see where to take it.
+     */
+    private void drawNoteHandles(GuiGraphics graphics, NoteBounds bounds, boolean selected) {
+        float top = bounds.top();
+        float height = bounds.bottom() - bounds.top();
+        if (selected) {
+            RoundedRect.stroke(graphics, bounds.left() - 2, top - 2, bounds.right() - bounds.left() + 4, height + 4,
+                    Palette.RADIUS_SM + 1.0F, 1.5F, SELECTION_COLOR);
+        }
+        int bar = selected ? SELECTION_COLOR : Palette.withAlpha(SELECTION_COLOR, 0.7F);
         if (bounds.leftEdgeVisible()) {
-            graphics.fill(bounds.left() - NOTE_HANDLE_OVERHANG, bounds.top(),
-                    bounds.left() + NOTE_HANDLE_OVERHANG, bounds.bottom(), 0xFFFFFF55);
+            RoundedRect.fill(graphics, bounds.left() - NOTE_HANDLE_OVERHANG, top, NOTE_HANDLE_OVERHANG, height, 1.5F, bar);
         }
         if (bounds.rightEdgeVisible()) {
-            graphics.fill(bounds.right() - NOTE_HANDLE_OVERHANG, bounds.top(),
-                    bounds.right() + NOTE_HANDLE_OVERHANG, bounds.bottom(), 0xFFFFFF55);
+            RoundedRect.fill(graphics, bounds.right(), top, NOTE_HANDLE_OVERHANG, height, 1.5F, bar);
         }
     }
 
@@ -1426,18 +1986,27 @@ public final class TrackEditorScreen extends Screen {
             }
             EffectBounds bounds = effectBounds(effect, grid, laneHeight, step);
             int x = bounds.left();
-            int right = bounds.right();
             int subY = bounds.top();
-            int bottom = bounds.bottom();
-            graphics.fill(x, subY, Math.max(x + 3, right), bottom, effect.type().color());
-            if (selectedEffects.contains(effect)) {
-                graphics.fill(x - 2, subY - 2, Math.max(x + 3, right) + 2, subY, 0xFFFFFF55);
-                graphics.fill(x - 2, bottom, Math.max(x + 3, right) + 2, bottom + 2, 0xFFFFFF55);
-                graphics.fill(x - 2, subY, x, bottom, 0xFFFFFF55);
-                graphics.fill(Math.max(x + 3, right), subY, Math.max(x + 3, right) + 2, bottom, 0xFFFFFF55);
+            float width = Math.max(3, bounds.right() - x);
+            float height = bounds.bottom() - subY;
+            int color = effect.type().color();
+            boolean dark = luminance(color) < 0.25F;
+            // The rounded bars and gold outline of the note page, so a selection made with Ctrl+A or the Ctrl+drag
+            // rectangle reads the same on both pages. A dark effect (cinematic bars are black) gets a rim, or it would
+            // vanish into the grid behind it.
+            RoundedRect.fill(graphics, x, subY, width, height, Palette.RADIUS_SM, color);
+            if (dark) {
+                RoundedRect.stroke(graphics, x, subY, width, height, Palette.RADIUS_SM, 1.0F, Palette.withAlpha(Palette.TEXT_3, 0.6F));
             }
-            if (columnWidth >= 12) {
-                graphics.drawString(this.font, effectName(effect.type()), x + 2, subY + 2, Palette.BG_0, false);
+            if (selectedEffects.contains(effect)) {
+                RoundedRect.stroke(graphics, x - 2, subY - 2, width + 4, height + 4, Palette.RADIUS_SM + 1.0F, 1.5F,
+                        SELECTION_COLOR);
+            }
+            if (columnWidth >= 12 && width > 12) {
+                net.minecraft.util.FormattedCharSequence name = TextStyles.ellipsize(
+                        TextStyles.text(effectName(effect.type()), TextStyle.CAPTION), width - 5);
+                TextStyles.queue(graphics, name, x + 3, TextStyles.centeredCapY(TextStyle.CAPTION, subY, height),
+                        dark ? Palette.TEXT_1 : Palette.BG_0);
             }
         }
         if (pendingEffectStartTick >= 0 && pendingEffectLane >= 0 && pendingEffectStartTick >= pageStartTick && pendingEffectStartTick < pageEnd) {
@@ -1445,23 +2014,31 @@ public final class TrackEditorScreen extends Screen {
             int viewportLane = pendingEffectLane - firstVisibleFxRow;
             if (viewportLane >= 0 && viewportLane < FX_LANES) {
                 int y = grid.y + viewportLane * laneHeight;
-                graphics.fill(x - 1, y, x + 2, y + laneHeight, 0xFFFFFF55);
+                RoundedRect.fill(graphics, x - 1, y + 2, 3, laneHeight - 3, 1.5F, SELECTION_COLOR);
             }
         }
+    }
+
+    /** Relative luminance of a colour, 0 for black to 1 for white, to pick a label that stays readable on it. */
+    private static float luminance(int argb) {
+        float red = ((argb >> 16) & 0xFF) / 255.0F;
+        float green = ((argb >> 8) & 0xFF) / 255.0F;
+        float blue = (argb & 0xFF) / 255.0F;
+        return 0.2126F * red + 0.7152F * green + 0.0722F * blue;
     }
 
     private void drawEffectLayerLabels(GuiGraphics graphics, Grid grid) {
         int laneHeight = Math.max(1, grid.height / FX_LANES);
         for (int lane = 0; lane < FX_LANES; lane++) {
             int top = grid.y + lane * laneHeight;
-            int color = lane % 2 == 0 ? 0xCC253744 : 0xCC1C2B36;
+            int color = lane % 2 == 0 ? Palette.withAlpha(Palette.BG_3, 0.85F) : Palette.withAlpha(Palette.BG_2, 0.85F);
             graphics.fill(grid.x - 48, top + 1, grid.x - 4, top + laneHeight, color);
             int globalRow = firstVisibleFxRow + lane + 1;
             TextStyles.queueCentered(graphics, TextStyles.translated("music_battle.l10n.editor.row", TextStyle.CAPTION, globalRow).getVisualOrderText(),
                     grid.x - 26, TextStyles.centeredCapY(TextStyle.CAPTION, top, laneHeight), Palette.TEXT_1);
         }
         int trackX = grid.x - 3;
-        graphics.fill(trackX, grid.y, trackX + 2, grid.y + grid.height, 0xAA101820);
+        graphics.fill(trackX, grid.y, trackX + 2, grid.y + grid.height, Palette.withAlpha(Palette.BG_0, 0.7F));
         int thumbHeight = Math.max(12, Math.round(grid.height * (FX_LANES / (float) TrackEffect.MAX_FX_ROWS)));
         int travel = Math.max(0, grid.height - thumbHeight);
         int maximumFirstRow = TrackEffect.MAX_FX_ROWS - FX_LANES;
@@ -1703,15 +2280,18 @@ public final class TrackEditorScreen extends Screen {
         return new EffectBounds(left, laneTop + 4, Math.max(left + 3, right), Math.min(grid.y + grid.height - 3, laneTop + laneHeight - 4), leftEdgeVisible, rightEdgeVisible);
     }
 
+    /** The hovered effect: a light rim, and on a ranged effect the gold grab bars of the ends that resize it. */
     private void drawEffectHandles(GuiGraphics graphics, EffectBounds bounds) {
-        int handleWidth = 3;
-        graphics.fill(bounds.left() - 1, bounds.top() - 1, bounds.right() + 1, bounds.top() + 1, 0xFFFFFFFF);
-        graphics.fill(bounds.left() - 1, bounds.bottom() - 1, bounds.right() + 1, bounds.bottom() + 1, 0xFFFFFFFF);
+        float width = Math.max(3, bounds.right() - bounds.left());
+        float height = bounds.bottom() - bounds.top();
+        RoundedRect.stroke(graphics, bounds.left() - 1, bounds.top() - 1, width + 2, height + 2, Palette.RADIUS_SM, 1.0F,
+                Palette.TEXT_1);
+        int bar = Palette.withAlpha(SELECTION_COLOR, 0.9F);
         if (bounds.leftEdgeVisible()) {
-            graphics.fill(bounds.left() - 1, bounds.top(), bounds.left() + handleWidth, bounds.bottom(), 0xFFFFE36A);
+            RoundedRect.fill(graphics, bounds.left() - 1, bounds.top(), 4, height, 1.5F, bar);
         }
         if (bounds.rightEdgeVisible()) {
-            graphics.fill(bounds.right() - handleWidth, bounds.top(), bounds.right() + 1, bounds.bottom(), 0xFFFFE36A);
+            RoundedRect.fill(graphics, bounds.left() + width - 3, bounds.top(), 4, height, 1.5F, bar);
         }
     }
 
@@ -1862,13 +2442,14 @@ public final class TrackEditorScreen extends Screen {
     /**
      * A whole tick that is the rounding of a fine-grid line is drawn on that line, so a note placed on the grid sits
      * on its line although the chart keeps it up to half a tick away; any other time, such as a playing playhead, is
-     * drawn where it really is. Above 200 BPM two fine lines can round to one tick; the active grid's line wins.
+     * drawn where it really is. Above 150 BPM two eighth lines can round to one tick: the active grid's line wins, and
+     * of two lines on one grid the coarser (a beat, a half, a quarter), the same line copying and moving count from.
      */
     private int timelineTickX(Grid grid, float tick) {
         if (tick == Math.floor(tick)) {
             int finest = GRID_DIVISIONS[GRID_DIVISIONS.length - 1] / STANDARD_GRID_DIVISION;
             for (int precision : new int[] {gridPrecisionMultiplier(), finest}) {
-                long cell = nearestCell(tick, precision);
+                long cell = ChartBeat.lineOf(offsetMs(), bpm(), STANDARD_GRID_DIVISION * precision, (int) tick);
                 if (cellTick(cell, precision) == (int) tick) {
                     long pageCells = (long) BASE_GRID_COLUMNS * precision;
                     return gridLineX(grid, (cell - pageFromBeatOne() * pageCells) / (double) pageCells);
@@ -1933,14 +2514,17 @@ public final class TrackEditorScreen extends Screen {
         int lane = Mth.clamp((int) ((mouseY - grid.y) / laneHeight), 0, NOTE_LANES - 1);
         int step = stepTicks();
         ensureTimelineCache();
-        // Prefer the actual painted body first. Expanded handle hitboxes are only
-        // considered afterwards, so adjacent notes cannot steal each other's clicks.
+        // A note owns its whole box, from its line to the next and the full height of its lane, a hold every box from
+        // its press to its release. A press a few pixels from the painted shape used to fall through to the grid,
+        // whose click on an occupied line removed the note: clicking a note's edge deleted it. Neighbouring boxes do
+        // not overlap, so no note steals another's click; the handles of a selected hold, which reach past its box,
+        // are tried only after every box.
         if (insideBodyGrid) {
             for (int i = cachedPageNotes.size() - 1; i >= 0; i--) {
                 BattleNote note = cachedPageNotes.get(i);
                 if (note.owner() != owner || note.lane() != lane) continue;
                 NoteBounds bounds = noteBounds(note, grid, laneHeight, step);
-                if (noteBodyContains(note, bounds, laneHeight, mouseX, mouseY)) {
+                if (insideRectangle(mouseX, mouseY, bounds.hitLeft(), bounds.hitTop(), bounds.hitRight(), bounds.hitBottom())) {
                     return new HoveredNote(note, bounds);
                 }
             }
@@ -1955,18 +2539,6 @@ public final class TrackEditorScreen extends Screen {
             }
         }
         return null;
-    }
-
-    private static boolean noteBodyContains(BattleNote note, NoteBounds bounds, int laneHeight,
-                                            double mouseX, double mouseY) {
-        boolean overHead = bounds.headVisible()
-                && insideRectangle(mouseX, mouseY, bounds.headLeft(), bounds.top(), bounds.headRight(), bounds.bottom());
-        if (overHead || note.durationTicks() <= 0) {
-            return overHead;
-        }
-        int tailTop = bounds.top() + laneHeight / 2 - 2;
-        int tailBottom = bounds.top() + laneHeight / 2 + 3;
-        return insideRectangle(mouseX, mouseY, bounds.left(), tailTop, bounds.right(), tailBottom);
     }
 
     private static boolean noteHandlesContain(NoteBounds bounds, double mouseX, double mouseY) {
@@ -1993,35 +2565,47 @@ public final class TrackEditorScreen extends Screen {
         return noteBounds(note, grid, laneHeight, step, note.lane());
     }
 
+    /**
+     * Where a note is drawn and where it can be grabbed. A tap is one box, from its line to the next line; a hold is
+     * a box on its press line, a box on its release line and the tail between, so it covers its release line the way
+     * the battle does, which releases it there.
+     */
     private NoteBounds noteBounds(BattleNote note, Grid grid, int laneHeight, int step,
                                   int displayLane) {
         int pageEnd = pageStartTick + pageTicks();
-        // A fine grid's cells alternate in width (2 and 1 ticks at 120 BPM); a tap note on a line fills its own cell
-        // and stops at the next line instead of spilling into the neighbour's.
-        int headEnd = note.tick() + step;
-        if (snapTimelineTick(note.tick()) == note.tick()) {
-            headEnd = Math.min(headEnd, gridTickAfter(note.tick()));
-        }
-        int displayEnd = note.durationTicks() > 0 ? note.tick() + note.durationTicks() : headEnd;
-        int exactStart = timelineTickX(grid, note.tick());
-        int exactEnd = timelineTickX(grid, displayEnd);
-        int nextStep = timelineTickX(grid, headEnd);
-        int headWidth = Math.max(1, nextStep - exactStart);
-        int left = Math.max(grid.x + 1, exactStart + (note.durationTicks() > 0 ? headWidth / 2 : 1));
-        int right = Math.min(grid.x + grid.width - 1, Math.max(exactStart + headWidth - 3, exactEnd - 1));
+        boolean hold = note.durationTicks() > 0;
+        int release = note.tick() + note.durationTicks();
+        int headLine = timelineTickX(grid, note.tick());
+        int headNext = Math.max(headLine + 1, timelineTickX(grid, boxEndTick(note.tick(), step)));
+        int releaseLine = timelineTickX(grid, release);
+        int releaseNext = Math.max(releaseLine + 1, timelineTickX(grid, boxEndTick(release, step)));
         boolean headVisible = note.tick() >= pageStartTick && note.tick() < pageEnd;
-        int headLeft = Math.max(grid.x + 3, exactStart + 3);
-        int headRight = Math.min(grid.x + grid.width - 2, headLeft + Math.max(3, headWidth - 5));
-        if (headVisible) {
-            left = Math.min(left, headLeft);
-            right = Math.max(right, headRight);
-        }
-        int top = grid.y + displayLane * laneHeight + 3;
+        boolean releaseVisible = hold && release >= pageStartTick && release < pageEnd;
+        int headLeft = Math.max(grid.x + 3, headLine + 3);
+        int headRight = Math.min(grid.x + grid.width - 2, headLeft + Math.max(3, headNext - headLine - 5));
+        int releaseLeft = Math.max(grid.x + 3, releaseLine + 3);
+        int releaseRight = Math.min(grid.x + grid.width - 2, releaseLeft + Math.max(3, releaseNext - releaseLine - 5));
+        int left = headVisible ? headLeft : grid.x + 1;
+        int right = !hold ? headRight : releaseVisible ? releaseRight : grid.x + grid.width - 1;
+        int laneTop = grid.y + displayLane * laneHeight;
+        int top = laneTop + 3;
         int bottom = top + laneHeight - 5;
-        boolean leftEdgeVisible = note.durationTicks() > 0 && headVisible;
-        boolean rightEdgeVisible = note.durationTicks() > 0 && displayEnd > pageStartTick && displayEnd <= pageEnd;
-        return new NoteBounds(left, Math.max(left + 2, right), top, bottom, headLeft, headRight,
-                headVisible, leftEdgeVisible, rightEdgeVisible);
+        int hitLeft = headVisible ? headLine : grid.x;
+        int hitRight = !hold ? headNext : releaseVisible ? releaseNext : grid.x + grid.width;
+        return new NoteBounds(left, Math.max(left + 2, right), top, bottom, headLeft, headRight, headVisible,
+                releaseLeft, releaseRight, releaseVisible, hitLeft, hitRight, laneTop + 1, laneTop + laneHeight,
+                hold && headVisible, releaseVisible);
+    }
+
+    /**
+     * Where the box of a note on {@code tick} ends: at the next line of the grid on show, and never more than a cell
+     * on. A fine grid's cells alternate in width (1 and 2 ticks at 120 BPM), and a box on a line stops at the next one
+     * instead of spilling into the neighbour's. A note between the lines on show - put on 1/8 and viewed on 1/4, or
+     * imported - also stops at the next line: a whole cell from it reached into that line's cell, and a click meant
+     * for a new note there grabbed this one instead.
+     */
+    private int boxEndTick(int tick, int step) {
+        return Math.min(tick + step, gridTickAfter(tick));
     }
 
     private void beginNoteSelectionDrag(HoveredNote hovered, double mouseX, double mouseY) {
@@ -2032,11 +2616,11 @@ public final class TrackEditorScreen extends Screen {
         resumePreviewAfterScrub = false;
         double leftDistance = bounds.leftEdgeVisible() ? Math.abs(mouseX - bounds.left()) : Double.POSITIVE_INFINITY;
         double rightDistance = bounds.rightEdgeVisible() ? Math.abs(mouseX - bounds.right()) : Double.POSITIVE_INFINITY;
-        if (note.durationTicks() > 0 && Math.min(leftDistance, rightDistance) <= NOTE_RESIZE_GRAB_WIDTH) {
+        // The ends of a hold resize it and its middle moves it; on a short hold the ends shrink, so it keeps a middle.
+        int grab = Math.max(3, Math.min(NOTE_RESIZE_GRAB_WIDTH, (bounds.right() - bounds.left()) / 4));
+        if (note.durationTicks() > 0 && Math.min(leftDistance, rightDistance) <= grab) {
             noteDragMode = leftDistance <= rightDistance ? DragMode.RESIZE_LEFT : DragMode.RESIZE_RIGHT;
-            noteDragFixedTick = noteDragMode == DragMode.RESIZE_LEFT
-                    ? note.tick() + Math.max(stepTicks(), note.durationTicks())
-                    : note.tick();
+            noteDragFixedTick = noteDragMode == DragMode.RESIZE_LEFT ? note.tick() + note.durationTicks() : note.tick();
         } else {
             noteDragMode = DragMode.MOVE;
             noteDragGrabOffsetTicks = cursorTimelineTick(mouseX) - note.tick();
@@ -2050,8 +2634,8 @@ public final class TrackEditorScreen extends Screen {
 
     private void renderHoveredNoteHandles(GuiGraphics graphics, double mouseX, double mouseY) {
         HoveredNote hovered = hoveredNoteInfo(mouseX, mouseY);
-        if (hovered != null && hovered.note().durationTicks() > 0) {
-            drawNoteHandles(graphics, hovered.bounds());
+        if (hovered != null && hovered.note().durationTicks() > 0 && !selectedNotes.contains(hovered.note())) {
+            drawNoteHandles(graphics, hovered.bounds(), false);
         }
     }
 
@@ -2065,60 +2649,45 @@ public final class TrackEditorScreen extends Screen {
         }
         noteWasDragged = true;
         double effectiveMouseX = turnTimelinePageWhileDragging(mouseX);
-        Grid grid = grid();
-        int cursorTick = cursorTimelineTick(effectiveMouseX);
         if (noteDragMode != DragMode.MOVE) {
-            int snap = stepTicks();
-            BattleNote previous = draggedNote;
-            BattleNote resized;
-            if (noteDragMode == DragMode.RESIZE_LEFT) {
-                int start = Mth.clamp(cursorTick, 0, Math.max(0, noteDragFixedTick - snap));
-                resized = new BattleNote(previous.owner(), previous.lane(), start,
-                        Math.max(snap, noteDragFixedTick - start));
-            } else {
-                int end = Math.max(noteDragFixedTick + snap, cursorTick);
-                resized = new BattleNote(previous.owner(), previous.lane(), noteDragFixedTick,
-                        end - noteDragFixedTick);
-            }
-            if (!notesFit(List.of(resized), Set.of(previous))) {
-                setStatus(I18n.get("music_battle.l10n.editor.text_106"));
-                return;
-            }
-            if (!dragHistoryCaptured) {
-                pushUndoSnapshot();
-                dragHistoryCaptured = true;
-            }
-            int index = notes.indexOf(previous);
-            if (index >= 0) {
-                notes.set(index, resized);
-            }
-            selectedNotes.remove(previous);
-            selectedNotes.add(resized);
-            draggedNote = resized;
-            invalidateTimelineCache();
+            resizeDraggedNote(effectiveMouseX);
             return;
         }
-        int targetTick = snapTimelineTick(Math.max(0, cursorTick - noteDragGrabOffsetTicks));
+        Grid grid = grid();
+        int targetTick = snapTimelineTick(Math.max(0, cursorTimelineTick(effectiveMouseX) - noteDragGrabOffsetTicks));
         int targetLane = draggedNote.lane();
         if (mouseY >= grid.y && mouseY < grid.y + grid.height) {
             targetLane = Mth.clamp((int) ((mouseY - grid.y) / Math.max(1, grid.height / NOTE_LANES)), 0, NOTE_LANES - 1);
         }
-        int tickDelta = targetTick - draggedNote.tick();
         int laneDelta = targetLane - draggedNote.lane();
+        // The selection moves by whole lines of the eighth-beat grid, counted from the line of the note in the hand,
+        // so every note keeps its place in the beat: lines are not all the same number of ticks apart, and moving
+        // every note by the hand's tick distance slid the others off their lines.
+        long cells = ChartEdits.fineCell(targetTick, offsetMs(), bpm()) - ChartEdits.fineCell(draggedNote.tick(), offsetMs(), bpm());
+        if (cells == 0L && laneDelta == 0) {
+            return;
+        }
         List<BattleNote> originals = notes.stream().filter(selectedNotes::contains).toList();
-        List<BattleNote> replacements = originals.stream()
-                .map(candidate -> new BattleNote(candidate.owner(), Mth.clamp(candidate.lane() + laneDelta, 0, 3),
-                        snapTimelineTick(Math.max(0, candidate.tick() + tickDelta)), candidate.durationTicks()))
-                .toList();
-        if (!notesFit(replacements, new HashSet<>(originals))) {
-            setStatus(I18n.get("music_battle.l10n.editor.text_107"));
+        List<BattleNote> replacements = ChartEdits.shiftNotes(originals, cells, laneDelta, offsetMs(), bpm());
+        if (replacements != null && originals.size() == 1 && replacements.get(0).tick() != targetTick) {
+            // A single note off the grid (from an import) goes onto the line it is dropped on.
+            BattleNote moved = replacements.get(0);
+            int release = moved.tick() + moved.durationTicks();
+            replacements = List.of(new BattleNote(moved.owner(), moved.lane(), targetTick,
+                    moved.durationTicks() > 0 ? Math.max(1, release - targetTick) : 0));
+        }
+        if (replacements == null) {
+            setStatus(StatusLevel.ERROR, I18n.get("music_battle.l10n.editor.move_before_start"));
+            return;
+        }
+        if (!ChartEdits.fits(notes, originals, replacements)) {
+            setStatus(StatusLevel.ERROR, I18n.get("music_battle.l10n.editor.text_107"));
             return;
         }
         if (!dragHistoryCaptured) {
             pushUndoSnapshot();
             dragHistoryCaptured = true;
         }
-        Set<BattleNote> moved = new HashSet<>(replacements);
         BattleNote newAnchor = null;
         for (int index = 0; index < originals.size(); index++) {
             BattleNote candidate = originals.get(index);
@@ -2128,9 +2697,43 @@ public final class TrackEditorScreen extends Screen {
             if (candidate.equals(draggedNote)) newAnchor = replacement;
         }
         selectedNotes.clear();
-        selectedNotes.addAll(moved);
+        selectedNotes.addAll(replacements);
         draggedNote = newAnchor;
         invalidateTimelineCache();
+    }
+
+    /**
+     * Dragging an end of a hold moves that end's box to the box under the mouse. The release box used to follow the
+     * line nearest the mouse, which with the release now drawn as a box of its own left it a box past the pointer.
+     */
+    private void resizeDraggedNote(double effectiveMouseX) {
+        BattleNote previous = draggedNote;
+        int precision = gridPrecisionMultiplier();
+        long cell = ChartBeat.cellAtOrBefore(offsetMs(), bpm(), STANDARD_GRID_DIVISION * precision,
+                cursorExactTick(effectiveMouseX));
+        int boxTick = Math.max(0, cellTick(cell, precision));
+        BattleNote resized;
+        if (noteDragMode == DragMode.RESIZE_LEFT) {
+            // The press stays at least one line before the release, which stays where it is.
+            int start = Math.min(boxTick, gridTickBefore(noteDragFixedTick));
+            resized = new BattleNote(previous.owner(), previous.lane(), start, noteDragFixedTick - start);
+        } else {
+            int release = Math.max(boxTick, gridTickAfter(noteDragFixedTick));
+            resized = new BattleNote(previous.owner(), previous.lane(), noteDragFixedTick, release - noteDragFixedTick);
+        }
+        if (resized.equals(previous)) {
+            return;
+        }
+        if (!ChartEdits.fits(notes, List.of(previous), List.of(resized))) {
+            setStatus(StatusLevel.ERROR, I18n.get("music_battle.l10n.editor.text_106"));
+            return;
+        }
+        if (!dragHistoryCaptured) {
+            pushUndoSnapshot();
+            dragHistoryCaptured = true;
+        }
+        replaceNote(previous, resized);
+        draggedNote = resized;
     }
 
     private void clearNoteSelectionDrag() {
@@ -2141,24 +2744,16 @@ public final class TrackEditorScreen extends Screen {
         dragPageTurnArmed = true;
     }
 
-    private boolean notesFit(List<BattleNote> candidates, Set<BattleNote> ignored) {
-        for (int first = 0; first < candidates.size(); first++) {
-            BattleNote candidate = candidates.get(first);
-            for (BattleNote existing : notes) {
-                if (!ignored.contains(existing) && notesOverlap(candidate, existing)) return false;
-            }
-            for (int second = first + 1; second < candidates.size(); second++) {
-                if (notesOverlap(candidate, candidates.get(second))) return false;
-            }
+    /** Puts {@code replacement} where {@code original} was in the chart and in the selection. */
+    private void replaceNote(BattleNote original, BattleNote replacement) {
+        int index = notes.indexOf(original);
+        if (index >= 0) {
+            notes.set(index, replacement);
         }
-        return true;
-    }
-
-    private boolean notesOverlap(BattleNote first, BattleNote second) {
-        if (first.owner() != second.owner() || first.lane() != second.lane()) return false;
-        int firstEnd = first.tick() + Math.max(stepTicks(), first.durationTicks());
-        int secondEnd = second.tick() + Math.max(stepTicks(), second.durationTicks());
-        return first.tick() < secondEnd && second.tick() < firstEnd;
+        if (selectedNotes.remove(original)) {
+            selectedNotes.add(replacement);
+        }
+        invalidateTimelineCache();
     }
 
     private static <T> void toggleSelection(Set<T> selection, T value) {
@@ -2168,7 +2763,11 @@ public final class TrackEditorScreen extends Screen {
     }
 
     private void pushUndoSnapshot() {
-        EditorSnapshot snapshot = snapshotTimeline();
+        pushUndoSnapshot(snapshotTimeline());
+    }
+
+    /** Records a state for Ctrl+Z to return to: the notes, the effects and what was selected. */
+    private void pushUndoSnapshot(EditorSnapshot snapshot) {
         if (!undoHistory.isEmpty() && undoHistory.peekLast().equals(snapshot)) {
             return;
         }
@@ -2180,9 +2779,31 @@ public final class TrackEditorScreen extends Screen {
     }
 
     private EditorSnapshot snapshotTimeline() {
-        return new EditorSnapshot(List.copyOf(notes), List.copyOf(effects));
+        return new EditorSnapshot(List.copyOf(notes), List.copyOf(effects), Set.copyOf(selectedNotes), Set.copyOf(selectedEffects));
     }
 
+    /**
+     * Runs a change to the selection and, when it changed anything, makes the selection before it a Ctrl+Z step, so a
+     * wrong selection is undone like a wrong edit.
+     */
+    private void changeSelection(Runnable change) {
+        EditorSnapshot before = snapshotTimeline();
+        change.run();
+        if (selectionDiffers(before)) {
+            pushUndoSnapshot(before);
+        }
+    }
+
+    private boolean selectionDiffers(EditorSnapshot snapshot) {
+        return !snapshot.selectedNotes().equals(selectedNotes) || !snapshot.selectedEffects().equals(selectedEffects);
+    }
+
+    /**
+     * Brings back the notes, the effects and the selection of a step. Only the kind of selection this page edits
+     * returns: notes selected on the note page would otherwise move with the arrow keys on the FX page, unseen. For
+     * the same reason only the edited player's notes come back selected: a step taken while the other part was edited
+     * would otherwise leave its notes selected, faint, under Delete and the arrow keys.
+     */
     private void restoreSnapshot(EditorSnapshot snapshot) {
         notes.clear();
         notes.addAll(snapshot.notes());
@@ -2190,6 +2811,13 @@ public final class TrackEditorScreen extends Screen {
         effects.addAll(snapshot.effects());
         selectedNotes.clear();
         selectedEffects.clear();
+        if (editorPage == EditorPage.FX) {
+            snapshot.selectedEffects().stream().filter(this::isFxRowVisible).forEach(selectedEffects::add);
+        } else {
+            snapshot.selectedNotes().stream().filter(note -> note.owner() == owner).forEach(selectedNotes::add);
+        }
+        clearNoteSelectionDrag();
+        clearEffectDrag();
         pendingEffectStartTick = -1;
         pendingEffectLane = -1;
         invalidateTimelineCache();
@@ -2197,75 +2825,126 @@ public final class TrackEditorScreen extends Screen {
 
     private void undo() {
         if (undoHistory.isEmpty()) {
-            setStatus(I18n.get("music_battle.l10n.editor.text_108"));
+            setStatus(StatusLevel.ERROR, I18n.get("music_battle.l10n.editor.text_108"));
             return;
         }
-        redoHistory.addLast(snapshotTimeline());
+        EditorSnapshot current = snapshotTimeline();
+        redoHistory.addLast(current);
         restoreSnapshot(undoHistory.removeLast());
-        setStatus("OK: Ctrl+Z");
+        showStep(current);
+        setStatus(StatusLevel.OK, I18n.get("music_battle.l10n.editor.undone"));
     }
 
     private void redo() {
         if (redoHistory.isEmpty()) {
-            setStatus(I18n.get("music_battle.l10n.editor.text_109"));
+            setStatus(StatusLevel.ERROR, I18n.get("music_battle.l10n.editor.text_109"));
             return;
         }
-        undoHistory.addLast(snapshotTimeline());
+        EditorSnapshot current = snapshotTimeline();
+        undoHistory.addLast(current);
         restoreSnapshot(redoHistory.removeLast());
-        setStatus("OK: Shift+Ctrl+Z");
+        showStep(current);
+        setStatus(StatusLevel.OK, I18n.get("music_battle.l10n.editor.redone"));
     }
 
+    /**
+     * After Ctrl+Z or Shift+Ctrl+Z the page shows what the step changed: the notes and effects it put back or took
+     * away, or, for a step that changed only the selection, the selection it brought back. The page stays when any of
+     * that is already on it and otherwise turns to the earliest. Turning to the selection after every step, as at
+     * first, took the player away from a note they had just placed whenever what was selected before lay elsewhere.
+     */
+    private void showStep(EditorSnapshot before) {
+        List<Integer> changed = new ArrayList<>();
+        Set<BattleNote> notesBefore = new HashSet<>(before.notes());
+        Set<BattleNote> notesAfter = new HashSet<>(notes);
+        before.notes().stream().filter(note -> !notesAfter.contains(note)).forEach(note -> changed.add(note.tick()));
+        notes.stream().filter(note -> !notesBefore.contains(note)).forEach(note -> changed.add(note.tick()));
+        Set<TrackEffect> effectsBefore = new HashSet<>(before.effects());
+        Set<TrackEffect> effectsAfter = new HashSet<>(effects);
+        before.effects().stream().filter(effect -> !effectsAfter.contains(effect)).forEach(effect -> changed.add(effect.tick()));
+        effects.stream().filter(effect -> !effectsBefore.contains(effect)).forEach(effect -> changed.add(effect.tick()));
+        if (changed.isEmpty()) {
+            selectedNotes.forEach(note -> changed.add(note.tick()));
+            selectedEffects.forEach(effect -> changed.add(effect.tick()));
+        }
+        int pageEnd = pageStartTick + pageTicks();
+        if (changed.isEmpty() || changed.stream().anyMatch(tick -> tick >= pageStartTick && tick < pageEnd)) {
+            return;
+        }
+        pageStartTick = pageStartForTick(changed.stream().mapToInt(Integer::intValue).min().orElse(pageStartTick));
+        if (!previewPlaying) {
+            previewTick = pageStartTick;
+        }
+    }
+
+    /**
+     * Copies the selection by grid line, not by tick, so a paste puts every note back on a line: the clipboard used to
+     * keep tick distances, and lines are not all the same number of ticks apart (3.125 ticks a cell at 96 BPM).
+     */
     private void copySelection() {
         selectedEffects.removeIf(effect -> !isFxRowVisible(effect));
         if (selectedNotes.isEmpty() && selectedEffects.isEmpty()) {
-            setStatus(I18n.get("music_battle.l10n.editor.text_110"));
+            setStatus(StatusLevel.ERROR, I18n.get("music_battle.l10n.editor.select_first"));
             return;
         }
-        int minTick = Integer.MAX_VALUE;
-        for (BattleNote note : selectedNotes) minTick = Math.min(minTick, note.tick());
-        for (TrackEffect effect : selectedEffects) minTick = Math.min(minTick, effect.tick());
-        int origin = minTick == Integer.MAX_VALUE ? 0 : minTick;
-        List<BattleNote> copiedNotes = selectedNotes.stream()
-                .map(note -> new BattleNote(note.owner(), note.lane(), note.tick() - origin, note.durationTicks()))
-                .toList();
-        List<TrackEffect> copiedEffects = selectedEffects.stream()
-                .map(effect -> effect.withTimeline(effect.lane(), effect.tick() - origin, effect.durationTicks()))
-                .toList();
-        int sourceFxRow = selectedEffects.stream().mapToInt(TrackEditorScreen::absoluteFxRow).min().orElse(0);
-        clipboard = new ClipboardData(copiedNotes, copiedEffects, sourceFxRow);
-        setStatus(I18n.get("music_battle.l10n.editor.copied", copiedNotes.size() + copiedEffects.size()));
+        clipboard = ChartEdits.copy(selectedNotes, selectedEffects, offsetMs(), bpm());
+        clipboardAnchor = clipboard.firstCell();
+        setStatus(StatusLevel.OK, I18n.get("music_battle.l10n.editor.copied", clipboard.size()));
     }
 
+    /**
+     * Pastes the copied group into free space (see {@link ChartEdits#pasteCell}): next to its last copy when that is
+     * on this page, so Ctrl+V again and again lays copies one after another, otherwise from the start of this page.
+     * It used to paste at the start of the page every time, which was on top of the group itself or of the last
+     * paste, and was refused. The page turns to the paste when it lands further on.
+     */
     private void pasteSelection() {
-        if (clipboard.notes().isEmpty() && clipboard.effects().isEmpty()) {
-            setStatus(I18n.get("music_battle.l10n.editor.text_113"));
+        if (clipboard.isEmpty()) {
+            setStatus(StatusLevel.ERROR, I18n.get("music_battle.l10n.editor.text_113"));
             return;
         }
-        List<BattleNote> candidates = clipboard.notes().stream()
-                .map(note -> new BattleNote(note.owner(), note.lane(), pageStartTick + note.tick(), note.durationTicks()))
-                .toList();
-        if (!notesFit(candidates, Set.of())) {
-            setStatus(I18n.get("music_battle.l10n.editor.text_114"));
+        long cell = ChartEdits.pasteCell(notes, effects, clipboard, pasteSearchStart(), firstVisibleFxRow, offsetMs(), bpm());
+        List<BattleNote> pastedNotes = ChartEdits.placeNotes(clipboard, cell, offsetMs(), bpm());
+        List<TrackEffect> pastedEffects = ChartEdits.placeEffects(clipboard, cell, firstVisibleFxRow, offsetMs(), bpm());
+        if (effects.size() + pastedEffects.size() > TrackEffect.MAX_EFFECTS) {
+            setStatus(StatusLevel.ERROR, I18n.get("music_battle.l10n.editor.max_effects", TrackEffect.MAX_EFFECTS));
             return;
         }
         pushUndoSnapshot();
+        notes.addAll(pastedNotes);
+        effects.addAll(pastedEffects);
         selectedNotes.clear();
+        selectedNotes.addAll(pastedNotes);
         selectedEffects.clear();
-        int targetTick = pageStartTick;
-        for (BattleNote pasted : candidates) {
-            notes.add(pasted);
-            selectedNotes.add(pasted);
-        }
-        for (TrackEffect effect : clipboard.effects()) {
-            int targetRow = Mth.clamp(firstVisibleFxRow + absoluteFxRow(effect) - clipboard.sourceFxRow(),
-                    0, TrackEffect.MAX_FX_ROWS - 1);
-            TrackEffect pasted = moveEffectToAbsoluteRow(effect, targetRow);
-            pasted = pasted.withTimeline(pasted.lane(), targetTick + effect.tick(), effect.durationTicks());
-            effects.add(pasted);
-            selectedEffects.add(pasted);
-        }
+        selectedEffects.addAll(pastedEffects);
+        clipboardAnchor = cell;
         invalidateTimelineCache();
-        setStatus(I18n.get("music_battle.l10n.editor.text_115"));
+        int first = Math.min(pastedNotes.stream().mapToInt(BattleNote::tick).min().orElse(Integer.MAX_VALUE),
+                pastedEffects.stream().mapToInt(TrackEffect::tick).min().orElse(Integer.MAX_VALUE));
+        if (first != Integer.MAX_VALUE && (first < pageStartTick || first >= pageStartTick + pageTicks())) {
+            pageStartTick = pageStartForTick(first);
+            if (!previewPlaying) {
+                previewTick = pageStartTick;
+            }
+        }
+        long cellsPerBar = (long) ChartBeat.BEATS_PER_BAR * ChartEdits.FINE_CELLS_PER_BEAT;
+        String beat = new java.math.BigDecimal(Math.floorMod(cell, cellsPerBar) / (double) ChartEdits.FINE_CELLS_PER_BEAT + 1.0D)
+                .stripTrailingZeros().toPlainString();
+        setStatus(StatusLevel.OK, I18n.get("music_battle.l10n.editor.pasted_at", clipboard.size(),
+                ChartBeat.barOfCell(cell, ChartEdits.FINE_CELLS_PER_BEAT), beat));
+    }
+
+    /**
+     * Where Ctrl+V starts looking: the group's last place when it is on this page, so a paste follows the one before
+     * it; otherwise the first line of this page that has the group's place in the beat, so a group goes where the
+     * player is looking.
+     */
+    private long pasteSearchStart() {
+        int anchorTick = ChartEdits.fineTick(clipboardAnchor, offsetMs(), bpm());
+        if (anchorTick >= pageStartTick && anchorTick < pageStartTick + pageTicks()) {
+            return clipboardAnchor;
+        }
+        return pageFromBeatOne() * PAGE_BEATS * ChartEdits.FINE_CELLS_PER_BEAT + clipboard.phase();
     }
 
     private void deleteSelection() {
@@ -2280,20 +2959,20 @@ public final class TrackEditorScreen extends Screen {
         selectedNotes.clear();
         selectedEffects.clear();
         invalidateTimelineCache();
-        setStatus(I18n.get("music_battle.l10n.editor.deleted", count));
+        setStatus(StatusLevel.OK, I18n.get("music_battle.l10n.editor.deleted", count));
     }
 
     private void convertSelectedNoteOwners() {
         if (selectedNotes.isEmpty()) {
-            setStatus(I18n.get("music_battle.l10n.editor.text_117"));
+            setStatus(StatusLevel.ERROR, I18n.get("music_battle.l10n.editor.select_first"));
             return;
         }
         List<BattleNote> originals = notes.stream().filter(selectedNotes::contains).toList();
         List<BattleNote> converted = originals.stream()
                 .map(note -> new BattleNote(1 - Mth.clamp(note.owner(), 0, 1), note.lane(), note.tick(), note.durationTicks()))
                 .toList();
-        if (!notesFit(converted, new HashSet<>(originals))) {
-            setStatus(I18n.get("music_battle.l10n.editor.text_118"));
+        if (!ChartEdits.fits(notes, originals, converted)) {
+            setStatus(StatusLevel.ERROR, I18n.get("music_battle.l10n.editor.text_118"));
             return;
         }
         pushUndoSnapshot();
@@ -2306,41 +2985,45 @@ public final class TrackEditorScreen extends Screen {
         selectedNotes.clear();
         selectedNotes.addAll(converted);
         invalidateTimelineCache();
-        setStatus(I18n.get("music_battle.l10n.editor.converted", converted.size()));
+        setStatus(StatusLevel.OK, I18n.get("music_battle.l10n.editor.converted", converted.size()));
     }
 
-    private void moveSelection(int tickDelta, int laneDelta) {
+    /**
+     * The arrow keys: left and right move the selection by one line of the grid on show, counted in eighth-beat lines
+     * so every note keeps its place in the beat. They used to move everything by the tick length of the first note's
+     * cell, and cells are not all the same length (3, 3, 3 and 4 ticks at 96 BPM), so other notes left their lines.
+     */
+    private void moveSelection(int lineSteps, int laneDelta) {
         selectedEffects.removeIf(effect -> !isFxRowVisible(effect));
+        long cells = (long) lineSteps * (ChartEdits.FINE_CELLS_PER_BEAT / (STANDARD_GRID_DIVISION * gridPrecisionMultiplier()));
         List<BattleNote> originalNotes = notes.stream().filter(selectedNotes::contains).toList();
-        List<BattleNote> replacementNotes = originalNotes.stream()
-                .map(note -> new BattleNote(note.owner(), Mth.clamp(note.lane() + laneDelta, 0, 3),
-                        Math.max(0, note.tick() + tickDelta), note.durationTicks()))
-                .toList();
-        if (!notesFit(replacementNotes, new HashSet<>(originalNotes))) {
-            setStatus(I18n.get("music_battle.l10n.editor.text_107"));
+        List<TrackEffect> originalEffects = effects.stream().filter(selectedEffects::contains).toList();
+        List<BattleNote> replacementNotes = ChartEdits.shiftNotes(originalNotes, cells, laneDelta, offsetMs(), bpm());
+        List<TrackEffect> replacementEffects = ChartEdits.shiftEffects(originalEffects, cells, laneDelta, offsetMs(), bpm());
+        if (replacementNotes == null || replacementEffects == null) {
+            setStatus(StatusLevel.ERROR, I18n.get("music_battle.l10n.editor.move_before_start"));
+            return;
+        }
+        if (!ChartEdits.fits(notes, originalNotes, replacementNotes)) {
+            setStatus(StatusLevel.ERROR, I18n.get("music_battle.l10n.editor.text_107"));
             return;
         }
         pushUndoSnapshot();
-        Set<BattleNote> movedNotes = new HashSet<>(replacementNotes);
         for (int index = 0; index < originalNotes.size(); index++) {
             int noteIndex = notes.indexOf(originalNotes.get(index));
             if (noteIndex >= 0) notes.set(noteIndex, replacementNotes.get(index));
         }
-        Set<TrackEffect> movedEffects = new HashSet<>();
-        for (int i = 0; i < effects.size(); i++) {
-            TrackEffect effect = effects.get(i);
-            if (!selectedEffects.contains(effect)) continue;
-            TrackEffect moved = moveEffectToAbsoluteRow(effect,
-                    Mth.clamp(absoluteFxRow(effect) + laneDelta, 0, TrackEffect.MAX_FX_ROWS - 1));
-            moved = moved.withTimeline(moved.lane(), Math.max(0, effect.tick() + tickDelta), effect.durationTicks());
-            effects.set(i, moved);
-            movedEffects.add(moved);
+        for (int index = 0; index < originalEffects.size(); index++) {
+            int effectIndex = effects.indexOf(originalEffects.get(index));
+            if (effectIndex >= 0) effects.set(effectIndex, replacementEffects.get(index));
         }
-        selectedNotes.clear(); selectedNotes.addAll(movedNotes);
-        selectedEffects.clear(); selectedEffects.addAll(movedEffects);
-        keepEffectSelectionInView(movedEffects);
+        selectedNotes.clear();
+        selectedNotes.addAll(replacementNotes);
+        selectedEffects.clear();
+        selectedEffects.addAll(replacementEffects);
+        keepEffectSelectionInView(selectedEffects);
         invalidateTimelineCache();
-        setStatus(I18n.get("music_battle.l10n.editor.text_120"));
+        setStatus(StatusLevel.OK, I18n.get("music_battle.l10n.editor.text_120"));
     }
 
     private void keepEffectSelectionInView(Set<TrackEffect> movedEffects) {
@@ -2366,7 +3049,7 @@ public final class TrackEditorScreen extends Screen {
             pushUndoSnapshot();
             effects.set(index, replacement);
             invalidateTimelineCache();
-            setStatus(I18n.get("music_battle.l10n.editor.text_121"));
+            setStatus(StatusLevel.OK, I18n.get("music_battle.l10n.editor.text_121"));
         }
     }
 
@@ -2381,7 +3064,7 @@ public final class TrackEditorScreen extends Screen {
             effectMode = EffectPlacementMode.POINT;
         }
         ClientEffectToolSettings.savePreset(template, placementMode);
-        setStatus(I18n.get("music_battle.l10n.editor.template_updated", effectName(template.type())));
+        setStatus(StatusLevel.OK, I18n.get("music_battle.l10n.editor.template_updated", effectName(template.type())));
     }
 
     void refreshEffectBrush(TrackEffect.Type type) {
@@ -2390,59 +3073,133 @@ public final class TrackEditorScreen extends Screen {
         effectMode = parseEffectMode(ClientEffectToolSettings.placementMode(type));
         pendingEffectStartTick = -1;
         pendingEffectLane = -1;
-        setStatus(I18n.get("music_battle.l10n.editor.brush_updated", effectName(type)));
+        setStatus(StatusLevel.OK, I18n.get("music_battle.l10n.editor.brush_updated", effectName(type)));
     }
 
     void removeEffect(TrackEffect effect) {
         pushUndoSnapshot();
         if (effects.remove(effect)) {
             invalidateTimelineCache();
-            setStatus(I18n.get("music_battle.l10n.editor.text_126"));
+            setStatus(StatusLevel.OK, I18n.get("music_battle.l10n.editor.text_126"));
         }
     }
 
+    /**
+     * A click on the grid that no note or effect took. On the note page the left button places a note and never
+     * removes one - removing on a click is what made a press on a note's edge delete it - and the right button makes
+     * a long note, or turns the long note under it back into a normal one. A click that changes anything is one Ctrl+Z
+     * step; one that is refused leaves no step behind.
+     */
     private boolean toggleGridNote(double mouseX, double mouseY, int button) {
         Grid grid = grid();
         if (mouseX < grid.x || mouseX >= grid.x + grid.width || mouseY < grid.y || mouseY >= grid.y + grid.height) {
             return false;
         }
-
+        EditorSnapshot before = snapshotTimeline();
         int laneCount = editorPage == EditorPage.FX ? FX_LANES : NOTE_LANES;
         int laneHeight = Math.max(1, grid.height / laneCount);
         int column = gridColumnAt(grid, mouseX);
         int lane = Mth.clamp((int) ((mouseY - grid.y) / laneHeight), 0, laneCount - 1);
+        boolean beforeSong = columnBeforeSong(column);
         if (editorPage == EditorPage.FX) {
-            return toggleGridEffect(column, lane, button);
-        }
-        int tick = gridTickAtColumn(column);
-
-        int holdStep = hasShiftDown() ? stepTicks() * 4 : stepTicks();
-        for (Iterator<BattleNote> iterator = notes.iterator(); iterator.hasNext(); ) {
-            BattleNote note = iterator.next();
-            if (note.owner() == owner && note.lane() == lane && note.tick() == tick) {
-                if (button == 1) {
-                    BattleNote extended = new BattleNote(owner, lane, tick, note.durationTicks() + holdStep);
-                    if (!notesFit(List.of(extended), Set.of(note))) {
-                        setStatus(I18n.get("music_battle.l10n.editor.text_127"));
-                        return true;
-                    }
-                    iterator.remove();
-                    notes.add(extended);
-                } else {
-                    iterator.remove();
-                }
-                invalidateTimelineCache();
-                return true;
+            if (beforeSong) {
+                setStatus(StatusLevel.ERROR, I18n.get("music_battle.l10n.editor.before_song_click"));
+            } else {
+                toggleGridEffect(column, lane, button);
+            }
+        } else if (button == 1) {
+            toggleHold(mouseX, mouseY, gridTickAtColumn(column), lane, hasShiftDown() ? 4 : 1, beforeSong);
+        } else if (button == 0) {
+            if (beforeSong) {
+                setStatus(StatusLevel.ERROR, I18n.get("music_battle.l10n.editor.before_song_click"));
+            } else {
+                placeNote(gridTickAtColumn(column), lane);
             }
         }
-        BattleNote added = new BattleNote(owner, lane, tick, button == 1 ? holdStep : 0);
-        if (!notesFit(List.of(added), Set.of())) {
-            setStatus(I18n.get("music_battle.l10n.editor.text_128"));
-            return true;
+        if (!before.equals(snapshotTimeline())) {
+            pushUndoSnapshot(before);
+        }
+        return true;
+    }
+
+    /**
+     * Whether a column's line comes before the song starts, which happens only on the shaded part of the page that
+     * leads in to a later beat 1. Its tick would be clamped onto the song's first tick, so a click anywhere in the
+     * shade used to put a note at the very start of the song, far from the line that was clicked.
+     */
+    private boolean columnBeforeSong(int column) {
+        long cell = pageFromBeatOne() * gridColumns() + Mth.clamp(column, 0, gridColumns());
+        return cellTick(cell, gridPrecisionMultiplier()) < 0;
+    }
+
+    private void placeNote(int tick, int lane) {
+        BattleNote existing = noteAt(lane, tick);
+        if (existing != null) {
+            // The note's own box takes every click on it, so a click reaching here is on another line that rounds to
+            // its tick, which happens on the 1/8 grid above 150 BPM. A beatmap holds one note per tick and lane; the
+            // click selects that note rather than stacking a second one or removing it.
+            selectedNotes.clear();
+            selectedEffects.clear();
+            selectedNotes.add(existing);
+            setStatus(StatusLevel.WARN, I18n.get("music_battle.l10n.editor.same_tick"));
+            return;
+        }
+        BattleNote added = new BattleNote(owner, lane, tick, 0);
+        if (!ChartEdits.fits(notes, List.of(added))) {
+            setStatus(StatusLevel.ERROR, I18n.get("music_battle.l10n.editor.text_128"));
+            return;
         }
         notes.add(added);
         invalidateTimelineCache();
-        return true;
+    }
+
+    /**
+     * The right button: over a long note it becomes a normal note again; over a normal one, or on an empty line, the
+     * note becomes long, released one line on (four with Shift). It used to make a long note one cell longer on every
+     * click and had no way back, and a click on a long note's tail missed it, since only its press line counted. Before
+     * the song starts only a note drawn under the mouse can be changed; nothing new is made there.
+     */
+    private void toggleHold(double mouseX, double mouseY, int tick, int lane, int lines, boolean beforeSong) {
+        HoveredNote hovered = hoveredNoteInfo(mouseX, mouseY);
+        BattleNote target = hovered != null ? hovered.note() : beforeSong ? null : noteAt(lane, tick);
+        if (target == null && beforeSong) {
+            setStatus(StatusLevel.ERROR, I18n.get("music_battle.l10n.editor.before_song_click"));
+            return;
+        }
+        if (target != null) {
+            BattleNote changed = new BattleNote(target.owner(), target.lane(), target.tick(),
+                    target.durationTicks() > 0 ? 0 : holdLength(target.tick(), lines));
+            if (!ChartEdits.fits(notes, List.of(target), List.of(changed))) {
+                setStatus(StatusLevel.ERROR, I18n.get("music_battle.l10n.editor.text_127"));
+                return;
+            }
+            replaceNote(target, changed);
+            setStatus(StatusLevel.OK, I18n.get(changed.durationTicks() > 0
+                    ? "music_battle.l10n.editor.hold_made" : "music_battle.l10n.editor.hold_removed"));
+            return;
+        }
+        BattleNote added = new BattleNote(owner, lane, tick, holdLength(tick, lines));
+        if (!ChartEdits.fits(notes, List.of(added))) {
+            setStatus(StatusLevel.ERROR, I18n.get("music_battle.l10n.editor.text_127"));
+            return;
+        }
+        notes.add(added);
+        invalidateTimelineCache();
+    }
+
+    /** A hold pressed on {@code tick} and released {@code lines} lines of the grid on show later, on a line. */
+    private int holdLength(int tick, int lines) {
+        return ChartBeat.lineAfter(offsetMs(), bpm(), STANDARD_GRID_DIVISION * gridPrecisionMultiplier(), tick, lines) - tick;
+    }
+
+    /** The note of the player being edited pressed on this tick in this lane, if there is one. */
+    private BattleNote noteAt(int lane, int tick) {
+        for (BattleNote note : notes) {
+            if (note.owner() == owner && note.lane() == lane && note.tick() == tick) {
+                return note;
+            }
+        }
+        return null;
     }
 
     private boolean toggleGridEffect(int column, int lane, int button) {
@@ -2461,7 +3218,7 @@ public final class TrackEditorScreen extends Screen {
             if (selected != null) {
                 effects.remove(selected);
                 invalidateTimelineCache();
-                setStatus(I18n.get("music_battle.l10n.editor.text_126"));
+                setStatus(StatusLevel.OK, I18n.get("music_battle.l10n.editor.text_126"));
             }
             return true;
         }
@@ -2469,14 +3226,14 @@ public final class TrackEditorScreen extends Screen {
             return true;
         }
         if (effects.size() >= TrackEffect.MAX_EFFECTS) {
-            setStatus(I18n.get("music_battle.l10n.editor.max_effects", TrackEffect.MAX_EFFECTS));
+            setStatus(StatusLevel.ERROR, I18n.get("music_battle.l10n.editor.max_effects", TrackEffect.MAX_EFFECTS));
             return true;
         }
         if (effectMode == EffectPlacementMode.RANGE) {
             if (pendingEffectStartTick < 0) {
                 pendingEffectStartTick = tick;
                 pendingEffectLane = absoluteRow;
-                setStatus(I18n.get("music_battle.l10n.editor.range_start", tick));
+                setStatus(StatusLevel.OK, I18n.get("music_battle.l10n.editor.range_start", tick));
                 return true;
             }
             int start = Math.min(pendingEffectStartTick, tick);
@@ -2486,7 +3243,7 @@ public final class TrackEditorScreen extends Screen {
             invalidateTimelineCache();
             pendingEffectStartTick = -1;
             pendingEffectLane = -1;
-            setStatus(I18n.get("music_battle.l10n.editor.range_added"));
+            setStatus(StatusLevel.OK, I18n.get("music_battle.l10n.editor.range_added"));
             return true;
         }
         int duration = effectMode == EffectPlacementMode.LENGTH
@@ -2495,7 +3252,7 @@ public final class TrackEditorScreen extends Screen {
         TrackEffect added = moveEffectToAbsoluteRow(effectTemplate, absoluteRow);
         effects.add(added.withTimeline(added.lane(), tick, duration));
         invalidateTimelineCache();
-        setStatus(I18n.get("music_battle.l10n.editor.effect_added", effectName(effectType)));
+        setStatus(StatusLevel.OK, I18n.get("music_battle.l10n.editor.effect_added", effectName(effectType)));
         return true;
     }
 
@@ -2557,17 +3314,17 @@ public final class TrackEditorScreen extends Screen {
         int top = grid.y - 12;
         int bottom = grid.y - 5;
         int endTick = timelineEndTick();
-        graphics.fill(grid.x, top, grid.x + grid.width, bottom, 0xFF091117);
+        graphics.fill(grid.x, top, grid.x + grid.width, bottom, Palette.BG_3);
 
         float pageStartProgress = Mth.clamp(pageStartTick / (float) endTick, 0.0F, 1.0F);
         float pageEndProgress = Mth.clamp((pageStartTick + pageTicks()) / (float) endTick, 0.0F, 1.0F);
         int pageLeft = grid.x + Math.round(grid.width * pageStartProgress);
         int pageRight = grid.x + Math.round(grid.width * pageEndProgress);
-        graphics.fill(pageLeft, top + 1, Math.max(pageLeft + 1, pageRight), bottom - 1, 0x884AA8C4);
+        graphics.fill(pageLeft, top + 1, Math.max(pageLeft + 1, pageRight), bottom - 1, Palette.withAlpha(Palette.ACCENT, 0.35F));
 
         float currentTick = previewPlaying ? currentPreviewTick() : previewTick;
         int handleX = grid.x + Math.round(grid.width * Mth.clamp(currentTick / endTick, 0.0F, 1.0F));
-        graphics.fill(grid.x, top + 2, handleX, bottom - 2, 0xFF55CFEA);
+        graphics.fill(grid.x, top + 2, handleX, bottom - 2, Palette.ACCENT_STRONG);
         graphics.fill(handleX - 2, top - 2, handleX + 3, bottom + 2, 0xFFFFF06A);
     }
 
@@ -2604,7 +3361,7 @@ public final class TrackEditorScreen extends Screen {
         if (resume) {
             togglePreview();
         } else {
-            setStatus(I18n.get("music_battle.l10n.editor.preview_position", previewTick));
+            setStatus(StatusLevel.OK, I18n.get("music_battle.l10n.editor.preview_position", previewTick));
         }
     }
 
@@ -2661,7 +3418,7 @@ public final class TrackEditorScreen extends Screen {
         if (resume) {
             togglePreview();
         } else {
-            setStatus(I18n.get("music_battle.l10n.editor.preview_position", previewTick));
+            setStatus(StatusLevel.OK, I18n.get("music_battle.l10n.editor.preview_position", previewTick));
         }
     }
 
@@ -2694,9 +3451,9 @@ public final class TrackEditorScreen extends Screen {
             previewDurationTicks = MusicBattleTracks.readOggDurationTicks(path);
             previewTick = 0;
             pageStartTick = 0;
-            setStatus("OK: " + I18n.get("music_battle.l10n.editor.ogg_loaded", previewDurationTicks / 20));
+            setStatus(StatusLevel.OK, I18n.get("music_battle.l10n.editor.ogg_loaded", previewDurationTicks / 20));
         } catch (IOException exception) {
-            setStatus("ERR: " + exception.getMessage());
+            setStatus(StatusLevel.ERROR, exception.getMessage());
         }
     }
 
@@ -2722,9 +3479,9 @@ public final class TrackEditorScreen extends Screen {
                     true, 0.0D, 0.0D, 0.0D, SoundInstance.Attenuation.NONE, effectivePreviewVolume());
             this.minecraft.getSoundManager().play(previewSound);
             updatePlayButtons("music_battle.l10n.editor.button_stop");
-            setStatus("OK: " + I18n.get("music_battle.l10n.editor.audio_loading", previewTick));
+            setStatus(StatusLevel.OK, I18n.get("music_battle.l10n.editor.audio_loading", previewTick));
         } catch (IOException exception) {
-            setStatus("ERR: " + exception.getMessage());
+            setStatus(StatusLevel.ERROR, exception.getMessage());
         }
     }
 
@@ -2750,6 +3507,7 @@ public final class TrackEditorScreen extends Screen {
                     previewPath,
                     draftTitle == null || draftTitle.isBlank() ? I18n.get("music_battle.l10n.editor.gameplay_preview_title") : draftTitle,
                     bpm(),
+                    offsetMs(),
                     volume(),
                     previewDurationTicks,
                     startTick,
@@ -2760,7 +3518,7 @@ public final class TrackEditorScreen extends Screen {
                     hideStandardDimming
             ));
         } catch (IOException exception) {
-            setStatus("ERR: " + exception.getMessage());
+            setStatus(StatusLevel.ERROR, exception.getMessage());
         }
     }
 
@@ -2966,7 +3724,7 @@ public final class TrackEditorScreen extends Screen {
                         .toList();
             }
             if (files.isEmpty()) {
-                setStatus("ERR: " + I18n.get("music_battle.l10n.editor.no_raw_files", "PNG/JPG/JPEG/GIF/BMP", directory));
+                setStatus(StatusLevel.ERROR, I18n.get("music_battle.l10n.editor.no_raw_files", "PNG/JPG/JPEG/GIF/BMP", directory));
                 return;
             }
             String current = target.getValue() == null ? "" : target.getValue().trim();
@@ -2980,9 +3738,9 @@ public final class TrackEditorScreen extends Screen {
             String gifNotice = chosen.getFileName().toString().toLowerCase(java.util.Locale.ROOT).endsWith(".gif")
                     ? I18n.get("music_battle.l10n.editor.text_136")
                     : "";
-            setStatus(I18n.get("music_battle.l10n.editor.image_selected", chosen.getFileName(), gifNotice));
+            setStatus(StatusLevel.OK, I18n.get("music_battle.l10n.editor.image_selected", chosen.getFileName(), gifNotice));
         } catch (IOException exception) {
-            setStatus("ERR: " + exception.getMessage());
+            setStatus(StatusLevel.ERROR, exception.getMessage());
         }
     }
 
@@ -3021,8 +3779,8 @@ public final class TrackEditorScreen extends Screen {
                 int difficultyIndex = selectedOsuDifficulty >= 0 && selectedOsuDifficulty < osuDifficulties.size()
                         ? osuDifficulties.get(selectedOsuDifficulty).index()
                         : selectedOsuDifficulty;
-                // The song is converted after this returns, on a worker: ffmpeg used to run right here, in the click,
-                // and froze the game for the whole conversion.
+                // The song is converted after this returns, on a worker: converting it right here, in the click, froze
+                // the game for the whole conversion.
                 ClientOsuManiaImporter.ImportedOsuChart imported = ClientOsuManiaImporter.importChartDeferringSong(path, difficultyIndex);
                 chart = imported.chart();
                 importedAudio = imported.audioFile();
@@ -3037,7 +3795,9 @@ public final class TrackEditorScreen extends Screen {
             setBoxValueAtStart(descriptionBox, chart.description());
             setBoxValueAtStart(bpmBox, Integer.toString(chart.bpm()));
             // An imported chart carries no first beat of its own; one left from the previous song would misplace the grid.
+            // The import's own report says what happened, so the reset is not announced as a typed change.
             setBoxValueAtStart(offsetBox, "0");
+            shownOffsetMs = 0;
             setEditorVolume(1.0F, false);
             if (!importedAudio.isBlank()) {
                 setBoxValueAtStart(audioBox, importedAudio);
@@ -3063,25 +3823,27 @@ public final class TrackEditorScreen extends Screen {
             long holds = notes.stream().filter(note -> note.durationTicks() > 0).count();
             int over = ClientTrackExporter.notesOverLimit(notes.size());
             if (audioLeftBehind != null) {
-                setStatus("WARN: " + audioLeftBehindStatus(notes.size(), audioLeftBehind));
+                setStatus(StatusLevel.WARN, audioLeftBehindStatus(notes.size(), audioLeftBehind));
             } else if (pendingSong != null) {
                 String converting = I18n.get("music_battle.l10n.editor.import_audio_converting", notes.size(),
                         pendingSong.sourceExtension().replace(".", "").toUpperCase(java.util.Locale.ROOT));
-                setStatus(over > 0
-                        ? "WARN: " + converting + " " + I18n.get("music_battle.l10n.editor.too_many_notes_import",
-                                notes.size(), ClientTrackExporter.MAX_NOTES, over)
-                        : "OK: " + converting);
+                if (over > 0) {
+                    setStatus(StatusLevel.WARN, converting + " " + I18n.get("music_battle.l10n.editor.too_many_notes_import",
+                            notes.size(), ClientTrackExporter.MAX_NOTES, over));
+                } else {
+                    setStatus(StatusLevel.OK, converting);
+                }
                 convertImportedSong(pendingSong, importGeneration, notes.size());
             } else if (over > 0) {
-                setStatus("WARN: " + I18n.get("music_battle.l10n.editor.too_many_notes_import",
+                setStatus(StatusLevel.WARN, I18n.get("music_battle.l10n.editor.too_many_notes_import",
                         notes.size(), ClientTrackExporter.MAX_NOTES, over));
             } else {
-                setStatus("OK: " + I18n.get("music_battle.l10n.editor.imported", notes.size(), holds, audioImportStatus(importedAudio), previewImportStatus(importedPreview)));
+                setStatus(StatusLevel.OK, I18n.get("music_battle.l10n.editor.imported", notes.size(), holds, audioImportStatus(importedAudio), previewImportStatus(importedPreview)));
             }
         } catch (IOException | RuntimeException exception) {
             // The importers read files from anywhere, and anything a broken file throws must end up here rather than
             // in the button handler, where Minecraft turns it into a crash that takes the unsaved chart with it.
-            setStatus("ERR: " + MusicBattleTracks.safeMessage(exception));
+            setStatus(StatusLevel.ERROR, MusicBattleTracks.safeMessage(exception));
         }
     }
 
@@ -3091,21 +3853,37 @@ public final class TrackEditorScreen extends Screen {
      */
     private void convertImportedSong(ClientOsuManiaImporter.PendingSong pendingSong, int importGeneration, int noteCount) {
         net.minecraft.Util.nonCriticalIoPool().execute(() -> {
-            ClientOsuManiaImporter.SongResult song = pendingSong.convert();
+            ClientOsuManiaImporter.SongResult converted;
+            Error fatal = null;
+            try {
+                converted = pendingSong.convert();
+            } catch (RuntimeException | Error thrown) {
+                // convert() answers every failure it knows; this is the one it cannot, and the status line must still
+                // stop saying "converting".
+                ru.gora.musicbattle.MusicBattleMod.LOGGER.warn("Blocky Music could not convert the song of an osu! map.", thrown);
+                converted = new ClientOsuManiaImporter.SongResult("", new ClientOsuManiaImporter.AudioLeftBehind(
+                        "", pendingSong.sourceExtension(), false, thrown.getClass().getSimpleName()));
+                fatal = thrown instanceof Error error ? error : null;
+            }
+            ClientOsuManiaImporter.SongResult song = converted;
             Minecraft.getInstance().execute(() -> {
                 if (importGeneration != songImportGeneration) {
                     return;
                 }
                 if (song.leftBehind() != null) {
-                    setStatus("WARN: " + audioLeftBehindStatus(noteCount, song.leftBehind()));
+                    setStatus(StatusLevel.WARN, audioLeftBehindStatus(noteCount, song.leftBehind()));
                     return;
                 }
                 String typed = audioBox == null || audioBox.getValue() == null ? "" : audioBox.getValue().trim();
                 if (typed.isEmpty()) {
                     setBoxValueAtStart(audioBox, song.audioFile());
                 }
-                setStatus("OK: " + I18n.get("music_battle.l10n.editor.import_audio_ready", song.audioFile()));
+                setStatus(StatusLevel.OK, I18n.get("music_battle.l10n.editor.import_audio_ready", song.audioFile()));
             });
+            if (fatal != null) {
+                // The status line is answered; an Error still ends this worker as it would have.
+                throw fatal;
+            }
         });
     }
 
@@ -3113,8 +3891,9 @@ public final class TrackEditorScreen extends Screen {
     private static String audioLeftBehindStatus(int noteCount, ClientOsuManiaImporter.AudioLeftBehind left) {
         String format = left.sourceExtension().replace(".", "").toUpperCase(java.util.Locale.ROOT);
         String kept = left.keptFile().isBlank() ? "-" : left.keptFile();
-        String text = left.ffmpegMissing()
-                ? I18n.get("music_battle.l10n.editor.import_audio_needs_ffmpeg", noteCount, format, kept)
+        // An unsupported song is named by its file, not its extension: a file called .mp3 may be anything at all.
+        String text = left.unsupportedFormat()
+                ? I18n.get("music_battle.l10n.editor.import_audio_unsupported", noteCount, kept)
                 : I18n.get("music_battle.l10n.editor.import_audio_failed", noteCount, format, left.reason(), kept);
         int over = ClientTrackExporter.notesOverLimit(noteCount);
         return over <= 0 ? text : text + " " + I18n.get("music_battle.l10n.editor.too_many_notes_import",
@@ -3141,21 +3920,23 @@ public final class TrackEditorScreen extends Screen {
             );
             savedTrackId = ClientTrackExporter.normalizeId(draftId);
             Path savedDirectory = MusicBattleTracks.tracksDirectory().resolve(savedTrackId);
+            // The boxes name the saved copies the way the mod shows any path, below the Minecraft folder: they showed
+            // the absolute path, every folder above the game included.
             if (draftAudio != null && !draftAudio.isBlank()) {
-                draftAudio = savedDirectory.resolve(savedTrackId + ".ogg").toString();
+                draftAudio = ClientTrackExporter.boxValueOf(savedDirectory.resolve(savedTrackId + ".ogg"));
                 if (audioBox != null) audioBox.setValue(draftAudio);
             }
             if (draftPreview != null && !draftPreview.isBlank()) {
-                draftPreview = savedDirectory.resolve(savedTrackId + "_preview.png").toString();
+                draftPreview = ClientTrackExporter.boxValueOf(savedDirectory.resolve(savedTrackId + "_preview.png"));
                 if (previewBox != null) previewBox.setValue(draftPreview);
             }
             // music_battle_raw is the user's source/import folder. Saving an
             // autonomous track must never delete files from it, including the
             // OGG/PNG extracted from an osu archive.
             savedState = currentState();
-            setStatus("OK: " + I18n.get("music_battle.l10n.editor.saved", output.getFileName()));
+            setStatus(StatusLevel.OK, I18n.get("music_battle.l10n.editor.saved", output.getFileName()));
         } catch (IOException | RuntimeException exception) {
-            setStatus("ERR: " + MusicBattleTracks.safeMessage(exception));
+            setStatus(StatusLevel.ERROR, MusicBattleTracks.safeMessage(exception));
         }
     }
 
@@ -3177,14 +3958,14 @@ public final class TrackEditorScreen extends Screen {
         try {
             pushUndoSnapshot();
             ClientTrackExporter.deleteTrack(idBox.getValue());
-            setStatus("OK: " + I18n.get("music_battle.l10n.editor.track_deleted", idBox.getValue()));
+            setStatus(StatusLevel.OK, I18n.get("music_battle.l10n.editor.track_deleted", idBox.getValue()));
             notes.clear();
             effects.clear();
             pendingEffectStartTick = -1;
             pendingEffectLane = -1;
             invalidateTimelineCache();
         } catch (IOException exception) {
-            setStatus("ERR: " + exception.getMessage());
+            setStatus(StatusLevel.ERROR, exception.getMessage());
         }
     }
 
@@ -3197,22 +3978,58 @@ public final class TrackEditorScreen extends Screen {
         }
     }
 
-    /** An empty or unreadable field is no offset, as in a chart that never had one. */
+    /**
+     * An empty or unreadable field is no offset, as in a chart that never had one. A value a chart cannot store moves
+     * by whole bars instead of being clamped: 15000 at 120 BPM used to become 12000, a different grid, and is now
+     * 11000, the same grid one storable bar earlier.
+     */
     private int offsetMs() {
-        try {
-            String value = offsetBox != null ? offsetBox.getValue() : draftOffset;
-            return value == null || value.isBlank() ? 0 : ChartBeat.clampOffsetMs(Long.parseLong(value.trim()));
-        } catch (NumberFormatException exception) {
-            return 0;
-        }
+        Double typed = parseOffset(offsetBox != null ? offsetBox.getValue() : draftOffset);
+        return typed == null ? 0 : ChartBeat.storableOffsetMs(typed, bpm());
     }
 
     private float volume() {
         return Mth.clamp(editorVolume, 0.0F, 2.0F);
     }
 
-    /** What a player is likely to drop in, beyond Ogg. Converted on the spot, so the editor only ever holds Ogg. */
-    private static final List<String> AUDIO_EXTENSIONS = List.of(".ogg", ".mp3", ".wav", ".flac", ".m4a", ".aac", ".opus");
+    /** The tempo and beat 1 the chart has as typed, for the effect editor's preview (TrackEffectEditScreen.editorHost). */
+    int chartBpm() {
+        return bpm();
+    }
+
+    int chartOffsetMs() {
+        return offsetMs();
+    }
+
+    /**
+     * The number in the volume row: the slider's own value while there is a slider, so it is the knob's at every frame
+     * of a drag and can never disagree with it. The row used to print the saved volume, which a drag updates through
+     * applyValue, but a knob moved any other way (a session that set the slider directly) kept the old number beside it.
+     */
+    private String volumeText() {
+        float shown = volumeSlider != null ? volumeSlider.valueToVolume() : volume();
+        return String.format(java.util.Locale.ROOT, "%.2f", shown);
+    }
+
+    /**
+     * What a player is likely to drop in, beyond Ogg: MP3 (and MP2), WAV, FLAC, M4A, AAC, the sound of MP4, MOV and 3GP
+     * videos, iPhone ringtones (.m4r), audiobooks (.m4b), Opus (also as .oga), WebM, the audio-only WebM and Matroska
+     * files browsers and downloaders save (.weba, .mka), Matroska videos (.mkv), and MPEG transport streams: HLS
+     * downloads and TV recordings (.ts), camcorder and Blu-ray files (.m2ts, .mts). They are converted on the spot, so
+     * the editor only ever holds Ogg.
+     */
+    private static final List<String> AUDIO_EXTENSIONS = List.of(".ogg", ".mp3", ".mp2", ".wav", ".flac", ".m4a", ".aac",
+            ".mp4", ".mov", ".3gp", ".m4r", ".m4b", ".opus", ".oga", ".webm", ".weba", ".mka", ".mkv", ".ts", ".m2ts",
+            ".mts");
+    /** How long one song may take to convert; a four-minute MP3 takes about a second. */
+    private static final int AUDIO_CONVERSION_TIMEOUT_SECONDS = 120;
+    /**
+     * The file the Audio button last failed to convert, and what the song box held then. The next press continues
+     * after that file: the box still names the song before it, and the button would otherwise pick the same failing
+     * file on every press and never reach the ones behind it.
+     */
+    private String failedAudioPick = "";
+    private String failedAudioPickBox = "";
 
     /**
      * Picks the next audio file in the raw folder, converting it to Ogg first when it is anything else.
@@ -3232,18 +4049,19 @@ public final class TrackEditorScreen extends Screen {
             // A source next to its own conversion would otherwise show up twice.
             List<Path> offered = new ArrayList<>();
             for (Path file : files) {
-                String name = file.getFileName().toString();
-                boolean convertedAlready = !name.toLowerCase(java.util.Locale.ROOT).endsWith(".ogg")
-                        && Files.isRegularFile(file.resolveSibling(stripExtension(name) + ".ogg"));
-                if (!convertedAlready) {
+                Path conversion = conversionOf(file);
+                if (conversion == null || !Files.isRegularFile(conversion)) {
                     offered.add(file);
                 }
             }
             if (offered.isEmpty()) {
-                setStatus("ERR: " + I18n.get("music_battle.l10n.editor.no_audio_files", MusicBattleTracks.rawDirectory()));
+                setStatus(StatusLevel.ERROR, I18n.get("music_battle.l10n.editor.no_audio_files", MusicBattleTracks.rawDirectory()));
                 return;
             }
             String current = target.getValue() == null ? "" : target.getValue().trim();
+            if (!failedAudioPick.isEmpty() && current.equals(failedAudioPickBox)) {
+                current = failedAudioPick;
+            }
             int index = -1;
             for (int i = 0; i < offered.size(); i++) {
                 if (offered.get(i).getFileName().toString().equalsIgnoreCase(current)) {
@@ -3252,39 +4070,82 @@ public final class TrackEditorScreen extends Screen {
                 }
             }
             Path chosen = offered.get((index + 1) % offered.size());
-            if (chosen.getFileName().toString().toLowerCase(java.util.Locale.ROOT).endsWith(".ogg")) {
+            failedAudioPick = "";
+            Path conversion = conversionOf(chosen);
+            if (conversion == null) {
                 setBoxValueAtStart(target, chosen.getFileName().toString());
                 refreshOsuDifficulties();
-                setStatus("OK: " + I18n.get("music_battle.l10n.editor.selected", chosen.getFileName()));
+                setStatus(StatusLevel.OK, I18n.get("music_battle.l10n.editor.selected", chosen.getFileName()));
                 return;
             }
-            convertAudioToOgg(target, chosen);
+            convertAudioToOgg(target, chosen, conversion);
         } catch (IOException exception) {
-            setStatus("ERR: " + exception.getMessage());
+            setStatus(StatusLevel.ERROR, exception.getMessage());
         }
     }
 
-    /** Converts one file in the background, so a long encode never freezes the editor. */
-    private void convertAudioToOgg(EditorField target, Path source) {
-        Path converted = source.resolveSibling(stripExtension(source.getFileName().toString()) + ".ogg");
-        setStatus("... " + I18n.get("music_battle.l10n.editor.converting_to_ogg", source.getFileName()));
+    /**
+     * Where a file's conversion to Ogg Vorbis goes, or null when the game plays it as it is (Ogg Vorbis, one or two
+     * channels). Decided by the file's first bytes, not its name: an MP3 or an Opus song called .ogg (some downloaders
+     * and old imports name them so), or a 5.1 Ogg the game leaves silent, would otherwise go into the box as it is, and
+     * the beatmap could never play it. Its conversion cannot share its name, so it gets one of its own.
+     */
+    private static Path conversionOf(Path file) {
+        String name = file.getFileName().toString();
+        if (!name.toLowerCase(java.util.Locale.ROOT).endsWith(".ogg")) {
+            return file.resolveSibling(stripExtension(name) + ".ogg");
+        }
+        return ru.gora.musicbattle.audio.NativeAudio.playsAsIs(file)
+                ? null
+                : file.resolveSibling(stripExtension(name) + "_converted.ogg");
+    }
+
+    /**
+     * Converts one file in the background with the mod's own converter, so a long encode never freezes the editor.
+     * A format the mod cannot read gets its own message, which says what it does read and where to convert the rest.
+     * Every way the conversion can end, an unexpected exception included, ends in a status line, never in a
+     * "converting" that stays for good.
+     */
+    private void convertAudioToOgg(EditorField target, Path source, Path converted) {
+        setStatus(StatusLevel.INFO, I18n.get("music_battle.l10n.editor.converting_to_ogg", source.getFileName()));
         net.minecraft.Util.nonCriticalIoPool().execute(() -> {
-            String error = null;
+            Throwable error = null;
             try {
-                ClientFfmpeg.convertToVorbis(source, converted, null, 120);
-            } catch (IOException exception) {
-                error = exception.getMessage();
+                ru.gora.musicbattle.audio.NativeAudio.convertToVorbis(source, converted, 1.0F, AUDIO_CONVERSION_TIMEOUT_SECONDS);
+            } catch (IOException | RuntimeException | Error exception) {
+                error = exception;
             }
-            String failure = error;
+            Throwable failure = error;
+            boolean unsupported = failure instanceof ru.gora.musicbattle.audio.codec.UnsupportedFormatException;
+            // What the file turned out to be, such as WMA: a file named .ogg is told it "is not in a format the mod
+            // reads" when the mod reads OGG, which only makes sense once the message says what is inside.
+            String formatName = failure instanceof ru.gora.musicbattle.audio.codec.UnsupportedFormatException named
+                    ? named.formatName() : null;
+            if (failure != null && !unsupported) {
+                ru.gora.musicbattle.MusicBattleMod.LOGGER.warn("Blocky Music could not convert '{}' to OGG.",
+                        MusicBattleTracks.displayPath(source), failure);
+            }
             Minecraft.getInstance().execute(() -> {
                 if (failure != null) {
-                    setStatus("ERR: " + failure);
+                    String name = source.getFileName().toString();
+                    failedAudioPick = name;
+                    failedAudioPickBox = target.getValue() == null ? "" : target.getValue().trim();
+                    setStatus(StatusLevel.ERROR, (!unsupported
+                            ? I18n.get("music_battle.l10n.editor.audio_convert_failed", name,
+                                    MusicBattleTracks.safeMessage(failure))
+                            : formatName != null
+                            ? I18n.get("music_battle.l10n.editor.audio_unsupported_named", name, formatName)
+                            : I18n.get("music_battle.l10n.editor.audio_unsupported_format", name)));
                     return;
                 }
                 setBoxValueAtStart(target, converted.getFileName().toString());
                 refreshOsuDifficulties();
-                setStatus("OK: " + I18n.get("music_battle.l10n.editor.converted_to_ogg", converted.getFileName()));
+                setStatus(StatusLevel.OK, I18n.get("music_battle.l10n.editor.converted_to_ogg", converted.getFileName()));
             });
+            if (failure instanceof Error fatal) {
+                // The status line is answered; an Error still ends this worker as it would have.
+                throw fatal;
+            }
         });
     }
 
@@ -3297,7 +4158,7 @@ public final class TrackEditorScreen extends Screen {
         try {
             List<Path> files = rawFiles(extension);
             if (files.isEmpty()) {
-                setStatus("ERR: " + I18n.get("music_battle.l10n.editor.no_raw_files", extension, MusicBattleTracks.rawDirectory()));
+                setStatus(StatusLevel.ERROR, I18n.get("music_battle.l10n.editor.no_raw_files", extension, MusicBattleTracks.rawDirectory()));
                 return;
             }
             String current = target.getValue() == null ? "" : target.getValue().trim();
@@ -3311,9 +4172,9 @@ public final class TrackEditorScreen extends Screen {
             Path chosen = files.get((index + 1) % files.size());
             setBoxValueAtStart(target, chosen.getFileName().toString());
             refreshOsuDifficulties();
-            setStatus("OK: " + I18n.get("music_battle.l10n.editor.selected", chosen.getFileName()));
+            setStatus(StatusLevel.OK, I18n.get("music_battle.l10n.editor.selected", chosen.getFileName()));
         } catch (IOException exception) {
-            setStatus("ERR: " + exception.getMessage());
+            setStatus(StatusLevel.ERROR, exception.getMessage());
         }
     }
 
@@ -3337,7 +4198,7 @@ public final class TrackEditorScreen extends Screen {
             }
         } catch (IOException | RuntimeException exception) {
             // A damaged map is the player's file, not a reason to crash out of the button that picked it.
-            setStatus("ERR: " + MusicBattleTracks.safeMessage(exception));
+            setStatus(StatusLevel.ERROR, MusicBattleTracks.safeMessage(exception));
         }
         updateOsuDifficultyButton();
     }
@@ -3347,13 +4208,13 @@ public final class TrackEditorScreen extends Screen {
             refreshOsuDifficulties();
         }
         if (osuDifficulties.isEmpty()) {
-            setStatus("ERR: " + I18n.get("music_battle.l10n.editor.osu_select_first"));
+            setStatus(StatusLevel.ERROR, I18n.get("music_battle.l10n.editor.osu_select_first"));
             return;
         }
         selectedOsuDifficulty = (selectedOsuDifficulty + 1) % osuDifficulties.size();
         updateOsuDifficultyButton();
         ClientOsuManiaImporter.OsuDifficulty difficulty = osuDifficulties.get(selectedOsuDifficulty);
-        setStatus("OK: " + I18n.get("music_battle.l10n.editor.osu_difficulty", difficulty.title(), difficulty.noteCount()));
+        setStatus(StatusLevel.OK, I18n.get("music_battle.l10n.editor.osu_difficulty", difficulty.title(), difficulty.noteCount()));
     }
 
     private void updateOsuDifficultyButton() {
@@ -3368,7 +4229,8 @@ public final class TrackEditorScreen extends Screen {
         }
         ClientOsuManiaImporter.OsuDifficulty difficulty = osuDifficulties.get(selectedOsuDifficulty);
         int maxWidth = osuDifficultyButton == null ? 320 : Math.max(48, osuDifficultyButton.getWidth() - 12);
-        return Component.literal(this.font.plainSubstrByWidth("Osu: " + difficulty.title(), maxWidth));
+        return Component.literal(this.font.plainSubstrByWidth(
+                I18n.get("music_battle.l10n.editor.osu_difficulty_button", difficulty.title()), maxWidth));
     }
 
     private void chooseChart(EditorField target) {
@@ -3379,7 +4241,7 @@ public final class TrackEditorScreen extends Screen {
             files.addAll(rawFiles(".osz"));
             files.sort(Comparator.comparing(path -> path.getFileName().toString(), String.CASE_INSENSITIVE_ORDER));
             if (files.isEmpty()) {
-                setStatus("ERR: " + I18n.get("music_battle.l10n.editor.no_raw_files", ".json/.osu/.osz", MusicBattleTracks.rawDirectory()));
+                setStatus(StatusLevel.ERROR, I18n.get("music_battle.l10n.editor.no_raw_files", ".json/.osu/.osz", MusicBattleTracks.rawDirectory()));
                 return;
             }
             String current = target.getValue() == null ? "" : target.getValue().trim();
@@ -3393,9 +4255,9 @@ public final class TrackEditorScreen extends Screen {
             Path chosen = files.get((index + 1) % files.size());
             setBoxValueAtStart(target, chosen.getFileName().toString());
             refreshOsuDifficulties();
-            setStatus("OK: " + I18n.get("music_battle.l10n.editor.selected", chosen.getFileName()));
+            setStatus(StatusLevel.OK, I18n.get("music_battle.l10n.editor.selected", chosen.getFileName()));
         } catch (IOException exception) {
-            setStatus("ERR: " + exception.getMessage());
+            setStatus(StatusLevel.ERROR, exception.getMessage());
         }
     }
 
@@ -3435,6 +4297,11 @@ public final class TrackEditorScreen extends Screen {
             Path trackAsset = resolveInitialTrackAsset(value);
             if (trackAsset != null) {
                 return trackAsset;
+            }
+            // A saved song or picture shows below the Minecraft folder (ClientTrackExporter.boxValueOf).
+            Path shown = MusicBattleTracks.gameFolderFile(path);
+            if (shown != null) {
+                return shown;
             }
             path = MusicBattleTracks.tracksDirectory().resolve(path);
         }
@@ -3599,30 +4466,325 @@ public final class TrackEditorScreen extends Screen {
                                  boolean disableStageBars, boolean hideStandardDimming) {
     }
 
-    private record EditorSnapshot(List<BattleNote> notes, List<TrackEffect> effects) {
+    /** One Ctrl+Z step: the notes and effects, and what was selected, since a selection is undone like an edit. */
+    private record EditorSnapshot(List<BattleNote> notes, List<TrackEffect> effects,
+                                  Set<BattleNote> selectedNotes, Set<TrackEffect> selectedEffects) {
     }
 
-    private record ClipboardData(List<BattleNote> notes, List<TrackEffect> effects, int sourceFxRow) {
+    /**
+     * The timeline's editing rules, kept apart from the screen so the editor checks can run them without one: which
+     * notes collide, what Ctrl+A takes, how a copied group keeps its rhythm, where Ctrl+V puts it and how a selection
+     * moves.
+     *
+     * <p>Places are counted in lines of the eighth-beat grid, the finer of the editor's two, because every line of
+     * either grid is one of its lines: a group copied while 1/8 is showing keeps its eighths when it is pasted under
+     * 1/4. A note that sits between lines (from an import) keeps its distance from its nearest line, in ticks, so a
+     * note placed on the grid always lands on the grid again.
+     */
+    public static final class ChartEdits {
+        /** The finest grid the editor offers, an eighth of a beat. */
+        public static final int FINE_CELLS_PER_BEAT = 8;
+        /** A bound on how many beats Ctrl+V walks; the walk stops long before, past the chart's last note. */
+        private static final int MAX_PASTE_STEPS = 1_000_000;
+        private static final Comparator<BattleNote> NOTE_ORDER = Comparator.comparingInt(BattleNote::tick)
+                .thenComparingInt(BattleNote::lane).thenComparingInt(BattleNote::owner);
+
+        private ChartEdits() {
+        }
+
+        /**
+         * The eighth line a tick stands on: the coarsest line through it, so a note on a beat stays on beats when it is
+         * moved or pasted by whole beats, even where eighths are finer than a tick (above 150 BPM); otherwise the
+         * nearest eighth.
+         */
+        public static long fineCell(int tick, int offsetMs, int bpm) {
+            return ChartBeat.lineOf(offsetMs, bpm, FINE_CELLS_PER_BEAT, tick);
+        }
+
+        /** The tick an eighth line stands on, as the grid rounds it. */
+        public static int fineTick(long cell, int offsetMs, int bpm) {
+            return ChartBeat.cellTick(offsetMs, bpm, FINE_CELLS_PER_BEAT, cell);
+        }
+
+        /**
+         * One tick past the last one a note holds. A tap holds its own tick only, so taps on neighbouring lines never
+         * collide however the lines round. The editor used to measure a tap by the rounded cell length - 2 ticks for
+         * the 1.5625-tick eighth at 96 BPM, 3 for the 2.727-tick quarter at 110 BPM - while neighbouring lines there
+         * are 1 or 2 (2 or 3) ticks apart, so the line after a note looked taken and notes could not be placed in a
+         * row. A hold holds every tick from its press to its release, both included, since its release is drawn as a
+         * box of its own and a note there would sit on it.
+         */
+        public static int occupiedUntil(BattleNote note) {
+            return note.tick() + note.durationTicks() + 1;
+        }
+
+        public static boolean overlap(BattleNote first, BattleNote second) {
+            return first.owner() == second.owner() && first.lane() == second.lane()
+                    && first.tick() < occupiedUntil(second) && second.tick() < occupiedUntil(first);
+        }
+
+        /** Whether new notes can join the chart: none may collide with a note there or with another of them. */
+        public static boolean fits(List<BattleNote> chart, List<BattleNote> added) {
+            return fits(chart, List.of(), added);
+        }
+
+        /**
+         * Whether {@code replacements} can take the places of {@code originals}, one for one in the same order. None
+         * may collide with a note that stays. Two of them may collide only if their originals already did, so a pair
+         * an older editor or an import left touching can still be moved together, and no move makes a new collision.
+         */
+        public static boolean fits(List<BattleNote> chart, List<BattleNote> originals, List<BattleNote> replacements) {
+            Set<BattleNote> leaving = new HashSet<>(originals);
+            for (int first = 0; first < replacements.size(); first++) {
+                BattleNote candidate = replacements.get(first);
+                for (BattleNote staying : chart) {
+                    if (!leaving.contains(staying) && overlap(candidate, staying)) {
+                        return false;
+                    }
+                }
+                for (int second = first + 1; second < replacements.size(); second++) {
+                    boolean touchedBefore = second < originals.size() && overlap(originals.get(first), originals.get(second));
+                    if (!touchedBefore && overlap(candidate, replacements.get(second))) {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }
+
+        /** Ctrl+A: the notes of the player being edited that are pressed on the page. */
+        public static List<BattleNote> pageSelection(List<BattleNote> chart, int owner, int pageStart, int pageEnd) {
+            return chart.stream()
+                    .filter(note -> note.owner() == owner && note.tick() >= pageStart && note.tick() < pageEnd)
+                    .toList();
+        }
+
+        /**
+         * A copied note: its press and release counted in eighth lines from the group's first line, each with how many
+         * ticks it sat off its line (0 for a note placed on the grid).
+         */
+        public record CopiedNote(int owner, int lane, long cell, int offset, boolean hold, long releaseCell,
+                                 int releaseOffset) {
+        }
+
+        /** A copied effect, measured the same way; {@code row} counts down from the group's top row. */
+        public record CopiedEffect(TrackEffect effect, int row, long cell, int offset, boolean ranged, long endCell,
+                                   int endOffset) {
+        }
+
+        /** What Ctrl+C took, and the eighth line its first item stood on. */
+        public record Clipboard(List<CopiedNote> notes, List<CopiedEffect> effects, long firstCell) {
+            public static final Clipboard EMPTY = new Clipboard(List.of(), List.of(), 0L);
+
+            public boolean isEmpty() {
+                return notes.isEmpty() && effects.isEmpty();
+            }
+
+            public int size() {
+                return notes.size() + effects.size();
+            }
+
+            /** The group's place in its beat, in eighth lines: a group copied from the off-beat is pasted on the off-beat. */
+            public int phase() {
+                return (int) Math.floorMod(firstCell, (long) FINE_CELLS_PER_BEAT);
+            }
+        }
+
+        /** Ctrl+C, in time order, so a paste adds the notes in the order a chart lists them. */
+        public static Clipboard copy(Collection<BattleNote> notes, Collection<TrackEffect> effects, int offsetMs, int bpm) {
+            long first = Long.MAX_VALUE;
+            for (BattleNote note : notes) {
+                first = Math.min(first, fineCell(note.tick(), offsetMs, bpm));
+            }
+            for (TrackEffect effect : effects) {
+                first = Math.min(first, fineCell(effect.tick(), offsetMs, bpm));
+            }
+            if (first == Long.MAX_VALUE) {
+                return Clipboard.EMPTY;
+            }
+            List<CopiedNote> copiedNotes = new ArrayList<>(notes.size());
+            for (BattleNote note : notes.stream().sorted(NOTE_ORDER).toList()) {
+                long cell = fineCell(note.tick(), offsetMs, bpm);
+                int release = note.tick() + note.durationTicks();
+                long releaseCell = fineCell(release, offsetMs, bpm);
+                copiedNotes.add(new CopiedNote(note.owner(), note.lane(), cell - first, note.tick() - fineTick(cell, offsetMs, bpm),
+                        note.durationTicks() > 0, releaseCell - first, release - fineTick(releaseCell, offsetMs, bpm)));
+            }
+            int topRow = effects.stream().mapToInt(TrackEditorScreen::absoluteFxRow).min().orElse(0);
+            List<CopiedEffect> copiedEffects = new ArrayList<>(effects.size());
+            for (TrackEffect effect : effects.stream().sorted(Comparator.comparingInt(TrackEffect::tick)
+                    .thenComparingInt(TrackEditorScreen::absoluteFxRow)).toList()) {
+                long cell = fineCell(effect.tick(), offsetMs, bpm);
+                int end = effect.tick() + effect.durationTicks();
+                long endCell = fineCell(end, offsetMs, bpm);
+                copiedEffects.add(new CopiedEffect(effect, absoluteFxRow(effect) - topRow, cell - first,
+                        effect.tick() - fineTick(cell, offsetMs, bpm), effect.durationTicks() > 0, endCell - first,
+                        end - fineTick(endCell, offsetMs, bpm)));
+            }
+            return new Clipboard(List.copyOf(copiedNotes), List.copyOf(copiedEffects), first);
+        }
+
+        /** The notes a group adds with its first line on {@code cell}. */
+        public static List<BattleNote> placeNotes(Clipboard clipboard, long cell, int offsetMs, int bpm) {
+            List<BattleNote> placed = new ArrayList<>(clipboard.notes().size());
+            for (CopiedNote note : clipboard.notes()) {
+                int start = fineTick(cell + note.cell(), offsetMs, bpm) + note.offset();
+                int release = fineTick(cell + note.releaseCell(), offsetMs, bpm) + note.releaseOffset();
+                placed.add(new BattleNote(note.owner(), note.lane(), start, note.hold() ? Math.max(1, release - start) : 0));
+            }
+            return placed;
+        }
+
+        /** The effects a group adds with its first line on {@code cell} and its top row on {@code firstRow}. */
+        public static List<TrackEffect> placeEffects(Clipboard clipboard, long cell, int firstRow, int offsetMs, int bpm) {
+            List<TrackEffect> placed = new ArrayList<>(clipboard.effects().size());
+            for (CopiedEffect copied : clipboard.effects()) {
+                int start = fineTick(cell + copied.cell(), offsetMs, bpm) + copied.offset();
+                int end = fineTick(cell + copied.endCell(), offsetMs, bpm) + copied.endOffset();
+                TrackEffect moved = moveEffectToAbsoluteRow(copied.effect(), firstRow + copied.row());
+                placed.add(moved.withTimeline(moved.lane(), start, copied.ranged() ? Math.max(1, end - start) : 0));
+            }
+            return placed;
+        }
+
+        /**
+         * Where Ctrl+V puts a group: its first line goes on {@code fromCell} (a line with the group's place in the beat)
+         * or a whole number of beats later - the first such place where every item lands in the song and the group's
+         * stretch of time, from its first press to its last release, holds nothing of the same players (for effects:
+         * of the same rows). Pasted where it was copied, a group therefore lands right after itself and the next paste
+         * after that one, and groups never interleave, which testing note against note would allow.
+         */
+        public static long pasteCell(List<BattleNote> chartNotes, List<TrackEffect> chartEffects, Clipboard clipboard,
+                                     long fromCell, int firstRow, int offsetMs, int bpm) {
+            Set<Integer> owners = new HashSet<>();
+            clipboard.notes().forEach(note -> owners.add(note.owner()));
+            Set<Integer> rows = new HashSet<>();
+            clipboard.effects().forEach(effect -> rows.add(Math.max(0, Math.min(TrackEffect.MAX_FX_ROWS - 1, firstRow + effect.row()))));
+            // Past this tick nothing of those players or rows lies, so the first place that starts there is free.
+            int busyUntil = 0;
+            for (BattleNote note : chartNotes) {
+                if (owners.contains(note.owner())) {
+                    busyUntil = Math.max(busyUntil, occupiedUntil(note));
+                }
+            }
+            for (TrackEffect effect : chartEffects) {
+                if (rows.contains(absoluteFxRow(effect))) {
+                    busyUntil = Math.max(busyUntil, effectUntil(effect));
+                }
+            }
+            long cell = fromCell;
+            for (int step = 0; step < MAX_PASTE_STEPS; step++, cell += FINE_CELLS_PER_BEAT) {
+                int start = Integer.MAX_VALUE;
+                int end = Integer.MIN_VALUE;
+                boolean inSong = true;
+                for (CopiedNote note : clipboard.notes()) {
+                    int press = fineTick(cell + note.cell(), offsetMs, bpm) + note.offset();
+                    int release = note.hold() ? Math.max(press + 1, fineTick(cell + note.releaseCell(), offsetMs, bpm)
+                            + note.releaseOffset()) : press;
+                    inSong &= press >= 0;
+                    start = Math.min(start, press);
+                    end = Math.max(end, release + 1);
+                }
+                for (CopiedEffect effect : clipboard.effects()) {
+                    int from = fineTick(cell + effect.cell(), offsetMs, bpm) + effect.offset();
+                    int until = effect.ranged() ? Math.max(from + 1, fineTick(cell + effect.endCell(), offsetMs, bpm)
+                            + effect.endOffset()) : from + 1;
+                    inSong &= from >= 0;
+                    start = Math.min(start, from);
+                    end = Math.max(end, until);
+                }
+                if (inSong && (start >= busyUntil || free(chartNotes, chartEffects, owners, rows, start, end))) {
+                    return cell;
+                }
+            }
+            return cell;
+        }
+
+        private static boolean free(List<BattleNote> chartNotes, List<TrackEffect> chartEffects, Set<Integer> owners,
+                                    Set<Integer> rows, int start, int end) {
+            for (BattleNote note : chartNotes) {
+                if (owners.contains(note.owner()) && note.tick() < end && occupiedUntil(note) > start) {
+                    return false;
+                }
+            }
+            for (TrackEffect effect : chartEffects) {
+                if (rows.contains(absoluteFxRow(effect)) && effect.tick() < end && effectUntil(effect) > start) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private static int effectUntil(TrackEffect effect) {
+            return effect.tick() + Math.max(1, effect.durationTicks());
+        }
+
+        /** A tick moved by whole eighth lines: its line moves, and its distance from that line stays. */
+        public static int shiftTick(int tick, long cells, int offsetMs, int bpm) {
+            long cell = fineCell(tick, offsetMs, bpm);
+            return fineTick(cell + cells, offsetMs, bpm) + (tick - fineTick(cell, offsetMs, bpm));
+        }
+
+        /**
+         * Notes moved by whole eighth lines and by lanes, in the order given; a hold's release moves line for line with
+         * its press. {@code null} when one would start before the song: those used to be squeezed onto tick 0.
+         */
+        public static List<BattleNote> shiftNotes(List<BattleNote> notes, long cells, int laneDelta, int offsetMs, int bpm) {
+            List<BattleNote> moved = new ArrayList<>(notes.size());
+            for (BattleNote note : notes) {
+                int start = shiftTick(note.tick(), cells, offsetMs, bpm);
+                if (start < 0) {
+                    return null;
+                }
+                int duration = note.durationTicks() > 0
+                        ? Math.max(1, shiftTick(note.tick() + note.durationTicks(), cells, offsetMs, bpm) - start) : 0;
+                int lane = Math.max(0, Math.min(NOTE_LANES - 1, note.lane() + laneDelta));
+                moved.add(new BattleNote(note.owner(), lane, start, duration));
+            }
+            return moved;
+        }
+
+        /** Effects moved the same way, by eighth lines and by rows; {@code null} when one would start before the song. */
+        public static List<TrackEffect> shiftEffects(List<TrackEffect> effects, long cells, int rowDelta, int offsetMs, int bpm) {
+            List<TrackEffect> moved = new ArrayList<>(effects.size());
+            for (TrackEffect effect : effects) {
+                int start = shiftTick(effect.tick(), cells, offsetMs, bpm);
+                if (start < 0) {
+                    return null;
+                }
+                int duration = effect.durationTicks() > 0
+                        ? Math.max(1, shiftTick(effect.tick() + effect.durationTicks(), cells, offsetMs, bpm) - start) : 0;
+                TrackEffect onRow = moveEffectToAbsoluteRow(effect, absoluteFxRow(effect) + rowDelta);
+                moved.add(onRow.withTimeline(onRow.lane(), start, duration));
+            }
+            return moved;
+        }
     }
 
     private EditorLayout layout() {
         int maxPanelWidth = this.width >= 1200 ? 1220 : 920;
         int panelWidth = Mth.clamp(this.width - 40, 240, maxPanelWidth);
         boolean compactHeight = this.height < 500;
-        boolean twoColumns = panelWidth >= 520;
         int gap = compactHeight ? 8 : 18;
+        // Two columns only where the audio path, after the BPM and the volume slider, keeps a field that holds its
+        // label: from 520 units it came out 96 wide and cut "Audio from music_battle_raw".
+        boolean twoColumns = panelWidth >= 520 && (panelWidth - gap) / 2 - WIDE_AUDIO_X >= AUDIO_FIELD_MIN;
         int columnWidth = twoColumns ? (panelWidth - gap) / 2 : panelWidth;
-        int rows = editorPage == EditorPage.FX ? 0 : twoColumns ? 3 : 4;
+        // The narrow form gives the audio path a row of its own when the rest of the BPM row is too short for it: at
+        // 320 units it was 44 wide, "Музыка и…" over a hint nobody could read.
+        boolean audioRow = !twoColumns && panelWidth - NARROW_AUDIO_X < AUDIO_FIELD_MIN;
+        int rows = editorPage == EditorPage.FX ? 0 : twoColumns ? 3 : audioRow ? 5 : 4;
         int rowHeight = compactHeight ? 31 : 34;
         int pad = compactHeight ? 6 : 10;
         int formTop = TOP_BAR + pad + 4 - scrollY;
         int controlsY = formTop + rows * rowHeight + (rows > 0 ? 2 : 0);
         int left = this.width / 2 - panelWidth / 2;
-        // Six buttons a row as soon as they can carry their labels: three rows of controls instead of six.
-        boolean wideControls = panelWidth >= 560;
+        // Six buttons a row as soon as they can carry their labels: three rows of controls instead of six. At 560 a
+        // sixth of a tall window's panel was 85 units, and "Режим: 2 точки" did not fit it.
+        boolean wideControls = panelWidth >= 580;
         int buttonHeight = compactHeight ? 18 : 20;
         int rowStep = compactHeight ? 21 : 24;
-        int controlRows = wideControls ? 3 : editorPage == EditorPage.FX ? 5 : 6;
+        int controlRows = wideControls ? 3 : 6;
         int controlsHeight = controlRows * rowStep - (rowStep - buttonHeight);
         int previewSize = editorPage != EditorPage.NOTES ? 0
                 : twoColumns ? (compactHeight ? 42 : 56) : panelWidth >= 300 ? 18 : 0;
@@ -3631,7 +4793,8 @@ public final class TrackEditorScreen extends Screen {
         int gridHeight = Mth.clamp(this.height - TOP_BAR - 32 - pad * 2 - (compactHeight ? 6 : 10), 64, compactHeight ? 136 : 230);
         int contentBottom = gridY + scrollY + gridHeight + pad + 4;
         return new EditorLayout(left, panelWidth, columnWidth, gap, formTop, controlsY, controlsHeight, previewSize,
-                twoColumns, compactHeight, wideControls, rowHeight, pad, buttonHeight, rowStep, gridY, gridHeight, contentBottom);
+                twoColumns, audioRow, compactHeight, wideControls, rowHeight, pad, buttonHeight, rowStep, gridY, gridHeight,
+                contentBottom);
     }
 
     /**
@@ -3647,14 +4810,14 @@ public final class TrackEditorScreen extends Screen {
         int left = layout.left;
         // BPM holds three digits and the slider only a knob, so the audio path gets the rest of the row: its label
         // names the folder and was the one cut off at 1280x720.
-        int bpmWidth = 56;
+        int bpmWidth = BPM_WIDTH;
         // The offset field carries the one-press "beat 1 here" button right after it.
-        int offsetWidth = 50;
-        int beatOneWidth = 20;
+        int offsetWidth = OFFSET_WIDTH;
+        int beatOneWidth = BEAT_ONE_WIDTH;
         int offsetBlock = offsetWidth + 2 + beatOneWidth;
         int volumeX = bpmWidth + 6;
-        int volumeWidth = 90;
-        int audioX = volumeX + volumeWidth + 8;
+        int volumeWidth = VOLUME_WIDTH;
+        int audioX = WIDE_AUDIO_X;
         if (layout.twoColumns) {
             int right = left + layout.columnWidth + layout.gap;
             // The picture card starts on the second row, so only the two rows beside it give up their width.
@@ -3680,19 +4843,24 @@ public final class TrackEditorScreen extends Screen {
         int rightHalf = left + half + layout.gap;
         int otherHalf = layout.panelWidth - half - layout.gap;
         int previewReserve = layout.previewSize > 0 ? layout.previewSize + 6 : 0;
-        // In one column the offset sits beside the BPM it belongs to; the audio path keeps the rest of the row.
+        // In one column the offset sits beside the BPM it belongs to; the audio path keeps the rest of the row, or a
+        // row of its own under it when that rest is too short (layout().audioRow).
         int offsetX = bpmWidth + 4;
         volumeX = offsetX + offsetBlock + 6;
-        audioX = volumeX + volumeWidth + 8;
+        audioX = NARROW_AUDIO_X;
+        FieldSlot audio = layout.audioRow
+                ? new FieldSlot(left, boxY + rowHeight * 3, layout.panelWidth)
+                : new FieldSlot(left + audioX, boxY + rowHeight * 2, layout.panelWidth - audioX);
+        int mediaRow = layout.audioRow ? 4 : 3;
         return new FormSlots(
                 new FieldSlot(left, boxY, half),
                 new FieldSlot(rightHalf, boxY, otherHalf),
                 new FieldSlot(left, boxY + rowHeight, layout.panelWidth),
                 new FieldSlot(left, boxY + rowHeight * 2, bpmWidth),
                 new FieldSlot(left + volumeX, boxY + rowHeight * 2, volumeWidth),
-                new FieldSlot(left + audioX, boxY + rowHeight * 2, layout.panelWidth - audioX),
-                new FieldSlot(left, boxY + rowHeight * 3, Math.max(80, half - previewReserve)),
-                new FieldSlot(rightHalf, boxY + rowHeight * 3, otherHalf),
+                audio,
+                new FieldSlot(left, boxY + rowHeight * mediaRow, Math.max(80, half - previewReserve)),
+                new FieldSlot(rightHalf, boxY + rowHeight * mediaRow, otherHalf),
                 new FieldSlot(left + offsetX, boxY + rowHeight * 2, offsetWidth),
                 new FieldSlot(left + offsetX + offsetWidth + 2, boxY + rowHeight * 2, beatOneWidth));
     }
@@ -3719,6 +4887,7 @@ public final class TrackEditorScreen extends Screen {
             int controlsHeight,
             int previewSize,
             boolean twoColumns,
+            boolean audioRow,
             boolean compactHeight,
             boolean wideControls,
             int rowHeight,
@@ -3844,8 +5013,15 @@ public final class TrackEditorScreen extends Screen {
         RESIZE_RIGHT
     }
 
+    /**
+     * A note on the page: {@code left..right} is all that is drawn of it, {@code head*} its press box, {@code release*}
+     * a hold's release box, and {@code hit*} the area that takes a click on it, its boxes edge to edge in a lane's full
+     * height. The edge flags say which ends of a hold can be grabbed to resize it.
+     */
     private record NoteBounds(int left, int right, int top, int bottom,
                               int headLeft, int headRight, boolean headVisible,
+                              int releaseLeft, int releaseRight, boolean releaseVisible,
+                              int hitLeft, int hitRight, int hitTop, int hitBottom,
                               boolean leftEdgeVisible, boolean rightEdgeVisible) {
     }
 
@@ -3868,23 +5044,11 @@ public final class TrackEditorScreen extends Screen {
 
         @Override
         public void renderWidget(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
-            int x = getX();
-            int y = getY();
-            int width = getWidth();
-            int height = getHeight();
-            // The same rounded field as the text boxes beside it; the value is drawn in the label row above.
-            RoundedRect.fill(graphics, x, y, width, height, Palette.RADIUS_SM, Palette.BG_3);
-            if (isFocused() || isHovered()) {
-                RoundedRect.stroke(graphics, x, y, width, height, Palette.RADIUS_SM, 1.0F,
-                        isFocused() ? Palette.ACCENT : Palette.fade(Palette.ACCENT, 0.45F));
-            }
-            float trackLeft = x + 7;
-            float trackWidth = width - 14;
-            float centerY = y + height / 2.0F;
-            float knobX = trackLeft + trackWidth * (float) this.value;
-            RoundedRect.fill(graphics, trackLeft, centerY - 1.5F, trackWidth, 3, 1.5F, Palette.BG_1);
-            RoundedRect.fill(graphics, trackLeft, centerY - 1.5F, Math.max(3, knobX - trackLeft), 3, 1.5F, Palette.ACCENT);
-            RoundedRect.fill(graphics, knobX - 4, centerY - 4, 8, 8, 4, Palette.TEXT_1);
+            // Drawn by the toolkit, like every other slider in the mod, without its label: the value is drawn in the
+            // label row above. Its knob then sits where vanilla reads the pointer; this slider's own knob ran 3 units
+            // further in at both ends, so a click on it moved the volume.
+            ru.gora.musicbattle.client.ui.Slider.paint(graphics, ru.gora.musicbattle.client.workshop.layout.Rect.of(getX(),
+                    getY(), getWidth(), getHeight()), this.value, Component.empty(), isHoveredOrFocused(), this.active);
         }
 
         private float valueToVolume() {

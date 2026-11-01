@@ -21,22 +21,20 @@ import ru.gora.musicbattle.data.TrackEffect;
  * The first-beat offset (ChartBeat): absent reads as 0, it round-trips, a chart that does not use it is written and
  * read exactly as before, and the grid follows it.
  *
- * <p>With a previous build's jar (argument 2, BLOCKY_PREVIOUS_JAR, or the last pre-offset beta jar kept on the
- * owner's Desktop) every chart found under the given folders is
- * read by both the old and the new MusicBattleTracks reader and the notes are compared; the same chart with an offset
- * added must still read in the old build with the same notes, which is what a player on the older jar meets.
+ * <p>Every chart in tools/fixtures/charts (small hand-written beatmaps committed for this check) and in the local,
+ * uncommitted run/ folder is read by the current MusicBattleTracks reader. With a previous build's jar (argument 2 or
+ * BLOCKY_PREVIOUS_JAR, ideally a build from before offsets) each chart is also read by the old reader and the notes are
+ * compared; the same chart with an offset added must still read in the old build with the same notes, which is what a
+ * player on the older jar meets. Without that jar the old-build comparisons are skipped and the check says so.
  * Charts are copied to a temporary folder first, because the reader may migrate a file in place.
  */
 public final class ChartOffsetChecks {
-    /** The 48c12bd beta, the last build without offsets, under the name the beta folder keeps it as. */
-    private static final Path DEFAULT_PREVIOUS_JAR = Path.of(System.getProperty("user.home"),
-            "Desktop", "blocky-music-beta", "blocky_music-0.1.0-2026-10-24-2002.jar");
     private static int checks;
     private static final List<String> failures = new ArrayList<>();
 
     public static void main(String[] args) throws Exception {
         Path root = Path.of(args.length > 0 ? args[0] : ".").toAbsolutePath().normalize();
-        String oldJar = args.length > 1 ? args[1] : System.getenv().getOrDefault("BLOCKY_PREVIOUS_JAR", DEFAULT_PREVIOUS_JAR.toString());
+        String oldJar = args.length > 1 ? args[1] : System.getenv().getOrDefault("BLOCKY_PREVIOUS_JAR", "");
         fieldRules();
         gridRules();
         Path game = Files.createTempDirectory("blocky-chart-offset-");
@@ -44,11 +42,11 @@ public final class ChartOffsetChecks {
             net.neoforged.fml.loading.FMLPaths.loadAbsolutePaths(game);
             ClassLoader old = oldJar.isBlank() || !Files.isRegularFile(Path.of(oldJar)) ? null : oldLoader(Path.of(oldJar));
             if (old == null) {
-                System.out.println("chart-offset: no previous jar given, old-build comparisons skipped");
+                System.out.println("chart-offset: SKIP old-build comparisons (no previous jar given; set BLOCKY_PREVIOUS_JAR)");
             }
             exporter(game, old);
             List<Path> charts = new ArrayList<>();
-            for (String folder : new String[] {"run", "../blocky-music-workshop/test/fixtures/charts/valid", "tools/fixtures"}) {
+            for (String folder : new String[] {"tools/fixtures/charts", "run"}) {
                 collectCharts(root.resolve(folder).normalize(), charts);
             }
             check(!charts.isEmpty(), "found charts to compare");

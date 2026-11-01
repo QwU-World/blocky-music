@@ -66,6 +66,9 @@ import net.neoforged.neoforge.event.tick.ServerTickEvent;
 import net.neoforged.neoforge.network.PacketDistributor;
 import ru.gora.musicbattle.MusicBattleMod;
 import ru.gora.musicbattle.data.BattleCameraFocus;
+import ru.gora.musicbattle.data.BattleCameraShot;
+import ru.gora.musicbattle.data.BattleModeVote;
+import ru.gora.musicbattle.data.BattleWinMilestones;
 import ru.gora.musicbattle.data.BattleClock;
 import ru.gora.musicbattle.data.BattlePauseClock;
 import ru.gora.musicbattle.data.BattleSkipClock;
@@ -93,6 +96,7 @@ import ru.gora.musicbattle.network.ClientJudgementPayload;
 import ru.gora.musicbattle.network.OpenChallengeSidePayload;
 import ru.gora.musicbattle.network.BattleMicrophonePayload;
 import ru.gora.musicbattle.network.OpenVotePayload;
+import ru.gora.musicbattle.network.PauseSkipJumpPayload;
 import ru.gora.musicbattle.network.PauseSkipStatusPayload;
 import ru.gora.musicbattle.network.SpectatorBattlePayload;
 import ru.gora.musicbattle.network.SpectatorMusicPayload;
@@ -119,12 +123,12 @@ public final class BattleManager {
     private static final String MOB_ORIGINAL_NO_AI_TAG = "music_battle:original_no_ai";
     private static final String MOB_ORIGINAL_NO_GRAVITY_TAG = "music_battle:original_no_gravity";
     private static final double ANCHOR_CORRECTION_DISTANCE_SQR = 0.0625D;
-    /** Orbit degradation: full swing, half swing, then the centred target itself. */
-    private static final double[] CAMERA_ORBIT_SCALES = {1.0D, 0.5D, 0.0D};
-    /** How far the shot turns towards the playing fighter, as a share of the half-distance between the two. */
-    private static final double CAMERA_FOCUS_PAN = 0.6D;
-    /** How far the camera itself slides after them, the same way; small, so the turn does the work. */
-    private static final double CAMERA_FOCUS_TRUCK = 0.25D;
+    /** Shares of the swing a cramped moving shot may fall back to: full, half, and none (it still leans). */
+    private static final double[] CAMERA_SWING_SCALES = {1.0D, 0.5D, 0.0D};
+    /** How far ahead along its swing a moving shot checks for room, so it narrows before it reaches a wall. */
+    private static final int CAMERA_ROOM_LOOKAHEAD_TICKS = 10;
+    /** The orbit centre sits this far below the middle of the two fighters' bodies; see BattleCameraShot. */
+    private static final double CAMERA_CENTER_DROP = 1.22D;
     private static final int CHALLENGE_TICKS = 60 * 20;
     /** 60 seconds; the vote screen reads the same length from VoteTiming. */
     private static final int VOTE_TICKS = VoteTiming.VOTE_TICKS;
@@ -141,6 +145,27 @@ public final class BattleManager {
     private static final int EARLY_FAIL_TICKS = 11;
     private static final int SAME_LANE_HIT_LOCKOUT_TICKS = 2;
     private static final int HOLD_RELEASE_EARLY_TICKS = 2;
+    /**
+     * How far ahead of the battle a mob plays, in ticks (150 ms): its whole part of the battle - every note it hits or
+     * misses, its holds and their score - runs on {@link Battle#aiTicks}, this much ahead of {@link Battle#playTicks},
+     * and each of its actions tells the clients the tick it belongs to ({@link BattleActionPayload#showAtTick}), where
+     * they show it.
+     *
+     * <p>The server acts only on its own 50 ms ticks, which fall anywhere inside a battle tick and move inside it with
+     * every pause: a single-player pause is never a whole number of ticks long. A mob that pressed on the first server
+     * tick at or after its note was therefore seen up to a tick late, and after each visit to the pause menu by a
+     * different amount, which is how the bot fell out of step a little after every pause. Played ahead, its hits reach
+     * a client about this many ticks before their tick and land exactly on it, however far away the server is: a
+     * client starts its battle clock when the start packet arrives, so its clock trails the server's by the same delay
+     * the hits travel with. Only a delay that has grown by more than the lead since the start - a lag spike - brings a
+     * hit late, and that one is shown at once, as before. The mob's own timeline is the one it always had, only
+     * earlier, so its judgement, score, combo and difficulty are what they were.
+     */
+    private static final int AI_LEAD_TICKS = 3;
+    /** Battle#aiTicks before the battle's first tick is played. */
+    private static final int MOB_CLOCK_UNSET = Integer.MIN_VALUE;
+    /** The most mob ticks one server tick plays to catch up (Battle#tickParticipants): 30 seconds of a stalled server. */
+    private static final int MOB_CATCH_UP_TICKS = 20 * 30;
     private static final int MUSIC_SYNC_LEAD_TICKS = 40;
     private static final int PAUSE_SKIP_PREP_TICKS = 3 * 20;
     private static final int PAUSE_SKIP_MIN_GAP_TICKS = 6 * 20;
@@ -338,6 +363,7 @@ public final class BattleManager {
         battle.mobSkill = MobSkill.values()[battle.random.nextInt(MobSkill.values().length)];
         battle.unifiedNotes = false;
         battle.deadlyParty = false;
+        rollMobBattleNpcs(battle);
         BATTLES.put(battle.id, battle);
         BATTLE_BY_ENTITY.put(first.getUUID(), battle.id);
         BATTLE_BY_ENTITY.put(second.getUUID(), battle.id);
@@ -351,7 +377,49 @@ public final class BattleManager {
         }
         MusicBattleTracks.Track track = battle.tracks.get(battle.random.nextInt(battle.tracks.size()));
         organizer.sendSystemMessage(Component.translatable("music_battle.l10n.server.mobs_start", track.title()));
+        // The quick battle has no vote, so the organiser's modes are the plain ones; the NPCs' rolls still count.
+        applyMobBattleModes(battle, BattleModeVote.Modes.PLAIN);
         beginPlaying(battle, track);
+    }
+
+    /**
+     * Each test NPC in a mob battle whose "random modes" switch is on rolls its modes when the battle is set up, as it
+     * does when a player challenges it; the rolls are folded into the organiser's modes once those are known
+     * ({@link #applyMobBattleModes}). Before, nothing here ever rolled, although the NPC's own settings tip says it
+     * picks modes in a battle and adds them.
+     */
+    private static void rollMobBattleNpcs(Battle battle) {
+        if (battle.leftEntity() instanceof TestRapGodMasterEntity left && left.hasRandomVotes()) {
+            battle.leftNpcRoll = BattleModeVote.npcRoll(true, battle.random.nextBoolean(), battle.random.nextInt(3));
+        }
+        if (battle.rightEntity() instanceof TestRapGodMasterEntity right && right.hasRandomVotes()) {
+            battle.rightNpcRoll = BattleModeVote.npcRoll(true, battle.random.nextBoolean(), battle.random.nextInt(3));
+        }
+        TestRapGodMasterEntity npc = battle.testNpc();
+        if (npc != null) {
+            battle.npcModes = npc == battle.rightEntity() ? battle.rightNpcRoll : battle.leftNpcRoll;
+        }
+    }
+
+    /** A mob battle's modes: the organiser's, with each NPC's roll added, and the organiser told what was added. */
+    private static void applyMobBattleModes(Battle battle, BattleModeVote.Modes organiser) {
+        BattleModeVote.Modes modes = BattleModeVote.betweenMobs(organiser, battle.leftNpcRoll, battle.rightNpcRoll);
+        battle.unifiedNotes = modes.sharedNotes();
+        battle.deadlyParty = modes.deadlyParty();
+        battle.speedMultiplier = normalizeSpeedMultiplier(modes.speed());
+        if (battle.deadlyParty && battle.mobSkill.ordinal() < MobSkill.GOD.ordinal()) {
+            battle.mobSkill = MobSkill.GOD;
+        }
+        // Each NPC is named with what its own roll added, in the order the rolls were folded in.
+        BattleModeVote.Modes before = organiser;
+        if (battle.leftNpcRoll != null && battle.leftEntity() instanceof TestRapGodMasterEntity left) {
+            BattleModeVote.Modes after = BattleModeVote.againstTestNpc(before, battle.leftNpcRoll, true);
+            announceNpcRoll(battle, left, before, after);
+            before = after;
+        }
+        if (battle.rightNpcRoll != null && battle.rightEntity() instanceof TestRapGodMasterEntity right) {
+            announceNpcRoll(battle, right, before, BattleModeVote.againstTestNpc(before, battle.rightNpcRoll, true));
+        }
     }
 
     public static boolean cancelMobBattle(ServerPlayer player, LivingEntity target) {
@@ -423,7 +491,7 @@ public final class BattleManager {
      * retained when the arena is prepared.
      */
     public static void onBattleCameraBlockUpdated(ServerLevel level, BlockPos blockPos, Vec3 position,
-                                                  float yaw, float pitch, float fov) {
+                                                  float yaw, float pitch, float fov, boolean followPlayers) {
         for (Battle battle : BATTLES.values()) {
             if (!battle.fixedCamera
                     || battle.camera == null
@@ -432,38 +500,10 @@ public final class BattleManager {
                     || !blockPos.equals(battle.fixedCameraBlockPos)) {
                 continue;
             }
-
-            battle.lastBroadcastCamera = new BattleCameraPlacement(blockPos, position,
-                    Mth.wrapDegrees(yaw), Mth.clamp(pitch, -89.0F, 89.0F), Mth.clamp(fov, 30.0F, 110.0F));
-
-            battle.cameraTarget = position;
-            battle.cameraStart = position;
-            battle.cameraYaw = Mth.wrapDegrees(yaw);
-            battle.cameraPitch = Mth.clamp(pitch, -89.0F, 89.0F);
-            battle.cameraFov = Mth.clamp(fov, 30.0F, 110.0F);
-            Vec3 cameraEntityPos = cameraEntityPosition(battle.camera, position);
-            battle.camera.absMoveTo(
-                    cameraEntityPos.x,
-                    cameraEntityPos.y,
-                    cameraEntityPos.z,
-                    battle.cameraYaw,
-                    battle.cameraPitch
-            );
-
-            BattleCameraSyncPayload payload = new BattleCameraSyncPayload(
-                    battle.id,
-                    battle.camera.getId(),
-                    position.x,
-                    position.y,
-                    position.z,
-                    battle.cameraYaw,
-                    battle.cameraPitch,
-                    battle.cameraFov,
-                    ++battle.cameraSyncRevision
-            );
-            for (ServerPlayer watcher : battle.watchers()) {
-                PacketDistributor.sendToPlayer(watcher, payload);
-            }
+            BattleCameraPlacement edited = new BattleCameraPlacement(blockPos, position,
+                    Mth.wrapDegrees(yaw), Mth.clamp(pitch, -89.0F, 89.0F), Mth.clamp(fov, 30.0F, 110.0F), followPlayers);
+            // An edit of the camera in use is not a cut: a follow camera keeps the swing it is in.
+            battle.applyCameraPlacement(edited, false);
         }
     }
 
@@ -587,7 +627,7 @@ public final class BattleManager {
         // A sped-up track has to be converted, which takes long enough that doing it when the battle starts
         // would stall the server. Asking for it here gives the conversion the rest of the vote to finish in.
         // Only a player's first vote asks: our client votes once, and a client that kept re-voting every track
-        // at 1.5x and 2x would otherwise queue a minute of ffmpeg per track and fill the track folders with
+        // at 1.5x and 2x would otherwise queue a conversion per track and fill the track folders with
         // copies. A changed vote still gets its copy, because the battle asks again when it starts.
         if (previousVote == null) {
             MusicBattleTracks.requestSpeedVariant(votedTrack.get(), normalizeSpeedMultiplier(speedMultiplier));
@@ -619,14 +659,35 @@ public final class BattleManager {
         if (owner < 0) {
             return;
         }
+        laneInput(battle, owner, Mth.clamp(lane, 0, 3), clientTick, down);
+    }
+
+    /**
+     * A player's lane key going down or up, at {@code clientTick} on their own clock.
+     *
+     * <p>Up, it settles a hold of theirs this server still has going on that lane (resolveHoldRelease): let go of
+     * before its release window (HOLD_RELEASE_EARLY_TICKS before its end), the hold is broken; inside it, complete. A
+     * client of this build has always settled it already. It judges each release once (ClientJudgementPayload
+     * HOLD_BREAK or HOLD_COMPLETE) - after a hold it judged complete, the next release on that lane is the next hold's
+     * (ClientBattleController#activeOwnHold) - and sends that judgement before the key's own packet, on the same
+     * connection; both are handled on the server thread in the order they came. So a hold still going here when its key
+     * goes up is one that client never judged, and never will: it only ever completes a hold while its key is down. Left
+     * to tickHold's fallback, that hold was counted as a hit with its hold score three seconds after its end, though its
+     * player had let go of it, even before it began. The fallback stays for a hold whose key is still down then: a
+     * judgement that has not come yet, or a client that stopped sending.
+     */
+    private static void laneInput(Battle battle, int owner, int lane, int clientTick, boolean down) {
         ParticipantState state = battle.state(owner);
-        int clampedLane = Mth.clamp(lane, 0, 3);
-        if (down && state.laneDown[clampedLane]) {
+        if (down && state.laneDown[lane]) {
             return;
         }
-        state.laneDown[clampedLane] = down;
+        state.laneDown[lane] = down;
+        RuntimeNote hold = state.activeHolds[lane];
+        if (!down && !state.ai && hold != null) {
+            resolveHoldRelease(battle, owner, lane, clientTick, hold.index);
+        }
         BattleLaneAnimationPayload animationPayload = new BattleLaneAnimationPayload(
-                battle.id, owner, clampedLane, down);
+                battle.id, owner, lane, down);
         for (ServerPlayer watcher : battle.watchers()) {
             PacketDistributor.sendToPlayer(watcher, animationPayload);
         }
@@ -644,6 +705,12 @@ public final class BattleManager {
         if (owner < 0 || payload.lane() < 0 || payload.lane() > 3) {
             return;
         }
+        judgeClient(battle, owner, payload, serverPlayer.getUUID(), serverPlayer.getGameProfile().getName());
+    }
+
+    /** A player's own judgement of one of their notes, checked against the rules the server shares with the client. */
+    private static void judgeClient(Battle battle, int owner, ClientJudgementPayload payload, UUID playerId,
+                                    String playerName) {
         ParticipantState state = battle.state(owner);
         if (state == null || state.ai || payload.sequence() <= state.lastClientJudgementSequence) {
             return;
@@ -669,7 +736,7 @@ public final class BattleManager {
             // some precision on a skewed build and keeps the battle playable.
             RuntimeNote byTiming = battle.noteByTiming(payload.kind(), state, owner, payload.lane(), clientTick);
             if (byTiming != null) {
-                warnAboutNoteIndexSkew(battle, serverPlayer, payload.noteIndex(), byTiming.index);
+                warnAboutNoteIndexSkew(battle, playerName, payload.noteIndex(), byTiming.index);
                 note = byTiming;
             }
         }
@@ -754,7 +821,7 @@ public final class BattleManager {
         state.mistakes = payload.mistakes();
         // The note this was resolved against, not the number it arrived with: after a fallback those differ, and
         // the opponent and the spectators have to be told which note actually changed.
-        broadcastAction(battle, owner, payload.lane(), note == null ? -1 : note.index, hit, complete, serverPlayer.getUUID());
+        broadcastAction(battle, owner, payload.lane(), note == null ? -1 : note.index, hit, complete, playerId);
     }
 
     /** Whether a number from a client named a note that is really on that player's own panel. */
@@ -767,7 +834,7 @@ public final class BattleManager {
      *
      * <p>One line, because it is per judgement otherwise: hundreds of them in a song.
      */
-    private static void warnAboutNoteIndexSkew(Battle battle, ServerPlayer player, int claimedIndex, int resolvedIndex) {
+    private static void warnAboutNoteIndexSkew(Battle battle, String playerName, int claimedIndex, int resolvedIndex) {
         if (battle.noteIndexSkewWarned) {
             return;
         }
@@ -775,7 +842,7 @@ public final class BattleManager {
         MusicBattleMod.LOGGER.warn("Blocky Music battle '{}': {} judged note {}, which is not theirs here; "
                         + "resolving by timing as note {}. The client's chart does not match this server's - check that "
                         + "both sides run the same build.",
-                battle.id, player.getGameProfile().getName(), claimedIndex, resolvedIndex);
+                battle.id, playerName, claimedIndex, resolvedIndex);
     }
 
     private static boolean canAcceptClientHit(RuntimeNote note, ParticipantState state, int owner, int lane, int clientTick) {
@@ -813,17 +880,19 @@ public final class BattleManager {
         }
         int targetTick = battle.pauseSkipTargetTick();
         if (targetTick < 0) {
-            sendPauseSkipStatus(battle, false, -1, false);
+            sendPauseSkipStatus(battle, false, -1);
             return;
         }
         battle.pauseSkipVotes.add(serverPlayer.getUUID());
         battle.addAutomaticPauseSkipVotes();
         int required = battle.requiredPauseSkipVotes();
         if (battle.pauseSkipVotes.size() >= required) {
-            battle.applyPauseSkip(targetTick);
-            sendPauseSkipStatus(battle, false, targetTick, true);
+            int fromTick = battle.playTicks;
+            int toTick = battle.applyPauseSkip(targetTick);
+            sendPauseSkipJump(battle, fromTick, toTick);
+            sendPauseSkipStatus(battle, false, toTick);
         } else {
-            sendPauseSkipStatus(battle, true, targetTick, false);
+            sendPauseSkipStatus(battle, true, targetTick);
         }
     }
 
@@ -877,7 +946,12 @@ public final class BattleManager {
         }
 
         Battle battle = BATTLES.get(battleId);
-        if (battle == null || !battle.hasPlayer(serverPlayer.getUUID())) {
+        // A fighter, or a spectator the battle is waiting for: the spectator's branch below used to be unreachable,
+        // because only fighters got past this line, so a spectator whose download failed kept the battle waiting and
+        // was never told why.
+        boolean waitedForSpectator = battle != null && battle.phase == Phase.PREPARING
+                && battle.preloadSpectatorIds.contains(serverPlayer.getUUID());
+        if (battle == null || !battle.hasPlayer(serverPlayer.getUUID()) && !waitedForSpectator) {
             return;
         }
 
@@ -888,15 +962,15 @@ public final class BattleManager {
         Component safeReason = rawReason.isBlank()
                 ? Component.translatable("music_battle.l10n.server.unknown_client_error")
                 : Component.literal(rawReason);
-        // One client's own error text is server log material. Other players and spectators only
-        // learn whose client failed, never a string that client composed.
+        // One client's own error text is server log material, and a failing spectator's own chat line. The other
+        // players and spectators only learn whose client failed, never a string that client composed.
         MusicBattleMod.LOGGER.warn("Blocky Music client error reported by {}: {}",
                 serverPlayer.getGameProfile().getName(), rawReason.isBlank() ? "(empty)" : rawReason);
         if (battle.hasPlayer(serverPlayer.getUUID())) {
             finishBattle(battle, Component.translatable("music_battle.l10n.server.client_error_player", serverPlayer.getDisplayName()), true);
             return;
         }
-        if (battle.phase == Phase.PREPARING && battle.preloadSpectatorIds.contains(serverPlayer.getUUID())) {
+        if (waitedForSpectator) {
             battle.preloadFailedSpectatorIds.add(serverPlayer.getUUID());
             removeSpectatorSession(battle, serverPlayer.getUUID());
             PacketDistributor.sendToPlayer(serverPlayer, new SpectatorStopPayload(battle.id));
@@ -954,7 +1028,22 @@ public final class BattleManager {
             return;
         }
         Battle battle = BATTLES.get(battleId);
-        if (battle == null || battle.phase != Phase.VOTING || !battle.canVote(serverPlayer.getUUID())) {
+        if (battle == null) {
+            return;
+        }
+        if (battle.phase != Phase.VOTING) {
+            // Once the beatmap is chosen, a player of this battle whose client has no cover for it asks for one at the
+            // start, for the battle's header card. Only the battle's own beatmap is answered, and only once: before, the
+            // request was dropped here and the card showed a cover only if the vote or the Workshop had fetched it.
+            MusicBattleTracks.Track chosen = battle.track;
+            if (chosen != null && battle.hasPlayer(serverPlayer.getUUID()) && trackIds.contains(chosen.id())
+                    && battle.previewIdsSent.computeIfAbsent(serverPlayer.getUUID(), ignored -> new HashSet<>()).add(chosen.id())) {
+                MusicBattleTracks.previewPath(chosen)
+                        .ifPresent(path -> sendAssetAsync(serverPlayer, chosen.id(), "preview", chosen.previewFile(), path));
+            }
+            return;
+        }
+        if (!battle.canVote(serverPlayer.getUUID())) {
             return;
         }
         Set<String> sent = battle.previewIdsSent.computeIfAbsent(serverPlayer.getUUID(), ignored -> new HashSet<>());
@@ -1010,7 +1099,7 @@ public final class BattleManager {
     }
 
     /**
-     * The rows of a vote screen (spec 06 section 9.4): withdrawn server beatmaps are left out, every other row
+     * The rows of a vote screen: withdrawn server beatmaps are left out, every other row
      * carries its source chip and, for a workshop set, the identity a client needs to answer an asset offer.
      */
     private static List<TrackSummary> voteSummaries(List<MusicBattleTracks.Track> tracks) {
@@ -1027,13 +1116,13 @@ public final class BattleManager {
         return List.copyOf(summaries);
     }
 
-    /** Honest truncation (spec 06 section 9.4): the screen says so instead of silently showing a short list. */
+    /** Honest truncation: the screen says so instead of silently showing a short list. */
     private static boolean truncated(List<MusicBattleTracks.Track> tracks, List<TrackSummary> summaries) {
         return summaries.size() < tracks.size();
     }
 
     /**
-     * An INSTALLED vote whose package still has to travel (spec 06 section 9.4): the vote stays open for it, by at
+     * An INSTALLED vote whose package still has to travel: the vote stays open for it, by at
      * most 30 extra seconds, and {@code everyoneVoted} ignores the voter until the transfer lands or is dropped.
      */
     public static boolean markInstalledVotePending(UUID battleId, UUID playerId) {
@@ -1083,7 +1172,7 @@ public final class BattleManager {
 
     /**
      * Whether a running battle is playing, preloading or still offering this chart. Removing a server beatmap is
-     * refused while it is (spec 06 section 9.1): the participants have already been told which files to expect.
+     * refused while it is: the participants have already been told which files to expect.
      */
     public static boolean isTrackInUse(String trackId) {
         if (trackId == null || trackId.isEmpty()) {
@@ -1118,6 +1207,7 @@ public final class BattleManager {
 
     private static void refreshSpeakerNetworks(MinecraftServer server) {
         Map<ServerLevel, Map<BlockPos, Integer>> activeByLevel = new HashMap<>();
+        Map<ServerLevel, Map<BlockPos, Long>> beatByLevel = new HashMap<>();
         for (Battle battle : BATTLES.values()) {
             if (battle.phase != Phase.PLAYING || battle.leftAnchor == null || battle.rightAnchor == null
                     || !(battle.leftEntity.level() instanceof ServerLevel level)) {
@@ -1128,13 +1218,18 @@ public final class BattleManager {
             battle.activeSpeakers = SpeakerNetwork.connectedSpeakers(level, center, SPECTATOR_MUSIC_DISTANCE);
             if (battle.playTicks >= 0 && battle.playTicks <= battle.durationTicks) {
                 Map<BlockPos, Integer> active = activeByLevel.computeIfAbsent(level, ignored -> new HashMap<>());
+                Map<BlockPos, Long> beats = beatByLevel.computeIfAbsent(level, ignored -> new HashMap<>());
+                // The game tick of beat 1: the battle's clock started playTicks ago, and beat 1 is its offset in.
+                long beatOne = SpeakerNetwork.beatOneGameTick(level.getGameTime(), battle.playTicks,
+                        battle.effectiveOffsetMs);
                 for (BlockPos pos : battle.activeSpeakers) {
-                    active.merge(pos, battle.effectiveBpm, Math::max);
+                    SpeakerNetwork.claim(active, beats, pos, battle.effectiveBpm, beatOne);
                 }
             }
         }
         for (ServerLevel level : server.getAllLevels()) {
-            SpeakerNetwork.applyActiveStates(level, activeByLevel.getOrDefault(level, Map.of()));
+            SpeakerNetwork.applyActiveStates(level, activeByLevel.getOrDefault(level, Map.of()),
+                    beatByLevel.getOrDefault(level, Map.of()));
         }
     }
 
@@ -1544,32 +1639,37 @@ public final class BattleManager {
         }
     }
 
+    /**
+     * The test NPC's vote, cast the moment the vote opens: its modes always, and one of the server's tracks when the
+     * server has any. It used to vote only when it could name a track, and a server whose maps all come from the
+     * Workshop has none of its own: the NPC then never voted, the vote ran its whole minute after the player had
+     * chosen, and every mode the player picked was turned down for want of the NPC's agreement.
+     */
     private static void submitTestNpcVote(Battle battle) {
         TestRapGodMasterEntity npc = battle.testNpc();
-        if (npc == null || battle.tracks.isEmpty()) {
+        if (npc == null) {
             return;
         }
-        MusicBattleTracks.Track track = battle.tracks.get(battle.random.nextInt(battle.tracks.size()));
-        boolean unified = npc.hasRandomVotes() && battle.random.nextBoolean();
-        boolean deadly = npc.hasRandomVotes() && battle.random.nextInt(4) == 0;
-        float speed = npc.hasRandomVotes() ? switch (battle.random.nextInt(3)) {
-            case 1 -> 1.5F;
-            case 2 -> 2.0F;
-            default -> 1.0F;
-        } : 1.0F;
+        MusicBattleTracks.Track track = battle.tracks.isEmpty()
+                ? null : battle.tracks.get(battle.random.nextInt(battle.tracks.size()));
+        BattleModeVote.Modes roll = BattleModeVote.npcRoll(npc.hasRandomVotes(),
+                battle.random.nextBoolean(), battle.random.nextInt(3));
         UUID voter = npc.getUUID();
-        battle.votes.put(voter, track.id());
-        battle.unifiedVotes.put(voter, unified);
-        battle.deadlyVotes.put(voter, deadly);
-        battle.speedVotes.put(voter, speed);
+        if (track != null) {
+            battle.votes.put(voter, track.id());
+        }
+        battle.npcModes = roll;
+        battle.unifiedVotes.put(voter, roll.sharedNotes());
+        battle.deadlyVotes.put(voter, roll.deadlyParty());
+        battle.speedVotes.put(voter, roll.speed());
         for (ServerPlayer player : battle.players()) {
             PacketDistributor.sendToPlayer(player, new VoteStatusPayload(
                     battle.id,
                     displayName(npc),
-                    track.title(),
-                    unified,
-                    deadly,
-                    speed,
+                    track == null ? "" : track.title(),
+                    roll.sharedNotes(),
+                    roll.deadlyParty(),
+                    roll.speed(),
                     battle.voteRemainingTicks(),
                     battle.everyoneVoted()
             ));
@@ -1634,12 +1734,10 @@ public final class BattleManager {
         }
         if (!battle.hasAnyPlayer()) {
             UUID voter = battle.mobControllerId;
-            battle.unifiedNotes = voter != null && Boolean.TRUE.equals(battle.unifiedVotes.get(voter));
-            battle.deadlyParty = voter != null && Boolean.TRUE.equals(battle.deadlyVotes.get(voter));
-            battle.speedMultiplier = voter == null ? 1.0F : normalizeSpeedMultiplier(battle.speedVotes.getOrDefault(voter, 1.0F));
-            if (battle.deadlyParty && battle.mobSkill.ordinal() < MobSkill.GOD.ordinal()) {
-                battle.mobSkill = MobSkill.GOD;
-            }
+            applyMobBattleModes(battle, new BattleModeVote.Modes(
+                    voter != null && Boolean.TRUE.equals(battle.unifiedVotes.get(voter)),
+                    voter != null && Boolean.TRUE.equals(battle.deadlyVotes.get(voter)),
+                    voter == null ? 1.0F : battle.speedVotes.getOrDefault(voter, 1.0F)));
             return;
         }
         if (battle.rightPlayerId == null || battle.leftPlayerId == null) {
@@ -1647,23 +1745,18 @@ public final class BattleManager {
             UUID human = battle.leftPlayerId != null ? battle.leftPlayerId : battle.rightPlayerId;
             if (battle.testNpc() != null) {
                 TestRapGodMasterEntity npcEntity = battle.testNpc();
-                UUID npc = npcEntity.getUUID();
-                float leftSpeedVote = normalizeSpeedMultiplier(battle.speedVotes.getOrDefault(human, 1.0F));
-                if (npcEntity.hasRandomVotes()) {
-                    battle.unifiedNotes = Boolean.TRUE.equals(battle.unifiedVotes.get(human))
-                            && Boolean.TRUE.equals(battle.unifiedVotes.get(npc));
-                    battle.deadlyParty = Boolean.TRUE.equals(battle.deadlyVotes.get(human))
-                            && Boolean.TRUE.equals(battle.deadlyVotes.get(npc));
-                    float npcSpeedVote = normalizeSpeedMultiplier(battle.speedVotes.getOrDefault(npc, 1.0F));
-                    battle.speedMultiplier = Math.abs(leftSpeedVote - npcSpeedVote) < 0.01F ? leftSpeedVote : 1.0F;
-                } else {
-                    battle.unifiedNotes = Boolean.TRUE.equals(battle.unifiedVotes.get(human));
-                    battle.deadlyParty = Boolean.TRUE.equals(battle.deadlyVotes.get(human));
-                    battle.speedMultiplier = leftSpeedVote;
-                }
+                BattleModeVote.Modes own = new BattleModeVote.Modes(
+                        Boolean.TRUE.equals(battle.unifiedVotes.get(human)),
+                        Boolean.TRUE.equals(battle.deadlyVotes.get(human)),
+                        battle.speedVotes.getOrDefault(human, 1.0F));
+                BattleModeVote.Modes modes = BattleModeVote.againstTestNpc(own, battle.npcModes, npcEntity.hasRandomVotes());
+                battle.unifiedNotes = modes.sharedNotes();
+                battle.deadlyParty = modes.deadlyParty();
+                battle.speedMultiplier = normalizeSpeedMultiplier(modes.speed());
                 if (battle.deadlyParty && battle.mobSkill.ordinal() < MobSkill.GOD.ordinal()) {
                     battle.mobSkill = MobSkill.GOD;
                 }
+                announceNpcRoll(battle, npcEntity, own, modes);
                 return;
             }
             battle.unifiedNotes = Boolean.TRUE.equals(battle.unifiedVotes.get(human));
@@ -1681,6 +1774,47 @@ public final class BattleManager {
         float leftSpeedVote = normalizeSpeedMultiplier(battle.speedVotes.getOrDefault(battle.leftPlayerId, 1.0F));
         float rightSpeedVote = normalizeSpeedMultiplier(battle.speedVotes.getOrDefault(battle.rightPlayerId, 1.0F));
         battle.speedMultiplier = Math.abs(leftSpeedVote - rightSpeedVote) < 0.01F ? leftSpeedVote : 1.0F;
+    }
+
+    /**
+     * Tells the player which modes the NPC's roll added, in chat so it is still there when the setup screen closes:
+     * that screen shows no choice of the NPC's, and a battle that starts sped up or with shared notes nobody asked for
+     * would otherwise look like a fault.
+     */
+    private static void announceNpcRoll(Battle battle, TestRapGodMasterEntity npc, BattleModeVote.Modes own,
+                                        BattleModeVote.Modes modes) {
+        List<Component> added = new ArrayList<>();
+        if (modes.sharedNotes() && !own.sharedNotes()) {
+            added.add(Component.translatable("music_battle.l10n.server.modifier_unified"));
+        }
+        if (Math.abs(modes.speed() - own.speed()) > 0.01F) {
+            added.add(Component.translatable("music_battle.l10n.server.modifier_speed", formatSpeedMultiplier(modes.speed())));
+        }
+        if (added.isEmpty()) {
+            return;
+        }
+        MutableComponent list = Component.empty();
+        for (Component mode : added) {
+            if (!list.getSiblings().isEmpty()) {
+                list.append(", ");
+            }
+            list.append(mode);
+        }
+        int side = BattleModeVote.announcedSide(battle.hasAnyPlayer(), npc == battle.leftEntity());
+        Component message = (side == 0
+                ? Component.translatable("music_battle.l10n.server.npc_random_modes", npc.getDisplayName(), list)
+                : Component.translatable("music_battle.l10n.server.npc_random_modes_side", String.valueOf(side), npc.getDisplayName(), list))
+                .withStyle(ChatFormatting.GOLD);
+        for (ServerPlayer player : battle.players()) {
+            player.sendSystemMessage(message);
+        }
+        // A battle between two mobs has no player in it: the one who set it up is told instead.
+        if (!battle.hasAnyPlayer() && battle.mobControllerId != null && npc.level() instanceof ServerLevel level) {
+            ServerPlayer organizer = level.getServer().getPlayerList().getPlayer(battle.mobControllerId);
+            if (organizer != null) {
+                organizer.sendSystemMessage(message);
+            }
+        }
     }
 
     private static void notifyModeVotes(Battle battle, ServerPlayer voter, MusicBattleTracks.Track track, boolean unifiedNotes, boolean deadlyParty, float speedMultiplier) {
@@ -1899,7 +2033,7 @@ public final class BattleManager {
      *
      * <p>Called once by {@link #beginPlaying}, and again from the battle tick while a sped-up copy that is being
      * converted is waited for. It never waits itself: when the copy is on its way and the wait has time left, it
-     * marks the battle as waiting and returns, so the server thread never stands still for ffmpeg.
+     * marks the battle as waiting and returns, so the server thread never stands still for a conversion.
      */
     private static void prepareBattleTransfer(Battle battle) {
         MusicBattleTracks.Track track = battle.track;
@@ -1907,7 +2041,7 @@ public final class BattleManager {
             return;
         }
         // The audio is chosen before anything is scaled to the speed, because which file exists is what decides
-        // whether that speed can be played at all. Speeding a track up needs ffmpeg and a conversion that the
+        // whether that speed can be played at all. Speeding a song up needs a conversion that the
         // vote asked for in the background; when the result is not there the battle drops to normal speed and
         // says so, instead of ending a duel the two of them already agreed to.
         MusicBattleTracks.BattleAudio audio = track.audioFile().isBlank()
@@ -2115,6 +2249,7 @@ public final class BattleManager {
         // Battle time, not wall time: see BattlePauseClock for the single-player pause it leaves out.
         battle.startEpochNanos = BattlePauseClock.GAME.now() + leadMillis * 1_000_000L;
         battle.playTicks = -(leadMillis / 50);
+        battle.aiTicks = MOB_CLOCK_UNSET;
         MusicBattleMod.LOGGER.info("Starting Blocky Music battle '{}' with track '{}' after all players finished downloading.", battle.id, track.id());
 
         for (ServerPlayer receiver : receivers) {
@@ -2228,11 +2363,17 @@ public final class BattleManager {
             }
         }
 
-        Vec3 lookAt = focusPoint(leftEntity, leftPos).add(focusPoint(rightEntity, rightPos)).scale(0.5D);
+        // The shots swing around a point a little below the middle of the two bodies and look a fixed height above
+        // it (BattleCameraShot.LOOK_HEIGHT); the automatic shot's own lens is found aiming at that same point, so the
+        // opening frame is the one the song continues from.
+        Vec3 bodiesMiddle = focusPoint(leftEntity, leftPos).add(focusPoint(rightEntity, rightPos)).scale(0.5D);
+        Vec3 cameraCenter = bodiesMiddle.subtract(0.0D, CAMERA_CENTER_DROP, 0.0D);
+        Vec3 lookAt = cameraCenter.add(0.0D, BattleCameraShot.LOOK_HEIGHT, 0.0D);
         Optional<BattleCameraPlacement> fixedCamera = findNearbyBattleCamera(level, center);
-        Vec3 cameraPos = fixedCamera.map(BattleCameraPlacement::position).orElseGet(() -> findCameraPosition(level, center, cameraAxis, lookAt));
-        // Every shot opens near the arena centre and dollies out along the line to its own position,
-        // a placed camera block included: it used to open above the left fighter and glide across.
+        Vec3 dynamicPosition = findCameraPosition(level, center, cameraAxis, lookAt);
+        Vec3 cameraPos = fixedCamera.map(BattleCameraPlacement::position).orElse(dynamicPosition);
+        // Every shot opens near the arena centre at its own lens height and dollies out along the line to its
+        // position, a placed camera block included: it used to open above the left fighter and glide across.
         Vec3 cameraStart = introCameraStart(center, cameraPos);
         float cameraYaw = fixedCamera.map(BattleCameraPlacement::yaw).orElseGet(() -> yawToFace(cameraPos, lookAt));
         float cameraPitch = fixedCamera.map(BattleCameraPlacement::pitch).orElseGet(() -> pitchToFace(cameraPos, lookAt));
@@ -2243,13 +2384,9 @@ public final class BattleManager {
         camera.setNoGravity(true);
         camera.setInvulnerable(true);
         camera.setSilent(true);
-        // Dynamic cameras historically store ArmorStand feet. A fixed block
-        // camera stores an optical point, so promote the intro start to the
-        // same coordinate space while keeping the original opening frame.
-        Vec3 storedCameraStart = fixedCamera.isPresent()
-                ? cameraStart.add(0.0D, camera.getEyeHeight(), 0.0D) : cameraStart;
-        Vec3 initialCameraEntityPosition = fixedCamera.isPresent()
-                ? cameraEntityPosition(camera, storedCameraStart) : cameraStart;
+        // Every camera position is the lens now, the automatic shot's included; the helper stand stands one eye
+        // height below it, because that is where Minecraft takes the picture from an entity.
+        Vec3 initialCameraEntityPosition = cameraEntityPosition(camera, cameraStart);
         camera.absMoveTo(initialCameraEntityPosition.x, initialCameraEntityPosition.y,
                 initialCameraEntityPosition.z, cameraYaw, cameraPitch);
         level.addFreshEntity(camera);
@@ -2259,10 +2396,12 @@ public final class BattleManager {
         battle.leftYaw = leftYaw;
         battle.rightYaw = rightYaw;
         battle.camera = camera;
-        battle.cameraStart = storedCameraStart;
+        battle.cameraStart = cameraStart;
         battle.cameraTarget = cameraPos;
-        battle.cameraCenter = lookAt.subtract(0.0D, 1.22D, 0.0D);
+        battle.cameraCenter = cameraCenter;
         battle.fixedCamera = fixedCamera.isPresent();
+        battle.followCamera = fixedCamera.map(BattleCameraPlacement::follow).orElse(false);
+        battle.cameraOrbitScale = 1.0D;
         // Phase 0 or π: the swing starts from the centred target the intro ends on, in a random
         // direction, instead of jumping sideways on the first tick of the song.
         battle.cameraOrbitPhase = battle.random.nextBoolean() ? 0.0D : Math.PI;
@@ -2275,10 +2414,10 @@ public final class BattleManager {
         battle.cameraPitch = cameraPitch;
         battle.cameraFov = cameraFov;
         battle.fixedCameraBlockPos = fixedCamera.map(BattleCameraPlacement::blockPos).orElse(null);
-        battle.arenaCameraFallback = new BattleCameraPlacement(battle.fixedCameraBlockPos, cameraPos, cameraYaw, cameraPitch, cameraFov);
-        Vec3 dynamicPosition = fixedCamera.isEmpty() ? cameraPos : findCameraPosition(level, center, cameraAxis, lookAt);
+        battle.arenaCameraFallback = new BattleCameraPlacement(battle.fixedCameraBlockPos, cameraPos, cameraYaw, cameraPitch,
+                cameraFov, battle.followCamera);
         battle.dynamicCameraFallback = new BattleCameraPlacement(null, dynamicPosition,
-                yawToFace(dynamicPosition, lookAt), pitchToFace(dynamicPosition, lookAt), 0);
+                yawToFace(dynamicPosition, lookAt), pitchToFace(dynamicPosition, lookAt), 0, false);
         battle.lastBroadcastCamera = battle.arenaCameraFallback;
         return true;
     }
@@ -2308,23 +2447,12 @@ public final class BattleManager {
                 && inBattleArea.test(battle.arenaCameraFallback.blockPos())) selected = battle.arenaCameraFallback.blockPos();
         BattleCameraPlacement desired = battle.dynamicCameraFallback;
         if (selected != null && level.getBlockEntity(selected) instanceof BattleCameraBlockEntity camera) {
-            desired = new BattleCameraPlacement(selected, camera.getCameraPosition(), camera.getCameraYaw(), camera.getCameraPitch(), camera.getCameraFov());
+            desired = new BattleCameraPlacement(selected, camera.getCameraPosition(), camera.getCameraYaw(), camera.getCameraPitch(),
+                    camera.getCameraFov(), camera.isFollowPlayers());
         }
         if (desired == null || desired.equals(battle.lastBroadcastCamera)) return;
-        battle.lastBroadcastCamera = desired;
-        battle.fixedCamera = desired.blockPos() != null;
-        battle.fixedCameraBlockPos = desired.blockPos();
-        battle.cameraTarget = desired.position();
-        battle.cameraStart = desired.position();
-        battle.cameraYaw = desired.yaw();
-        battle.cameraPitch = desired.pitch();
-        battle.cameraFov = desired.fov();
-        Vec3 entityPosition = battle.fixedCamera ? cameraEntityPosition(battle.camera, desired.position()) : desired.position();
-        battle.camera.absMoveTo(entityPosition.x, entityPosition.y, entityPosition.z, desired.yaw(), desired.pitch());
-        Vec3 optical = entityPosition.add(0, battle.camera.getEyeHeight(), 0);
-        BattleCameraSyncPayload update = new BattleCameraSyncPayload(battle.id, battle.camera.getId(),
-                optical.x, optical.y, optical.z, desired.yaw(), desired.pitch(), desired.fov(), ++battle.cameraSyncRevision);
-        for (ServerPlayer watcher : battle.watchers()) PacketDistributor.sendToPlayer(watcher, update);
+        boolean cut = !java.util.Objects.equals(desired.blockPos(), battle.fixedCameraBlockPos);
+        battle.applyCameraPlacement(desired, cut);
     }
 
     private static Vec3 focusPoint(LivingEntity entity, Vec3 anchor) {
@@ -2338,21 +2466,20 @@ public final class BattleManager {
         return new Vec3(center.x + step.x(), cameraPos.y, center.z + step.z());
     }
 
+    /**
+     * The automatic shot's lens: the nearest spot on the arena's bisector, at about a standing player's eye height, with
+     * room for the camera and a clear view of {@code lookAt}. These heights used to be the helper stand's feet, so the
+     * picture was taken almost three blocks above the floor. A cramped room tries the bisector closer in before any
+     * diagonal; the order is BattlePlacementMath#automaticCameraSpots.
+     */
     private static Vec3 findCameraPosition(ServerLevel level, Vec3 center, Vec3 preferredAxis, Vec3 lookAt) {
-        List<Vec3> axes = new ArrayList<>();
-        for (BattlePlacementMath.Direction direction : BattlePlacementMath.cameraDirections(preferredAxis.x, preferredAxis.z)) {
-            axes.add(new Vec3(direction.x(), 0.0D, direction.z()));
-        }
-        double[] distances = {3.6D, 4.2D, 4.8D};
-        double[] heights = {1.00D, 1.25D, 1.50D};
-        for (Vec3 axis : axes) {
-            for (double distance : distances) {
-                for (double height : heights) {
-                    Vec3 candidate = center.add(axis.scale(distance)).add(0.0D, height, 0.0D);
-                    if (hasCameraSpace(level, candidate) && hasLineOfSight(level, candidate, lookAt)) {
-                        return candidate;
-                    }
-                }
+        for (BattlePlacementMath.CameraSpot spot : BattlePlacementMath.automaticCameraSpots(preferredAxis.x,
+                preferredAxis.z, BattleCameraShot.DISTANCES, BattleCameraShot.CLOSE_DISTANCES,
+                BattleCameraShot.LENS_HEIGHTS)) {
+            Vec3 candidate = center.add(spot.direction().x() * spot.distance(), spot.height(),
+                    spot.direction().z() * spot.distance());
+            if (hasCameraSpace(level, candidate) && hasLineOfSight(level, candidate, lookAt)) {
+                return candidate;
             }
         }
         return findFallbackCameraPosition(level, center, preferredAxis, lookAt);
@@ -2401,13 +2528,15 @@ public final class BattleManager {
                     camera.getCameraPosition(),
                     camera.getCameraYaw(),
                     camera.getCameraPitch(),
-                    camera.getCameraFov()
+                    camera.getCameraFov(),
+                    camera.isFollowPlayers()
             ));
         }
         Direction facing = level.getBlockState(closest).getValue(BattleCameraBlock.FACING);
         Vec3 direction = new Vec3(facing.getStepX(), 0.0D, facing.getStepZ());
         Vec3 position = Vec3.atCenterOf(closest).add(direction.scale(0.58D));
-        return Optional.of(new BattleCameraPlacement(closest, position, facing.toYRot(), 0.0F, BattleCameraBlockEntity.DEFAULT_FOV));
+        return Optional.of(new BattleCameraPlacement(closest, position, facing.toYRot(), 0.0F, BattleCameraBlockEntity.DEFAULT_FOV,
+                false));
     }
 
     private static boolean insideConnectedSpeakerCoverage(ServerLevel level, BlockPos cameraPos,
@@ -2455,8 +2584,10 @@ public final class BattleManager {
         // Both sides of the bisector stay centred between the fighters, so the opposite side is
         // always tried before the shot is allowed to collapse onto the arena itself.
         List<Vec3> axes = List.of(preferredAxis, preferredAxis.scale(-1.0D));
+        // Lens heights, low to high first only where the preferred ones had no room: a cramped room still gets the
+        // lowest shot that fits.
         for (double distance = 4.2D; distance >= 2.2D; distance -= 0.45D) {
-            for (double height = 2.4D; height >= 1.1D; height -= 0.35D) {
+            for (double height = 1.55D; height <= 3.1D; height += 0.3D) {
                 for (Vec3 axis : axes) {
                     Vec3 candidate = center.add(axis.scale(distance)).add(0.0D, height, 0.0D);
                     if (hasCameraSpace(level, candidate) && hasLineOfSight(level, candidate, lookAt)) {
@@ -2466,12 +2597,12 @@ public final class BattleManager {
             }
         }
         for (Vec3 axis : axes) {
-            Vec3 compact = center.add(axis.scale(2.2D)).add(0.0D, 1.35D, 0.0D);
+            Vec3 compact = center.add(axis.scale(2.2D)).add(0.0D, BattleCameraShot.LENS_HEIGHTS[0], 0.0D);
             if (hasCameraSpace(level, compact)) {
                 return compact;
             }
         }
-        return lookAt.add(0.0D, 0.65D, 0.0D);
+        return lookAt.add(0.0D, 1.25D, 0.0D);
     }
 
     private static void sendTrackAssets(ServerPlayer player, MusicBattleTracks.Track track) {
@@ -2484,16 +2615,29 @@ public final class BattleManager {
         MusicBattleTracks.previewPath(track).ifPresent(path -> sendAssetAsync(player, track.id(), "preview", track.previewFile(), path));
     }
 
-    private static void sendPauseSkipStatus(Battle battle, boolean available, int targetTick, boolean applied) {
+    /**
+     * Tells everyone following the battle - its players and its spectators - that the clock has just jumped from
+     * {@code fromTick} to {@code toTick}, so each client can move its own clock by the same amount (see
+     * BattleSkipClock#clientEpochAfterJump) instead of rebuilding it from the target.
+     */
+    private static void sendPauseSkipJump(Battle battle, int fromTick, int toTick) {
+        PauseSkipJumpPayload jump = new PauseSkipJumpPayload(battle.id, fromTick, toTick);
+        for (ServerPlayer watcher : battle.watchers()) {
+            PacketDistributor.sendToPlayer(watcher, jump);
+        }
+    }
+
+    /**
+     * The offer to skip a rest and its votes, for the battle's players. The skip itself reaches everyone following
+     * the battle, spectators included, as {@link #sendPauseSkipJump}: a spectator left in the skipped rest would hear
+     * the rest while the bot's hits already came from after it.
+     */
+    private static void sendPauseSkipStatus(Battle battle, boolean available, int targetTick) {
         int required = battle.requiredPauseSkipVotes();
         int votes = Math.min(required, battle.pauseSkipVotes.size());
-        // Availability/voting belongs to participants, but an applied timeline
-        // jump must also reach spectators. Otherwise their audio/visual clock
-        // remains in the skipped rest while AI actions already arrive from the
-        // later server tick.
-        List<ServerPlayer> receivers = applied ? battle.watchers() : battle.players();
-        for (ServerPlayer player : receivers) {
-            PacketDistributor.sendToPlayer(player, new PauseSkipStatusPayload(battle.id, available, votes, required, Math.max(0, targetTick), applied));
+        for (ServerPlayer player : battle.players()) {
+            PacketDistributor.sendToPlayer(player, new PauseSkipStatusPayload(battle.id, available, votes, required,
+                    Math.max(0, targetTick), false));
         }
     }
 
@@ -2531,7 +2675,7 @@ public final class BattleManager {
     }
 
     /**
-     * Offers the file before pushing it (spec 06 section 9.4): a player who already owns exactly these bytes — from
+     * Offers the file before pushing it: a player who already owns exactly these bytes — from
      * the Workshop, or from an earlier battle — answers {@code have} and nothing is sent. An answer that never
      * arrives is not allowed to stall the battle: {@link #ASSET_OFFER_TIMEOUT_TICKS} later the bytes go out anyway.
      */
@@ -2813,6 +2957,8 @@ public final class BattleManager {
             }
             sendTrackAssets(player, track, audioAsset.get());
             battle.spectatorIds.add(player.getUUID());
+            // As of the battle's own tick, with a mob's actions from the ticks it has played ahead: see spectatorJoin.
+            SpectatorJoin join = battle.spectatorJoin();
             PacketDistributor.sendToPlayer(player, new SpectatorBattlePayload(
                     battle.id,
                     battle.durationTicks,
@@ -2841,18 +2987,22 @@ public final class BattleManager {
                     battle.rightState.panelStyle.noteHeightScale(),
                     battle.leftState.speed,
                     battle.rightState.speed,
-                    battle.leftState.score,
-                    battle.rightState.score,
-                    battle.leftState.combo,
-                    battle.rightState.combo,
-                    heldMask(battle.leftState),
-                    heldMask(battle.rightState),
+                    join.leftScore(),
+                    join.rightScore(),
+                    join.leftCombo(),
+                    join.rightCombo(),
+                    join.leftHeldMask(),
+                    join.rightHeldMask(),
                     battle.runtimeNotes.stream()
                             .map(runtimeNote -> runtimeNote.note)
                             .toList(),
                     battle.runtimeEffects,
                     battle.leftState.appearance,
-                    battle.rightState.appearance
+                    battle.rightState.appearance,
+                    join.settledNotes(),
+                    join.startedNotes(),
+                    join.leadActions(),
+                    battle.effectiveOffsetMs
             ));
             sendSpectatorMusic(player, battle, track, audioAsset.get(), audioHash, source);
         }
@@ -2997,12 +3147,6 @@ public final class BattleManager {
                                          String audioFile, int audioBytes, String audioHash,
                                          MusicBattleTracks.AudioAsset audioAsset) { }
 
-    private static Vec3 rotateY(Vec3 vector, double angle) {
-        double cos = Math.cos(angle);
-        double sin = Math.sin(angle);
-        return new Vec3(vector.x * cos - vector.z * sin, vector.y, vector.x * sin + vector.z * cos);
-    }
-
     private static void orientLiving(LivingEntity entity, float yaw, float pitch) {
         entity.setYRot(yaw);
         entity.setXRot(pitch);
@@ -3086,10 +3230,13 @@ public final class BattleManager {
         }
 
         closest.started = true;
+        closest.startedAtTick = inputTick;
         closest.hitResolved = true;
         closest.missedResolved = false;
         if (closest.note.durationTicks() <= 0) {
             closest.resolved = true;
+            // Only a mob comes through here, on its own clock; see Battle#settled.
+            closest.resolvedAtTick = inputTick;
         } else {
             state.activeHolds[lane] = closest;
         }
@@ -3104,6 +3251,12 @@ public final class BattleManager {
         broadcastAction(battle, owner, lane, closest.index, true, closest.note.durationTicks() <= 0);
     }
 
+    /**
+     * Settles a started hold let go of on {@code inputTick} by the rule a client judges its own release by
+     * (ClientBattleController#predictLocalRelease): complete, with the hold score, from HOLD_RELEASE_EARLY_TICKS before
+     * its end; broken before that, as a mistake that ends the combo. The action goes to everyone, the player included,
+     * so that a client which did not settle the hold itself takes the server's numbers (applyOwnCorrection).
+     */
     private static void resolveHoldRelease(Battle battle, int owner, int lane, int inputTick, int claimedNoteIndex) {
         ParticipantState state = battle.state(owner);
         RuntimeNote hold = battle.noteByIndex(claimedNoteIndex);
@@ -3217,8 +3370,14 @@ public final class BattleManager {
                 state.score,
                 state.combo,
                 battle.leftState.score,
-                battle.rightState.score
+                battle.rightState.score,
+                // A mob acts on its own clock, ahead of the battle, and every one of its actions happens on the tick
+                // it is sent from; a player's happened as it arrived.
+                state.ai ? battle.aiTicks : BattleActionPayload.SHOW_ON_ARRIVAL
         );
+        if (state.ai) {
+            battle.recordLeadAction(payload);
+        }
         for (ServerPlayer player : battle.watchers()) {
             if (excludedPlayerId != null && excludedPlayerId.equals(player.getUUID())) {
                 continue;
@@ -3326,7 +3485,6 @@ public final class BattleManager {
         int loserOwner = winnerOwner == 0 ? 1 : 0;
         recordWinIfPlayer(battle.entity(winnerOwner), battle.state(winnerOwner));
         recordLossIfPlayer(battle.entity(loserOwner));
-        grantMasterWin(battle.entity(winnerOwner), battle.entity(loserOwner));
     }
 
     private static void recordSurrenderStats(Battle battle, ServerPlayer surrenderer, int owner) {
@@ -3343,22 +3501,17 @@ public final class BattleManager {
     private static void recordWinIfPlayer(LivingEntity entity, ParticipantState state) {
         if (entity instanceof ServerPlayer player) {
             boolean flawless = state != null && state.mistakes == 0;
-            PlayerBattleStats.recordWin(player, flawless);
+            int wins = PlayerBattleStats.recordWin(player, flawless);
             MicrophoneItem.refreshPlayerMicrophones(player);
             MusicBattleAdvancements.grant(player, "first_win");
             if (flawless) {
                 MusicBattleAdvancements.grant(player, "full_combo");
             }
-            if (PlayerBattleStats.get(player).wins() >= 25) {
-                MusicBattleAdvancements.grant(player, "headliner");
+            // 25, 42 and 67 wins. "At least", so a player who was already past a milestone when it was added gets it
+            // with their next win instead of never.
+            for (String milestone : BattleWinMilestones.reached(wins)) {
+                MusicBattleAdvancements.grant(player, milestone);
             }
-        }
-    }
-
-    /** The rap god is the mod's own opponent; beating it is worth saying so. */
-    private static void grantMasterWin(LivingEntity winner, LivingEntity loser) {
-        if (winner instanceof ServerPlayer player && loser instanceof TestRapGodMasterEntity) {
-            MusicBattleAdvancements.grant(player, "beat_the_master");
         }
     }
 
@@ -3504,7 +3657,12 @@ public final class BattleManager {
     private record Challenge(UUID challengerId, long createdTick, boolean challengerFirst) {
     }
 
-    private record BattleCameraPlacement(BlockPos blockPos, Vec3 position, float yaw, float pitch, float fov) {
+    /**
+     * A shot the battle can use: a camera block's ({@code blockPos} set) or the automatic one. {@code position} is the
+     * lens; {@code follow} is a camera block's follow mode, always false for the automatic shot, which moves anyway.
+     */
+    private record BattleCameraPlacement(BlockPos blockPos, Vec3 position, float yaw, float pitch, float fov,
+                                         boolean follow) {
     }
 
     private enum Phase {
@@ -3562,6 +3720,11 @@ public final class BattleManager {
         private final Map<UUID, Boolean> deadlyVotes = new HashMap<>();
         private final Map<UUID, Float> speedVotes = new HashMap<>();
         private String mobVoteId;
+        /** The test NPC's rolled modes, once it has voted; null in every other battle. */
+        private BattleModeVote.Modes npcModes;
+        /** In a battle between two mobs, the roll of the left and the right one when it is a test NPC that rolls. */
+        private BattleModeVote.Modes leftNpcRoll;
+        private BattleModeVote.Modes rightNpcRoll;
         private boolean unifiedNotes;
         private boolean deadlyParty;
         private boolean solo;
@@ -3570,6 +3733,16 @@ public final class BattleManager {
         /** Set once a client has judged a note by a number this build does not give that note. */
         private boolean noteIndexSkewWarned;
         private final Set<UUID> spectatorIds = new HashSet<>();
+        /**
+         * A mob's actions whose tick (showAtTick) the battle has not reached yet, in the order they were sent: the ticks
+         * it has played ahead (AI_LEAD_TICKS). Everyone watching holds them for their tick; a player who starts watching
+         * now gets them with the battle (spectatorJoin), and the oldest go as the battle reaches them
+         * (settleLeadActions).
+         */
+        private final java.util.ArrayDeque<BattleActionPayload> leadActions = new java.util.ArrayDeque<>();
+        /** Each side's score and combo as of playTicks, from its last action the battle has reached (a mob's side). */
+        private final int[] dueScore = new int[2];
+        private final int[] dueCombo = new int[2];
         private final Map<UUID, BattleAudioSourceKey> spectatorSourceKeys = new HashMap<>();
         private Set<BlockPos> activeSpeakers = Set.of();
         private final Set<UUID> readyPlayers = new HashSet<>();
@@ -3608,6 +3781,13 @@ public final class BattleManager {
         /** How long it has waited for that copy, against {@link #SPEED_AUDIO_WAIT_TICKS}. */
         private int speedAudioWaitTicks;
         private int playTicks;
+        /**
+         * The tick a mob plays on: it plays every tick in turn up to {@link #playTicks} plus {@link #AI_LEAD_TICKS}
+         * ({@link #tickParticipants}), and this is the one it is on. Everything a mob does - choosing and judging its
+         * notes, holding them, missing them - reads this clock instead of playTicks, so its part of the battle runs in
+         * the order and with the numbers it always had, a little ahead. Players play on {@link #playTicks}.
+         */
+        private int aiTicks = MOB_CLOCK_UNSET;
         /** Counts held ticks so the microphone is announced at once and then every second. */
         private int microphoneTicks;
         /**
@@ -3640,14 +3820,31 @@ public final class BattleManager {
         private double cameraOrbitAmplitude = 0.28D;
         private double cameraOrbitSpeed = 42.0D;
         private double cameraOrbitVertical = 0.10D;
-        /** Leans the automatic shot towards whoever is playing when the two sides take turns. */
+        /** Leans the moving shots towards whoever is playing when the two sides take turns. */
         private final BattleCameraFocus cameraFocus = new BattleCameraFocus();
+        /**
+         * The share of its swing a moving shot uses now, eased towards the share that has room
+         * ({@link BattleCameraShot#easeSwingScale}); it used to jump between a full swing and none in a single tick.
+         */
+        private double cameraOrbitScale = 1.0D;
+        /**
+         * Added to the battle tick for the moving shots' slow swing, less every tick a skipped rest jumped over: the
+         * swing is a function of time, and the jump used to whip the shot round to wherever the swing stood a
+         * minute and a half later.
+         */
+        private int cameraClockShift;
         private ArmorStand leftStatus;
         private ArmorStand rightStatus;
+        /**
+         * The shot's resting direction: a camera block's own angle, or the automatic shot's aim at the arena from its
+         * lens. A moving shot turns away from it and back; this is what a new viewer is told before the first frame.
+         */
         private float cameraYaw;
         private float cameraPitch;
         private float cameraFov;
         private boolean fixedCamera;
+        /** A camera block in follow mode: fixed spot and angle, but it sways and leans like the automatic shot. */
+        private boolean followCamera;
         private BlockPos fixedCameraBlockPos;
         private long cameraSyncRevision;
         private BattleCameraPlacement arenaCameraFallback;
@@ -3806,11 +4003,8 @@ public final class BattleManager {
             playTicks = startEpochNanos == 0L ? playTicks + 1 : BattleClock.ticksSince(startEpochNanos, BattlePauseClock.GAME.now());
             freezeParticipants();
             tickCrowd();
-            tickHolds();
+            tickParticipants();
             if (playTicks >= 0) {
-                tickMobAi(leftState);
-                tickMobAi(rightState);
-                resolveMissedNotes();
                 tickPauseSkipStatus();
             }
             updateStatusWindows();
@@ -3825,13 +4019,71 @@ public final class BattleManager {
             }
         }
 
+        /**
+         * Both sides' part of this server tick. A mob plays every tick of its own clock in turn, up to AI_LEAD_TICKS
+         * ahead of the battle, and the players' side - only what the server settles for them - runs once on playTicks.
+         *
+         * <p>Every tick in turn, because playTicks can jump: a server tick that comes late reads the battle two or three
+         * ticks on, and so can the first one after a single-player pause, since the pause moves where the server's ticks
+         * fall in the battle's. A mob that read its clock once per server tick then pressed on the tick after its note
+         * and was seen there - judged no worse, as a tick is inside the perfect window, but late on screen, now and then,
+         * and differently after each pause. Played tick by tick it presses on its note and its timeline is exactly the
+         * one a server that never missed a tick would give. A clock that jumps further than MOB_CATCH_UP_TICKS (a
+         * stalled server) is not replayed; the mob carries on from where the battle is, as before.
+         */
+        private void tickParticipants() {
+            int mobTarget = playTicks + AI_LEAD_TICKS;
+            if (aiTicks == MOB_CLOCK_UNSET || mobTarget - aiTicks > MOB_CATCH_UP_TICKS) {
+                aiTicks = mobTarget - 1;
+            }
+            while (aiTicks < mobTarget) {
+                aiTicks++;
+                tickMobSide();
+            }
+            tickPlayerSide();
+        }
+
+        /**
+         * One tick of a mob's part, on aiTicks: its holds, then the notes it let go, then its choices.
+         *
+         * <p>The notes it let go come before its choices, as on a player's own client, which settles the notes that have
+         * left the panel (ClientBattleController#resolveLocalMissedNotes) before it judges the keys pressed in the same
+         * tick. A mob that hits a note on the very tick an earlier miss leaves the panel therefore starts a new combo
+         * with that hit, as a player does; the other way round, the hit was counted on the old combo and the combo was
+         * shown at zero right after it.
+         */
+        private void tickMobSide() {
+            if (leftState != null && leftState.ai) {
+                tickHold(leftState);
+            }
+            if (rightState != null && rightState.ai) {
+                tickHold(rightState);
+            }
+            resolveMissedNotes(true);
+            if (aiTicks >= 0) {
+                tickMobAi(leftState);
+                tickMobAi(rightState);
+            }
+        }
+
+        /** The players' part of a server tick, on playTicks: holds whose judgement never came, and notes they let go. */
+        private void tickPlayerSide() {
+            if (leftState == null || !leftState.ai) {
+                tickHold(leftState);
+            }
+            if (rightState == null || !rightState.ai) {
+                tickHold(rightState);
+            }
+            resolveMissedNotes(false);
+        }
+
         private void tickPauseSkipStatus() {
             int targetTick = pauseSkipTargetTick();
             if (targetTick < 0) {
                 if (pauseSkipStatusVisible || !pauseSkipVotes.isEmpty()) {
                     pauseSkipStatusVisible = false;
                     pauseSkipVotes.clear();
-                    BattleManager.sendPauseSkipStatus(this, false, -1, false);
+                    BattleManager.sendPauseSkipStatus(this, false, -1);
                 }
                 return;
             }
@@ -3839,10 +4091,13 @@ public final class BattleManager {
             pauseSkipStatusVisible = true;
             addAutomaticPauseSkipVotes();
             if (pauseSkipVotes.size() >= requiredPauseSkipVotes()) {
-                applyPauseSkip(targetTick);
-                BattleManager.sendPauseSkipStatus(this, false, targetTick, true);
+                int fromTick = playTicks;
+                int toTick = applyPauseSkip(targetTick);
+                // The jump goes to everyone who follows the battle; the offer itself only ever went to its players.
+                BattleManager.sendPauseSkipJump(this, fromTick, toTick);
+                BattleManager.sendPauseSkipStatus(this, false, toTick);
             } else if (newlyVisible || playTicks % 10 == 0) {
-                BattleManager.sendPauseSkipStatus(this, true, targetTick, false);
+                BattleManager.sendPauseSkipStatus(this, true, targetTick);
             }
         }
 
@@ -3870,7 +4125,7 @@ public final class BattleManager {
             int nextTick = Integer.MAX_VALUE;
             for (RuntimeNote note : runtimeNotes) {
                 int end = note.note.tick() + Math.max(0, note.note.durationTicks());
-                if (!note.resolved && end >= playTicks && note.note.tick() > playTicks) {
+                if (!settled(note) && end >= playTicks && note.note.tick() > playTicks) {
                     nextTick = Math.min(nextTick, note.note.tick());
                 }
             }
@@ -3889,7 +4144,7 @@ public final class BattleManager {
 
         private boolean hasActivePauseSkipBlocker() {
             for (RuntimeNote note : runtimeNotes) {
-                if (note.resolved) {
+                if (settled(note)) {
                     continue;
                 }
                 int start = note.note.tick();
@@ -3899,6 +4154,98 @@ public final class BattleManager {
                 }
             }
             return false;
+        }
+
+        /**
+         * Whether a note is over as far as the battle's own tick is concerned. A mob plays ahead of the battle
+         * ({@link #aiTicks}), so a note it has already hit or missed can still lie ahead for everyone listening, and a
+         * rest must not be offered, or blocked, on the strength of it.
+         */
+        private boolean settled(RuntimeNote note) {
+            return note.resolved && note.resolvedAtTick <= playTicks;
+        }
+
+        /** Keeps a mob's action, just sent, until the battle reaches its tick; see leadActions. */
+        private void recordLeadAction(BattleActionPayload payload) {
+            settleLeadActions();
+            leadActions.addLast(payload);
+        }
+
+        /** Lets go of the mob's actions the battle has reached, taking their numbers as the side's numbers by then. */
+        private void settleLeadActions() {
+            while (!leadActions.isEmpty() && leadActions.peekFirst().showAtTick() <= playTicks) {
+                BattleActionPayload due = leadActions.pollFirst();
+                int side = Mth.clamp(due.owner(), 0, 1);
+                dueScore[side] = due.score();
+                dueCombo[side] = due.combo();
+            }
+        }
+
+        /**
+         * Whether a hold was being held on the battle's own tick: hit by then, and not settled by then. A mob's hold
+         * can be hit, broken or completed on the mob's clock, ahead of the battle (startedAtTick, resolvedAtTick).
+         */
+        private boolean heldAt(RuntimeNote note) {
+            if (note.note.durationTicks() <= 0 || note.startedAtTick > playTicks) {
+                return false;
+            }
+            return note.started
+                    || note.resolved && note.resolvedAtTick > playTicks && note.startedAtTick != Integer.MIN_VALUE;
+        }
+
+        /**
+         * The battle as a player who starts watching it now sees it, on the battle's own tick (playTicks).
+         *
+         * <p>A mob plays AI_LEAD_TICKS ahead, and everyone already watching holds its actions for their tick. The join
+         * used to send the numbers and the held keys of that moment, up to three ticks ahead for a mob, and nothing of
+         * the actions behind them: the notes the mob had hit or missed in those ticks were never settled on the new
+         * spectator's panel and fell past their buttons. The same went for every note settled in the last
+         * HIT_WINDOW_TICKS before the join, which the panel cannot tell apart from one still to be played
+         * (ClientBattleController#startSpectatorBattle takes an older note as over), and for a mob's hold being held,
+         * whose held keys stayed down on that panel for the rest of the battle, a mob sending no key-up.
+         *
+         * <p>So it now gets: each side's numbers as of playTicks (a mob's from its last action due by then), the notes
+         * settled by then that the panel cannot tell, the holds being held then, the held keys of a player's side only,
+         * and the mob's actions still ahead, to hold for their tick as everyone else does.
+         */
+        private SpectatorJoin spectatorJoin() {
+            settleLeadActions();
+            List<Integer> settledNotes = new ArrayList<>();
+            List<Integer> startedNotes = new ArrayList<>();
+            for (RuntimeNote note : runtimeNotes) {
+                int end = note.note.tick() + Math.max(0, note.note.durationTicks());
+                if (settled(note)) {
+                    if (end + HIT_WINDOW_TICKS >= playTicks) {
+                        settledNotes.add(note.index);
+                    }
+                } else if (heldAt(note)) {
+                    startedNotes.add(note.index);
+                }
+            }
+            int[] score = new int[2];
+            int[] combo = new int[2];
+            int[] heldMask = new int[2];
+            for (int side = 0; side < 2; side++) {
+                ParticipantState state = state(side);
+                if (state == null) {
+                    continue;
+                }
+                boolean waiting = false;
+                for (BattleActionPayload lead : leadActions) {
+                    waiting |= lead.owner() == side;
+                }
+                score[side] = state.ai && waiting ? dueScore[side] : state.score;
+                combo[side] = state.ai && waiting ? dueCombo[side] : state.combo;
+                // A mob has no keys: its held pose comes from the holds it holds, and no key-up ever comes to let go.
+                heldMask[side] = state.ai ? 0 : heldMask(state);
+            }
+            return new SpectatorJoin(score[0], score[1], combo[0], combo[1], heldMask[0], heldMask[1],
+                    List.copyOf(settledNotes), List.copyOf(startedNotes), List.copyOf(leadActions));
+        }
+
+        /** The tick a participant plays on: a mob's own clock, ahead of the battle ({@link #aiTicks}), or the battle's. */
+        private int clockOf(ParticipantState state) {
+            return state != null && state.ai ? aiTicks : playTicks;
         }
 
         private void addAutomaticPauseSkipVotes() {
@@ -3923,17 +4270,21 @@ public final class BattleManager {
             return Math.max(1, required);
         }
 
-        private void applyPauseSkip(int targetTick) {
+        /** Moves the battle to {@code targetTick} (never backwards, never past the end) and returns where it landed. */
+        private int applyPauseSkip(int targetTick) {
             int safeTarget = Math.max(playTicks, Math.min(targetTick, durationTicks));
             // The tick is read from the epoch every tick, so moving only the counter was undone a tick later and
             // the battle carried on from inside the rest it had just skipped.
             if (startEpochNanos != 0L) {
                 startEpochNanos = BattleSkipClock.serverEpochAfterSkip(startEpochNanos, playTicks, safeTarget);
             }
+            cameraClockShift -= safeTarget - playTicks;
             playTicks = safeTarget;
+            aiTicks = playTicks + AI_LEAD_TICKS;
             pauseSkipVotes.clear();
             pauseSkipOfferTargetTick = -1;
             pauseSkipStatusVisible = false;
+            return safeTarget;
         }
 
         private void applyDeadlyResult() {
@@ -3949,6 +4300,14 @@ public final class BattleManager {
 
         private void killDeadlyLoser(LivingEntity loser) {
             if (loser == null || !loser.isAlive()) {
+                return;
+            }
+            // genericKill below passes the invulnerable flag, so the switch on the NPC has to be honoured here.
+            if (!BattleModeVote.deadlyPartyKills(loser instanceof TestRapGodMasterEntity, loser.isInvulnerable())) {
+                if (loser.level() instanceof ServerLevel level) {
+                    level.getServer().getPlayerList().broadcastSystemMessage(
+                            Component.translatable("music_battle.l10n.server.deadly_loser_spared", loser.getDisplayName()), false);
+                }
                 return;
             }
             if (loser.level() instanceof ServerLevel level) {
@@ -4157,53 +4516,136 @@ public final class BattleManager {
                     }
                 }
             }
-            if (camera != null) {
-                Vec3 pos = cameraTarget == null ? camera.position() : cameraTarget;
-                if (playTicks < 0 && cameraStart != null && cameraTarget != null) {
-                    float progress = Mth.clamp((playTicks + MUSIC_SYNC_LEAD_TICKS) / (float) MUSIC_SYNC_LEAD_TICKS, 0.0F, 1.0F);
-                    progress = progress * progress * (3.0F - 2.0F * progress);
-                    pos = cameraStart.lerp(cameraTarget, progress);
-                } else if (!fixedCamera && cameraCenter != null && cameraTarget != null
-                        && camera.level() instanceof ServerLevel level) {
-                    Vec3 offset = cameraTarget.subtract(cameraCenter);
-                    double orbit = Math.sin(playTicks / cameraOrbitSpeed + cameraOrbitPhase) * cameraOrbitAmplitude;
-                    double vertical = Math.sin(playTicks / (cameraOrbitSpeed * 0.72D)) * cameraOrbitVertical;
-                    tickCameraFocus();
-                    // Half the way from one fighter to the other, flat. Leaning by a share of it turns the shot
-                    // towards whoever is playing and slides the camera a little after them; at zero the shot is
-                    // the centred one, which is all shared notes and solo play ever get.
-                    Vec3 side = leftAnchor == null || rightAnchor == null ? Vec3.ZERO
-                            : new Vec3((rightAnchor.x - leftAnchor.x) * 0.5D, 0.0D, (rightAnchor.z - leftAnchor.z) * 0.5D);
-                    double lean = cameraFocus.focus();
-                    Vec3 orbitCenter = cameraCenter.add(side.scale(lean * CAMERA_FOCUS_TRUCK));
-                    Vec3 lookAt = cameraCenter.add(0.0D, 1.05D, 0.0D).add(side.scale(lean * CAMERA_FOCUS_PAN));
-                    // A blocked swing used to freeze the shot wherever it last fitted, off to one
-                    // side of the centre. Degrade to a half swing and then to the centred target.
-                    for (double scale : CAMERA_ORBIT_SCALES) {
-                        Vec3 candidate = orbitCenter.add(rotateY(offset, orbit * scale)).add(0.0D, vertical * scale, 0.0D);
-                        if (hasCameraSpace(level, candidate) && hasLineOfSight(level, candidate, lookAt)) {
-                            pos = candidate;
-                            break;
-                        }
-                    }
-                    // Aim at the centre from wherever the shot ended up, the target included when no
-                    // swing fits, so direction and position always belong to the same frame.
-                    cameraYaw = yawToFace(pos, lookAt);
-                    cameraPitch = pitchToFace(pos, lookAt);
-                    // The client follows the camera entity for an automatic shot's position, but learns its
-                    // direction only from a sync packet, and an automatic shot never sent one. The swing
-                    // therefore moved the camera sideways while it kept looking straight ahead, sliding the
-                    // far fighter towards the edge of the frame. A zero field of view keeps the position
-                    // entity-driven and carries only the direction, to the participants who view through it.
-                    BattleCameraSyncPayload aim = new BattleCameraSyncPayload(id, camera.getId(),
-                            pos.x, pos.y, pos.z, cameraYaw, cameraPitch, 0.0F, ++cameraSyncRevision);
-                    for (ServerPlayer viewer : players()) {
-                        PacketDistributor.sendToPlayer(viewer, aim);
-                    }
+            tickCamera();
+        }
+
+        /**
+         * Puts the battle's camera where this tick's shot is and, for the two shots that move - the automatic one and
+         * a camera block in follow mode - tells everyone watching through it where its lens is and where it looks.
+         *
+         * <p>Every tick, count-in included, and lens and direction together. The automatic shot used to be seen from its
+         * helper stand, which Minecraft moves on a client only every third tick, while its direction came in a packet
+         * every tick and was put on screen without blending: position and aim belonged to different moments and the
+         * aim stepped twenty times a second, which is what made the shot turn in jerks. Clients now blend each frame
+         * from these frames ({@code ClientBattleController#tickBattleCameraSync}). A zero field of view in the frame
+         * means the viewer's own, which is what the automatic shot has always used.
+         */
+        private void tickCamera() {
+            if (camera == null) {
+                return;
+            }
+            boolean moving = !fixedCamera || followCamera;
+            Vec3 lens = cameraTarget == null ? camera.position().add(0.0D, camera.getEyeHeight(), 0.0D) : cameraTarget;
+            float yaw = cameraYaw;
+            float pitch = cameraPitch;
+            if (playTicks < 0 && cameraStart != null && cameraTarget != null) {
+                float progress = Mth.clamp((playTicks + MUSIC_SYNC_LEAD_TICKS) / (float) MUSIC_SYNC_LEAD_TICKS, 0.0F, 1.0F);
+                progress = progress * progress * (3.0F - 2.0F * progress);
+                lens = cameraStart.lerp(cameraTarget, progress);
+            } else if (moving && cameraCenter != null && cameraTarget != null
+                    && camera.level() instanceof ServerLevel level) {
+                tickCameraFocus();
+                BattleCameraShot.Lens shot = movingShot(level);
+                lens = new Vec3(shot.x(), shot.y(), shot.z());
+                yaw = shot.yaw();
+                pitch = shot.pitch();
+            }
+            Vec3 entityPosition = cameraEntityPosition(camera, lens);
+            camera.absMoveTo(entityPosition.x, entityPosition.y, entityPosition.z, yaw, pitch);
+            // While the song is still loading nobody watches through the camera yet, and the count-in moves it anyway.
+            if (moving && phase == Phase.PLAYING) {
+                BattleCameraSyncPayload frame = new BattleCameraSyncPayload(id, camera.getId(), lens.x, lens.y, lens.z,
+                        yaw, pitch, fixedCamera ? cameraFov : 0.0F, ++cameraSyncRevision);
+                for (ServerPlayer viewer : watchers()) {
+                    PacketDistributor.sendToPlayer(viewer, frame);
                 }
-                Vec3 entityPosition = fixedCamera ? cameraEntityPosition(camera, pos) : pos;
-                camera.absMoveTo(entityPosition.x, entityPosition.y, entityPosition.z,
-                        cameraYaw, cameraPitch);
+            }
+        }
+
+        /**
+         * This tick's frame of a moving shot. Half the way from one fighter to the other, flat, is the side the shot
+         * leans along; the swing and lift are the slow orbit. A swing that would put the lens into a wall, or lose
+         * sight of the fighters, is narrowed: the shot looks a little ahead along its swing and gives up the swing
+         * gradually, and only if even the narrowest frame has no room now does it drop straight to it. Where no
+         * swing fits at all it holds the spot it was given and only turns.
+         */
+        private BattleCameraShot.Lens movingShot(ServerLevel level) {
+            Vec3 side = leftAnchor == null || rightAnchor == null ? Vec3.ZERO
+                    : new Vec3((rightAnchor.x - leftAnchor.x) * 0.5D, 0.0D, (rightAnchor.z - leftAnchor.z) * 0.5D);
+            double lean = cameraFocus.focus();
+            int swingTicks = playTicks + cameraClockShift;
+            if (followCamera) {
+                // A camera block in follow mode stands where it was placed and only turns, so there is no swing to fit.
+                return shotAt(swingTicks, 0.0D, 0.0D, side, lean);
+            }
+            double allowed = -1.0D;
+            for (double scale : CAMERA_SWING_SCALES) {
+                if (shotHasRoom(level, shotAt(swingTicks, scale, 1.0D, side, lean), side, lean)
+                        && shotHasRoom(level, shotAt(swingTicks + CAMERA_ROOM_LOOKAHEAD_TICKS, scale, 1.0D, side, lean), side, lean)) {
+                    allowed = scale;
+                    break;
+                }
+            }
+            if (allowed < 0.0D) {
+                cameraOrbitScale = BattleCameraShot.easeSwingScale(cameraOrbitScale, 0.0D);
+                return shotAt(swingTicks, 0.0D, 0.0D, side, lean);
+            }
+            cameraOrbitScale = BattleCameraShot.easeSwingScale(cameraOrbitScale, allowed);
+            BattleCameraShot.Lens shot = shotAt(swingTicks, cameraOrbitScale, 1.0D, side, lean);
+            if (cameraOrbitScale != allowed && !shotHasRoom(level, shot, side, lean)) {
+                cameraOrbitScale = allowed;
+                shot = shotAt(swingTicks, allowed, 1.0D, side, lean);
+            }
+            return shot;
+        }
+
+        private BattleCameraShot.Lens shotAt(int ticks, double swingScale, double slide, Vec3 side, double lean) {
+            if (followCamera) {
+                return BattleCameraShot.follow(cameraTarget.x, cameraTarget.y, cameraTarget.z, cameraYaw, cameraPitch,
+                        cameraCenter.x, cameraCenter.y, cameraCenter.z, side.x, side.z, lean);
+            }
+            double swing = BattleCameraShot.swing(ticks, cameraOrbitSpeed, cameraOrbitPhase, cameraOrbitAmplitude) * swingScale;
+            double rise = BattleCameraShot.rise(ticks, cameraOrbitSpeed, cameraOrbitVertical) * swingScale;
+            return BattleCameraShot.automatic(cameraTarget.x, cameraTarget.y, cameraTarget.z,
+                    cameraCenter.x, cameraCenter.y, cameraCenter.z, side.x, side.z, lean, swing, rise, slide);
+        }
+
+        private boolean shotHasRoom(ServerLevel level, BattleCameraShot.Lens shot, Vec3 side, double lean) {
+            double[] look = BattleCameraShot.lookPointFrom(cameraTarget.x, cameraTarget.z,
+                    cameraCenter.x, cameraCenter.y, cameraCenter.z, side.x, side.z, lean);
+            Vec3 lens = new Vec3(shot.x(), shot.y(), shot.z());
+            return hasCameraSpace(level, lens) && hasLineOfSight(level, lens, new Vec3(look[0], look[1], look[2]));
+        }
+
+        /**
+         * Switches this battle to a camera block, or back to the automatic shot, or takes an edit of the block in use.
+         * {@code cut} is a change of camera: the swing starts again from nothing instead of jumping in mid-swing.
+         */
+        private void applyCameraPlacement(BattleCameraPlacement placement, boolean cut) {
+            lastBroadcastCamera = placement;
+            fixedCamera = placement.blockPos() != null;
+            followCamera = fixedCamera && placement.follow();
+            fixedCameraBlockPos = placement.blockPos();
+            cameraTarget = placement.position();
+            cameraStart = placement.position();
+            cameraYaw = placement.yaw();
+            cameraPitch = placement.pitch();
+            cameraFov = placement.fov();
+            if (cut) {
+                cameraOrbitScale = 0.0D;
+            }
+            if (camera == null || camera.isRemoved()) {
+                return;
+            }
+            Vec3 entityPosition = cameraEntityPosition(camera, placement.position());
+            camera.absMoveTo(entityPosition.x, entityPosition.y, entityPosition.z, placement.yaw(), placement.pitch());
+            // A shot that moves sends its own frame next tick; this one is the cut itself, so a viewer snaps to the
+            // new camera instead of blending across the arena from the old one.
+            BattleCameraSyncPayload update = new BattleCameraSyncPayload(id, camera.getId(),
+                    placement.position().x, placement.position().y, placement.position().z,
+                    placement.yaw(), placement.pitch(), placement.fov(), ++cameraSyncRevision);
+            for (ServerPlayer watcher : watchers()) {
+                PacketDistributor.sendToPlayer(watcher, update);
             }
         }
 
@@ -4258,12 +4700,28 @@ public final class BattleManager {
             BattleManager.updateStatusWindow(stand, anchor, state, name, playTicks, runtimeNotes);
         }
 
-        private void resolveMissedNotes() {
+        /**
+         * The notes a mob ({@code mobNotes}) or the players let pass, each side on its own clock (clockOf), once they
+         * have left the panel. For a mob that is every miss it makes: the ones its roll decided on the note's tick
+         * (tickMobAi) and the ones it could not play at all - a second note on one lane in the same tick, a lane still
+         * locked by a hit or busy with a hold. A player's client settles its own misses at the same point and tells the
+         * server (ClientJudgementPayload.NOTE_MISS); for a player this is only the fallback when that never comes.
+         */
+        private void resolveMissedNotes(boolean mobNotes) {
             for (RuntimeNote note : runtimeNotes) {
                 ParticipantState state = state(note.note.owner());
+                if ((state != null && state.ai) != mobNotes) {
+                    continue;
+                }
+                int now = clockOf(state);
+                if (now < 0) {
+                    // Neither side misses anything before its own first tick, as when this ran from tick zero only.
+                    continue;
+                }
                 int missAfterTicks = MISS_AFTER_PANEL_EXIT_TICKS + (state != null && !state.ai ? CLIENT_JUDGEMENT_FALLBACK_TICKS : 0);
-                if (!note.resolved && !note.started && playTicks - note.note.tick() >= missAfterTicks) {
+                if (!note.resolved && !note.started && now - note.note.tick() >= missAfterTicks) {
                     note.resolved = true;
+                    note.resolvedAtTick = now;
                     note.hitResolved = false;
                     note.missedResolved = true;
                     if (state == null) {
@@ -4279,15 +4737,12 @@ public final class BattleManager {
             }
         }
 
-        private void tickHolds() {
-            tickHold(leftState);
-            tickHold(rightState);
-        }
-
         private void tickHold(ParticipantState state) {
             if (state == null) {
                 return;
             }
+            // A mob's holds run on its own clock, like the rest of its part of the battle.
+            int now = clockOf(state);
 
             for (int lane = 0; lane < state.activeHolds.length; lane++) {
                 RuntimeNote hold = state.activeHolds[lane];
@@ -4298,7 +4753,10 @@ public final class BattleManager {
 
                 int endTick = hold.note.tick() + hold.note.durationTicks();
                 if (!state.ai) {
-                    if (playTicks < endTick + CLIENT_JUDGEMENT_FALLBACK_TICKS) {
+                    // Only a hold whose key is still down gets here: one let go of is settled as its key goes up
+                    // (laneInput). The player is given the benefit of the doubt - a lag spike or a client that stopped
+                    // sending - and the hold counts as held to its end.
+                    if (now < endTick + CLIENT_JUDGEMENT_FALLBACK_TICKS) {
                         continue;
                     }
                     hold.resolved = true;
@@ -4310,8 +4768,9 @@ public final class BattleManager {
                     broadcastAction(this, state.owner, hold.note.lane(), hold.index, true, true);
                     continue;
                 }
-                if (playTicks >= endTick) {
+                if (now >= endTick) {
                     hold.resolved = true;
+                    hold.resolvedAtTick = now;
                     hold.hitResolved = true;
                     hold.missedResolved = false;
                     state.activeHolds[lane] = null;
@@ -4320,8 +4779,9 @@ public final class BattleManager {
                     continue;
                 }
 
-                if (state.ai && playTicks > hold.note.tick() + 2 && !state.laneDown[hold.note.lane()]) {
+                if (state.ai && now > hold.note.tick() + 2 && !state.laneDown[hold.note.lane()]) {
                     hold.resolved = true;
+                    hold.resolvedAtTick = now;
                     hold.hitResolved = false;
                     hold.missedResolved = true;
                     state.activeHolds[lane] = null;
@@ -4331,7 +4791,7 @@ public final class BattleManager {
                     continue;
                 }
 
-                if (playTicks % 5 == 0) {
+                if (now % 5 == 0) {
                     state.score += 4;
                     broadcastAction(this, state.owner, hold.note.lane(), hold.index, true, false);
                 }
@@ -4348,38 +4808,38 @@ public final class BattleManager {
                 if (note.resolved || note.started || note.aiAttempted || note.note.owner() != aiState.owner) {
                     continue;
                 }
-                if (playTicks < note.note.tick()) {
+                // The mob's own clock (aiTicks), ahead of the battle's: see AI_LEAD_TICKS.
+                if (aiTicks < note.note.tick()) {
                     continue;
                 }
                 // One decision per note, including blocked notes. Leaving them pending
                 // would reroll difficulty or turn same-lane chords into delayed hits.
                 note.aiAttempted = true;
                 int lane = note.note.lane();
-                if (!canHitClaimedNote(note, aiState, aiState.owner, lane, playTicks)) {
+                if (!canHitClaimedNote(note, aiState, aiState.owner, lane, aiTicks)) {
                     continue;
                 }
                 int laneMask = 1 << lane;
                 boolean alreadyAttempted = (attemptedLanes & laneMask) != 0;
                 attemptedLanes |= laneMask;
                 RuntimeNote activeHold = aiState.activeHolds[lane];
-                if (alreadyAttempted || playTicks < aiState.laneHitLockoutUntil[lane]
+                if (alreadyAttempted || aiTicks < aiState.laneHitLockoutUntil[lane]
                         || activeHold != null && !activeHold.resolved) {
                     continue;
                 }
                 if (random.nextFloat() < mobSkill.hitChance) {
                     aiState.laneDown[lane] = true;
-                    resolveInput(this, aiState.owner, lane, true, playTicks, note.index);
+                    resolveInput(this, aiState.owner, lane, true, aiTicks, note.index);
                     if (note.note.durationTicks() <= 0 || random.nextFloat() < mobSkill.releaseChance) {
                         aiState.laneDown[lane] = false;
                     }
-                } else {
-                    note.resolved = true;
-                    note.hitResolved = false;
-                    note.missedResolved = true;
-                    aiState.combo = 0;
-                    aiState.mistakes++;
-                    broadcastAction(this, aiState.owner, note.note.lane(), note.index, false, true);
                 }
+                // A miss is decided here, on the note's tick, and played out where a player's own lands: the note
+                // stays unresolved and falls on past its button, and resolveMissedNotes settles it once it has left
+                // the panel, MISS_AFTER_PANEL_EXIT_TICKS later on this same clock - the combo, the mistake and the
+                // action that tells everyone, stamped with that tick. Settled here instead, the note vanished on the
+                // judgement line on its own tick with no flash, which looked like a hit. aiAttempted keeps the note
+                // from being rolled again, so difficulty and chords are as they were.
             }
         }
 
@@ -4393,10 +4853,16 @@ public final class BattleManager {
         }
 
         private boolean everyoneVoted() {
-            return pendingTransferVoters.isEmpty() && VoteTiming.everyoneVoted(expectedVoters(), votes.keySet());
+            return pendingTransferVoters.isEmpty() && VoteTiming.everyoneVoted(expectedVoters(), votersSoFar());
         }
 
-        /** Tracks of the battle plus the sets voters brought from their own installs (spec 06 section 9.4). */
+        /** Everyone who has chosen: the track votes, and the test NPC once it has rolled its modes, track or none. */
+        private Set<UUID> votersSoFar() {
+            TestRapGodMasterEntity npc = testNpc();
+            return BattleModeVote.votersSoFar(votes.keySet(), npc == null ? null : npc.getUUID(), npcModes != null);
+        }
+
+        /** Tracks of the battle plus the sets voters brought from their own installs. */
         private Optional<MusicBattleTracks.Track> trackById(String trackId) {
             for (MusicBattleTracks.Track track : tracks) {
                 if (track.id().equals(trackId)) {
@@ -4634,12 +5100,34 @@ public final class BattleManager {
         private boolean resolved;
         private boolean hitResolved;
         private boolean missedResolved;
+        /**
+         * The mob has had its one try at this note: it hit it, decided to miss it, or could not play it. A note it
+         * missed stays unresolved until it has left the panel (resolveMissedNotes), and this keeps it from a second try.
+         */
         private boolean aiAttempted;
+        /**
+         * The mob's clock when the mob settled this note, which can be ahead of the battle (see Battle#settled);
+         * Integer.MIN_VALUE for a note settled on the battle's own tick, as every player's note is.
+         */
+        private int resolvedAtTick = Integer.MIN_VALUE;
+        /**
+         * The mob's clock when the mob hit this note, which can be ahead of the battle like resolvedAtTick;
+         * Integer.MIN_VALUE for a note not hit by a mob, and for every player's, which is hit on the battle's own tick.
+         * Kept once the note is settled: whether a hold was being held at the battle's tick is read from it
+         * (Battle#heldAt).
+         */
+        private int startedAtTick = Integer.MIN_VALUE;
 
         private RuntimeNote(int index, BattleNote note) {
             this.index = index;
             this.note = note;
         }
+    }
+
+    /** What a player who starts watching a battle gets on top of its chart: see Battle#spectatorJoin. */
+    record SpectatorJoin(int leftScore, int rightScore, int leftCombo, int rightCombo, int leftHeldMask,
+                         int rightHeldMask, List<Integer> settledNotes, List<Integer> startedNotes,
+                         List<BattleActionPayload> leadActions) {
     }
 
     private static final class ParticipantState {

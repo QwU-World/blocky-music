@@ -46,7 +46,7 @@ import ru.gora.musicbattle.workshop.api.WorkshopSession;
 
 /**
  * Workshop HTTP client, downloader, session storage, consent and the end-of-stream rule a package transfer shares
- * with the server, against a local JDK HttpServer fake (spec 06 section 12 {@code workshop-api}). No qwu.world, no
+ * with the server, against a local JDK HttpServer fake ({@code workshop-api}). No qwu.world, no
  * Mojang, no Minecraft classes. What it does not prove: real TLS, real proxies, the game's executors and screens.
  */
 public final class WorkshopApiChecks {
@@ -66,6 +66,7 @@ public final class WorkshopApiChecks {
             schemaAndErrors();
             dtoMapping();
             patchTransport();
+        uploadAnswersWithNulls();
             transferChunking();
             downloads(temp.resolve("downloads"));
             diskSpace(temp.resolve("disk"));
@@ -95,6 +96,21 @@ public final class WorkshopApiChecks {
         check("https://qwu.world/avatars/3-bee3a7f6ae9a.jpg"
                         .equals(MediaUrl.absolute(origin, "https://qwu.world/avatars/3-bee3a7f6ae9a.jpg")),
                 "an account picture on qwu.world is passed through untouched");
+        check("https://cdn.qwu.world/avatars/3.jpg".equals(MediaUrl.absolute(origin, "https://cdn.qwu.world/avatars/3.jpg")),
+                "an account picture on a qwu.world subdomain is fetched");
+        check("https://blocky-music.qwu.world/files/a.jpg".equals(MediaUrl.absolute(origin, "https://blocky-music.qwu.world/files/a.jpg")),
+                "an absolute address on the Workshop origin is fetched");
+        check("http://127.0.0.1:8787/files/a.jpg".equals(MediaUrl.absolute("http://127.0.0.1:8787", "http://127.0.0.1:8787/files/a.jpg")),
+                "a test origin's own absolute addresses are fetched");
+        // Off-host account pictures (consent-change M1): the first-run screen names qwu.world and no other host, so an
+        // avatar_url anywhere else draws the placeholder rather than being fetched.
+        for (String offHost : new String[] {"https://evil.example/avatar.png", "http://qwu.world/avatars/3.jpg",
+                "https://qwu.world.evil.example/a.jpg", "https://evilqwu.world/a.jpg", "https://user@qwu.world/a.jpg",
+                "https://user@evil.example/a.jpg", "ftp://qwu.world/a.jpg", "javascript:alert(1)", "data:image/png;base64,AAAA",
+                "https://127.0.0.1:8787/files/a.jpg", "http://127.0.0.1:8788/files/a.jpg"}) {
+            String origin2 = offHost.contains("127.0.0.1") ? "http://127.0.0.1:8787" : origin;
+            check(MediaUrl.absolute(origin2, offHost) == null, "an account picture off QwU World's hosts is not fetched: " + offHost);
+        }
         check(MediaUrl.absolute(origin + "/", "/files/covers/abc/card@1x.jpg").equals(
                         "https://blocky-music.qwu.world/files/covers/abc/card@1x.jpg"),
                 "a trailing slash on the origin does not double up");
@@ -325,7 +341,7 @@ public final class WorkshopApiChecks {
             String sent = server.requests("GET", "/api/v1/beatmapsets").get(0).query();
             check(sent.contains("q=stars%3E5+neuro") && sent.contains("s=featured") && sent.contains("c=library") && sent.contains("g=7")
                     && sent.contains("e=fx.twoside") && sent.contains("nsfw=false") && sent.contains("limit=50") && !sent.contains("l="),
-                    "search parameters follow 02 section 2.1: " + sent);
+                    "search parameters as the website reads them: " + sent);
         }
     }
 
@@ -351,6 +367,40 @@ public final class WorkshopApiChecks {
             check(expectError("patch socks", () -> viaSocks.patchUpload("up_abc", metadata, CancelToken.none())).code().equals("proxy_unsupported"),
                     "PATCH refuses to bypass a SOCKS proxy");
             check(server.snapshot().size() == before, "no direct connection when the proxy is SOCKS");
+        }
+    }
+
+    /**
+     * The service's answer to POST /api/v1/uploads for a new set, as src/uploads/store.ts writes it: "current" and
+     * "result" are null, and a slot's "probe" may be null. Gson refused a JSON null for a JsonObject component, so every
+     * first upload from the game ended in "unexpected answer" (found by a hidden upload against a local copy of the
+     * service). A component that is neither null nor an object is still refused.
+     */
+    static void uploadAnswersWithNulls() throws Exception {
+        String answer = "{\"schema\":1,\"upload\":{\"id\":\"up_new\",\"setId\":null,\"status\":\"open\",\"stage\":null,"
+                + "\"errorCode\":null,\"limits\":{\"audioBytes\":67108864,\"coverBytes\":12582912,\"chartBytes\":2097152,"
+                + "\"charts\":16,\"durationMs\":[10000,900000]},\"slots\":[{\"slot\":\"audio\",\"size\":5,\"sha256\":null,"
+                + "\"contentType\":\"audio/ogg\",\"fileName\":\"a.ogg\",\"probe\":null}],\"metadata\":{\"title\":\"\","
+                + "\"previewStartMs\":null},\"validation\":{\"ok\":false,\"errors\":[{\"code\":\"title_required\","
+                + "\"field\":\"title\"}],\"warnings\":[],\"reviewRequired\":false,\"audioDurationMs\":null},"
+                + "\"current\":null,\"result\":null}}";
+        try (FakeWorkshopServer server = new FakeWorkshopServer()) {
+            server.on("POST", "/api/v1/uploads", r -> FakeWorkshopServer.Response.json(201, answer));
+            server.on("PATCH", "/api/v1/uploads/up_new", r -> FakeWorkshopServer.Response.json(200, answer));
+            WorkshopApi api = api(server, true);
+            WorkshopDtos.Upload created = api.createUpload(null, CancelToken.none());
+            check("up_new".equals(created.id()) && created.current() == null && created.result() == null
+                    && created.slots().get(0).probe() == null && created.metadata().has("previewStartMs")
+                    && created.metadata().get("previewStartMs").isJsonNull(),
+                    "a new set's upload answer with null current/result/probe is read; metadata keeps its own nulls");
+            WorkshopDtos.Upload patched = api.patchUpload("up_new", new JsonObject(), CancelToken.none());
+            check(patched.current() == null && !patched.validation().ok(), "the PATCH answer with nulls is read too");
+        }
+        try (FakeWorkshopServer server = new FakeWorkshopServer()) {
+            server.on("POST", "/api/v1/uploads", r -> FakeWorkshopServer.Response.json(201,
+                    "{\"schema\":1,\"upload\":{\"id\":\"up_bad\",\"status\":\"open\",\"current\":\"not an object\"}}"));
+            check(expectError("upload with a string current", () -> api(server, true).createUpload(null, CancelToken.none()))
+                    .code().equals(WorkshopApiException.BAD_RESPONSE), "an object component that is a string is still refused");
         }
     }
 
@@ -412,7 +462,7 @@ public final class WorkshopApiChecks {
                 public void installed(long setId, ru.gora.musicbattle.workshop.BeatmapManifest manifest, BeatmapPackage.Outcome outcome) {
                     // What the game can do with the set at the moment it is told the download finished. Both halves
                     // matter: the catalogue is what a battle lists, and the installed-check verdict is what lets the
-                    // map travel to a server (08 A5.1). Asked here rather than afterwards, because "afterwards" is
+                    // map travel to a server. Asked here rather than afterwards, because "afterwards" is
                     // the wait this order exists to remove.
                     playableWhenInstalled.put(setId, catalog.isInstalled(setId)
                             && installedCheck.transferVerdict(setId, manifest.contentSha256())
@@ -907,6 +957,21 @@ public final class WorkshopApiChecks {
         Files.writeString(file, "{\"other\":{\"keep\":true},\"consent\":{\"network\":true,\"version\":0}}");
         config.reload();
         check(!config.networkAllowed(), "an older consent version does not count");
+        check(WorkshopConfig.NETWORK_CONSENT_VERSION == 2, "0.2.0-beta.2 asks once more: the disclosure changed (version 2)");
+        // Everyone who answered the version 1 screen (0.1.0-beta.1 and builds before this one) sees the new one once,
+        // whether they allowed or declined.
+        for (boolean answer : new boolean[] {true, false}) {
+            Files.writeString(file, "{\"consent\":{\"network\":" + answer + ",\"at\":\"2026-10-01T10:00:00Z\",\"version\":1}}");
+            config.reload();
+            check(!config.consentAnswered() && !config.networkAllowed(), "a version 1 answer (" + answer + ") is asked again");
+        }
+        for (boolean answer : new boolean[] {true, false}) {
+            Files.writeString(file, "{\"consent\":{\"network\":" + answer + ",\"at\":\"2026-11-01T10:00:00Z\",\"version\":2}}");
+            config.reload();
+            check(config.consentAnswered() && config.networkAllowed() == answer, "a version 2 answer (" + answer + ") is final");
+        }
+        Files.writeString(file, "{\"other\":{\"keep\":true},\"consent\":{\"network\":true,\"version\":0}}");
+        config.reload();
         config.setNetworkConsent(true, java.time.Instant.parse("2026-09-17T10:00:00Z"));
         JsonObject saved = JsonParser.parseString(Files.readString(file)).getAsJsonObject();
         check(saved.getAsJsonObject("consent").get("network").getAsBoolean() && saved.getAsJsonObject("consent").get("version").getAsInt() == WorkshopConfig.NETWORK_CONSENT_VERSION

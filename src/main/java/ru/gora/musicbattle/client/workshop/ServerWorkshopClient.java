@@ -47,11 +47,11 @@ import ru.gora.musicbattle.workshop.api.InstalledCheck;
 import ru.gora.musicbattle.workshop.api.WorkshopApiException;
 
 /**
- * The client's side of the Minecraft server's Workshop features (spec 06 sections 9.1 and 9.2): it registers the
+ * The client's side of the Minecraft server's Workshop features: it registers the
  * {@link WorkshopServerHooks} the finished screens already call, uploads a package when the server asks for one,
  * and reports what the Workshop says about the sets this player has installed.
  *
- * <p>Transfers respect 08 A5.1 in full: nothing is offered for a set whose last installed-check says
+ * <p>Transfers follow the Workshop's rule in full: nothing is offered for a set whose last installed-check says
  * {@code withdrawn} or {@code audio_removed}, or whose check is older than seven days. The client runs one check
  * first when it can; offline, it refuses with "Check this map online first".
  *
@@ -412,7 +412,7 @@ public final class ServerWorkshopClient {
         WorkshopToasts.problem(Component.translatable(ru.gora.musicbattle.client.workshop.layout.WorkshopStrings.KEY + "server.title"), WorkshopText.error(payload.reason()));
     }
 
-    /** Streams the package in 24 KiB chunks off the render thread (spec 06 section 9.1). */
+    /** Streams the package in 24 KiB chunks off the render thread. */
     private static void upload(UUID transferId) {
         WorkshopClient client = WorkshopClient.get();
         Upload upload = pending;
@@ -519,7 +519,7 @@ public final class ServerWorkshopClient {
     // ---------------------------------------------------------------- takedown reports
 
     /**
-     * Tells the server what the Workshop last said about every installed set it might hold (spec 08 A5.1), so a
+     * Tells the server what the Workshop last said about every installed set it might hold, so a
      * server without egress still learns about a takedown. Advisory and rate-limited on the server.
      */
     public static void reportInstalledStates() {

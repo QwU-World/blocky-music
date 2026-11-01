@@ -14,7 +14,7 @@ foreach ($optional in @('data/DjPlaylistMixer.java','data/DjPlaylistEntry.java',
     if (Test-Path (Join-Path $projectRoot $path)) { $sources += $path }
 }
 $sources = $sources | ForEach-Object { Join-Path $projectRoot $_ }
-$jdk = 'C:/Program Files/Eclipse Adoptium/jdk-21.0.11.10-hotspot/bin'
+$jdk = & (Join-Path $PSScriptRoot 'find-jdk.ps1')
 & "$jdk/javac.exe" -proc:none -encoding UTF-8 -cp $cp -d $outputDir @sources
 if ($LASTEXITCODE) { throw 'DJ mixer test compilation failed' }
 & "$jdk/java.exe" -cp $cp DjMixerChecks

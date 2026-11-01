@@ -12,7 +12,7 @@ import ru.gora.musicbattle.workshop.api.WorkshopInbox;
 import ru.gora.musicbattle.workshop.api.WorkshopRequest;
 
 /**
- * The install-request half of {@code music_battle_tracks/workshop_inbox/} (spec 07 section 8, wave I1): the tiny
+ * The install-request half of {@code music_battle_tracks/workshop_inbox/}: the tiny
  * {@code <setId>.blockymap-request} files the QwU Workshop Helper writes when the player clicks "Install in game" on
  * the site or opens a {@code blockymusic://install/<id>} link.
  *
@@ -21,13 +21,13 @@ import ru.gora.musicbattle.workshop.api.WorkshopRequest;
  * a file that is really a 4 KiB blob, a request renamed to point at another set, a request from last month.
  *
  * <p>Pure {@code java.nio} plus Gson; no Minecraft classes on the classpath on purpose. What it does not prove: the
- * download that follows (that is {@code workshop-api}), the toasts, and the helper itself (that is
- * {@code installer/*_test.go} in the workshop repository).
+ * download that follows (that is {@code workshop-api}), the toasts, and the helper itself (its own tests live with
+ * the Workshop service's source, which is not public).
  */
 public final class WorkshopInboxChecks {
     private static int checks;
 
-    /** Byte for byte what installer/inbox.go writes. If the helper changes, this string changes with it. */
+    /** Byte for byte what the Workshop helper (its source is not public) writes. If the helper changes, this string changes with it. */
     private static final String HELPER_OUTPUT = "{\"v\":1,\"setId\":42,\"source\":\"helper\",\"at\":\"2026-09-18T12:00:00Z\"}\n";
 
     public static void main(String[] args) throws Exception {

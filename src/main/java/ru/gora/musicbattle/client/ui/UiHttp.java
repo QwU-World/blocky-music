@@ -24,7 +24,7 @@ import ru.gora.musicbattle.MusicBattleMod;
  * read (idle) timeout 30 s, no redirects, no caches, a response size cap, http and https only.
  *
  * <p>Nothing here decides whether the player allowed network access: callers only pass URLs after the
- * Workshop consent (spec 06 section 4).
+ * Workshop's network consent.
  */
 public final class UiHttp {
     public static final int CONNECT_TIMEOUT_MS = 10_000;
@@ -128,7 +128,7 @@ public final class UiHttp {
         return proxy == null ? Proxy.NO_PROXY : proxy;
     }
 
-    /** {@code BlockyMusic/<modVersion> (Minecraft 1.21.1; NeoForge <version>; <os>)}, spec 02 section 1. */
+    /** {@code BlockyMusic/<modVersion> (Minecraft 1.21.1; NeoForge <version>; <os>)}. */
     public static String userAgent() {
         String cached = userAgent;
         if (cached == null) {

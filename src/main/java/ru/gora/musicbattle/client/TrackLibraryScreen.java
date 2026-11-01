@@ -26,6 +26,7 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import ru.gora.musicbattle.MusicBattleMod;
 import ru.gora.musicbattle.client.ui.CoverCache;
+import ru.gora.musicbattle.client.ui.FancyEditBox;
 import ru.gora.musicbattle.client.ui.HandCursor;
 import ru.gora.musicbattle.client.ui.Motion;
 import ru.gora.musicbattle.client.ui.Palette;
@@ -35,9 +36,11 @@ import ru.gora.musicbattle.client.ui.TextStyle;
 import ru.gora.musicbattle.client.ui.TextStyles;
 import ru.gora.musicbattle.client.ui.UiIcon;
 import ru.gora.musicbattle.client.ui.UiLayer;
+import ru.gora.musicbattle.client.workshop.ServerWorkshopClient;
 import ru.gora.musicbattle.client.workshop.WorkshopClient;
 import ru.gora.musicbattle.client.workshop.WorkshopDraw;
 import ru.gora.musicbattle.client.workshop.WorkshopScreen;
+import ru.gora.musicbattle.client.workshop.layout.BattleTracks;
 import ru.gora.musicbattle.client.workshop.layout.Metrics;
 import ru.gora.musicbattle.client.workshop.layout.Rect;
 import ru.gora.musicbattle.client.workshop.layout.TextFit;
@@ -62,6 +65,8 @@ public final class TrackLibraryScreen extends UiLayer implements ru.gora.musicba
     private List<WorkshopCatalog.InstalledSet> installedSets = List.of();
     private final Map<String, ResourceLocation> previewTextures = new HashMap<>();
     private final Set<String> requestedPreviews = new HashSet<>();
+    /** Local pictures that are missing or could not be read, so a published card can fall back to the server's copy. */
+    private final Set<String> failedPreviews = new HashSet<>();
     private final List<Button> editButtons = new ArrayList<>();
     private final List<Button> publishButtons = new ArrayList<>();
     private final List<Button> copyButtons = new ArrayList<>();
@@ -73,6 +78,8 @@ public final class TrackLibraryScreen extends UiLayer implements ru.gora.musicba
     private Button createButton;
     private EditBox searchBox;
     private TrackLibraryLayout frame;
+    /** The tabs as wide as their labels need: the layout's equal thirds cut "Опубликованные карты" at 320x240. */
+    private Tabs.Strip tabStrip;
     /** Where the leftmost action of a row starts on each tab; the text of a card stops there. */
     private float localActionsLeft;
     private float publishedActionsLeft;
@@ -112,13 +119,13 @@ public final class TrackLibraryScreen extends UiLayer implements ru.gora.musicba
         rowHover.clear();
 
         // The tabs stay vanilla buttons: keyboard focus keeps working and the screen paints the active one itself.
-        List<Rect> tabs = frame.tabs();
-        addWidget(Component.literal(text("music_battle.l10n.client.120")), button -> switchTab(LibraryTab.LOCAL),
-                tabs.get(0)).quiet();
-        addWidget(Component.literal(text("music_battle.l10n.client.121")), button -> switchTab(LibraryTab.PUBLISHED),
-                tabs.get(1)).quiet();
-        addWidget(Component.translatable("screen.music_battle.library.installed"), button -> switchTab(LibraryTab.INSTALLED),
-                tabs.get(2)).quiet();
+        List<String> tabLabels = List.of(text("music_battle.l10n.client.120"), text("music_battle.l10n.client.121"),
+                Component.translatable("screen.music_battle.library.installed").getString());
+        tabStrip = Tabs.arrange(frame, TextStyles.measurer(), tabLabels);
+        List<Rect> tabs = tabStrip.tabs();
+        addWidget(Component.literal(tabLabels.get(0)), button -> switchTab(LibraryTab.LOCAL), tabs.get(0)).quiet();
+        addWidget(Component.literal(tabLabels.get(1)), button -> switchTab(LibraryTab.PUBLISHED), tabs.get(1)).quiet();
+        addWidget(Component.literal(tabLabels.get(2)), button -> switchTab(LibraryTab.INSTALLED), tabs.get(2)).quiet();
 
         Rect field = frame.search();
         // The edit box keeps the vanilla font, which is what measures its caret; the rounded field around it is ours,
@@ -128,7 +135,9 @@ public final class TrackLibraryScreen extends UiLayer implements ru.gora.musicba
                 Math.round(field.w() - Metrics.ICON - 16), Math.round(field.bottom()) - boxY,
                 Component.translatable("screen.music_battle.track_search"));
         searchBox.setMaxLength(80);
-        searchBox.setHint(Component.translatable("screen.music_battle.track_search"));
+        // A plain EditBox draws a hint without a colour of its own in the typed-text colour, near white here, so the
+        // hint gets the muted colour FancyEditBox gives every hint.
+        searchBox.setHint(FancyEditBox.mutedHint(Component.translatable("screen.music_battle.track_search")));
         searchBox.setValue(retainedSearch == null ? "" : retainedSearch);
         searchBox.setResponder(value -> {
             searchQuery = value == null ? "" : value;
@@ -217,7 +226,7 @@ public final class TrackLibraryScreen extends UiLayer implements ru.gora.musicba
         this.minecraft.setScreen(parent);
     }
 
-    /** Workshop packages dropped on the library install through the Workshop flow (spec 06 section 5). */
+    /** Workshop packages dropped on the library install through the Workshop flow. */
     @Override
     public void onFilesDrop(List<Path> paths) {
         ru.gora.musicbattle.client.workshop.WorkshopDrops.onFilesDropped(this, paths);
@@ -268,7 +277,7 @@ public final class TrackLibraryScreen extends UiLayer implements ru.gora.musicba
         RoundedRect.fill(graphics, 0, bar.y(), this.width, bar.h(), 0, Palette.BG_2);
         RoundedRect.fill(graphics, 0, bar.bottom() - 1, this.width, 1, 0, Palette.LINE);
         LibraryTab[] order = LibraryTab.values();
-        List<Rect> tabs = frame.tabs();
+        List<Rect> tabs = tabStrip.tabs();
         for (int i = 0; i < tabs.size() && i < order.length; i++) {
             if (order[i] != activeTab) {
                 continue;
@@ -343,7 +352,7 @@ public final class TrackLibraryScreen extends UiLayer implements ru.gora.musicba
             switch (activeTab) {
                 case LOCAL -> drawCover(graphics, cover, previewTexture(localEntries.get(i)), UiIcon.MUSIC);
                 case INSTALLED -> drawCover(graphics, cover, installedCover(installedEntries.get(i)), UiIcon.FOLDER_OPEN);
-                case PUBLISHED -> drawCover(graphics, cover, null, UiIcon.UPLOAD);
+                case PUBLISHED -> drawCover(graphics, cover, publishedCover(publishedEntries.get(i)), UiIcon.UPLOAD);
             }
         }
         for (int i = start; i < end; i++) {
@@ -504,6 +513,42 @@ public final class TrackLibraryScreen extends UiLayer implements ru.gora.musicba
         return set.coverPresent() ? CoverCache.getFile(set.coverFile()) : null;
     }
 
+    /**
+     * The cover of a beatmap this player published to the server. The server's list does not say what picture each
+     * one has, which is why this tab drew the same upload icon on every card.
+     *
+     * <p>A published beatmap keeps the id of the beatmap it was published from, so the first place to look is this
+     * library: the same picture the My beatmaps tab shows, from disk, shared with that tab's cache and without asking
+     * the server for anything. Only a beatmap whose source is not here - published from another computer, or deleted
+     * locally since - or whose source has no usable picture asks the server, the way the Workshop's Server tab asks for
+     * the picture of any beatmap it lists: once per beatmap per server, and the answer is kept on disk in the server's
+     * asset cache.
+     */
+    private ResourceLocation publishedCover(PublishedTracksPayload.Entry entry) {
+        MusicBattleTracks.Track source = localTrack(entry.sourceTrackId());
+        if (source != null && !source.previewFile().isBlank() && !failedPreviews.contains(previewKey(source))) {
+            return previewTexture(source);
+        }
+        // Every cover this mod writes is <id>_preview.png, and the server names a published copy's after the id it
+        // publishes it under; the asset cache keeps only that last path segment, so this is all it needs to find it.
+        BattleTracks.Track row = new BattleTracks.Track(entry.publishedId(), BattleTracks.Kind.PLAYERS, 0L, "",
+                entry.title(), entry.description(), "", "", "", entry.bpm(), 0, entry.publishedId() + "_preview.png");
+        return ServerWorkshopClient.trackPicture(row);
+    }
+
+    /** The local beatmap with exactly this id, from the unfiltered list: a search must not hide a published cover. */
+    private MusicBattleTracks.Track localTrack(String id) {
+        if (id == null || id.isEmpty()) {
+            return null;
+        }
+        for (MusicBattleTracks.Track track : tracks) {
+            if (track.id().equals(id)) {
+                return track;
+            }
+        }
+        return null;
+    }
+
     private ResourceLocation previewTexture(MusicBattleTracks.Track track) {
         if (track.previewFile() == null || track.previewFile().isBlank()) {
             return null;
@@ -514,7 +559,10 @@ public final class TrackLibraryScreen extends UiLayer implements ru.gora.musicba
             return cached;
         }
         if (requestedPreviews.add(key)) {
-            MusicBattleTracks.previewPath(track).ifPresent(path -> requestTexture(key, track.id(), path));
+            // A picture the beatmap names but the disk does not have counts as one that failed to load: otherwise a
+            // published card would wait on it for good instead of asking the server for its own copy.
+            MusicBattleTracks.previewPath(track).ifPresentOrElse(path -> requestTexture(key, track.id(), path),
+                    () -> failedPreviews.add(key));
         }
         return null;
     }
@@ -524,6 +572,10 @@ public final class TrackLibraryScreen extends UiLayer implements ru.gora.musicba
         Minecraft client = this.minecraft == null ? Minecraft.getInstance() : this.minecraft;
         CompletableFuture.supplyAsync(() -> loadImage(path)).thenAccept(image -> client.execute(() -> {
             if (image == null) {
+                // Remembered so the Published tab can ask the server for its copy instead of waiting on this one.
+                if (generation == previewGeneration) {
+                    failedPreviews.add(key);
+                }
                 return;
             }
             if (generation != previewGeneration || client.screen != this) {
@@ -561,7 +613,7 @@ public final class TrackLibraryScreen extends UiLayer implements ru.gora.musicba
         if (index < 0 || index >= entries.size()) {
             return;
         }
-        // Two destinations: the Minecraft server this client is on, and the Workshop (spec 06 section 5).
+        // Two destinations: the Minecraft server this client is on, and the Workshop.
         this.minecraft.setScreen(new PublishTargetScreen(this, entries.get(index)));
     }
 
@@ -771,6 +823,7 @@ public final class TrackLibraryScreen extends UiLayer implements ru.gora.musicba
         previewGeneration++;
         releasePreviewTextures();
         requestedPreviews.clear();
+        failedPreviews.clear();
     }
 
     private void releasePreviewTextures() {
@@ -803,5 +856,86 @@ public final class TrackLibraryScreen extends UiLayer implements ru.gora.musicba
         PUBLISHED,
         /** Beatmaps installed from the Workshop (client-only catalogue). */
         INSTALLED
+    }
+
+    /**
+     * The tabs across the content column, sized the way SettingsScreenLayout.nav sizes the settings tabs: each as wide as
+     * its label needs in the face its button draws it in, plus padding. While every label fits an equal share the three
+     * keep the equal widths the strip always had; past that each tab takes its own need and the room left is shared, so
+     * the strip still spans the column. A bar tall enough for the body face that cannot hold the labels in it sets them
+     * in captions, the face of a compact bar, as the settings tabs drop to captions before they wrap.
+     *
+     * <p>The layout's equal thirds cut the Russian "Опубликованные карты" to "Опубликованные кар…" on a window narrower
+     * than 355 units. A label is cut only when even captions at their own widths overflow the column, which neither
+     * shipped language does from 320 units up: the library-tabs check measures that with Minecraft's own glyph metrics.
+     * A second row would need TrackLibraryLayout to grow the bar. Pure, so the check runs it without a window.
+     */
+    static final class Tabs {
+        /** Room either side of a label: more than a button's own five units, so the hover fill reads as a tab. */
+        static final float PAD = 7.0F;
+        /** The height under which FancyButton draws its label in captions, and the caption tabs' height in a tall bar. */
+        static final float BODY_HEIGHT = 18.0F;
+        static final float CAPTION_HEIGHT = 16.0F;
+
+        /** The tabs' rectangles, the face their labels are drawn in, and whether a label had to be cut after all. */
+        record Strip(List<Rect> tabs, TextStyle face, boolean cut) {
+        }
+
+        private Tabs() {
+        }
+
+        static Strip arrange(TrackLibraryLayout frame, ru.gora.musicbattle.client.ui.TextMeasurer measurer, List<String> labels) {
+            Rect column = frame.column();
+            float y = frame.tabBar().y() + 1;
+            float height = frame.tabBar().h() - 2;
+            Strip strip = fit(column, y, height, measurer, labels, false);
+            if (strip == null && height >= BODY_HEIGHT) {
+                strip = fit(column, y + (height - CAPTION_HEIGHT) * 0.5F, CAPTION_HEIGHT, measurer, labels, false);
+            }
+            if (strip == null) {
+                strip = fit(column, y, Math.min(height, CAPTION_HEIGHT), measurer, labels, true);
+            }
+            return strip;
+        }
+
+        /** The face FancyButton draws a label in at a height. */
+        static TextStyle face(float height) {
+            return height >= BODY_HEIGHT ? TextStyle.BODY : TextStyle.CAPTION;
+        }
+
+        /** One row of tabs at this height, or null when their labels need more than the column; with {@code cut}, equal shares. */
+        private static Strip fit(Rect column, float y, float height, ru.gora.musicbattle.client.ui.TextMeasurer measurer,
+                                 List<String> labels, boolean cut) {
+            int count = labels.size();
+            TextStyle face = face(height);
+            float gaps = Metrics.GAP_SM * (count - 1);
+            float[] needs = new float[count];
+            float total = gaps;
+            float widest = 0F;
+            for (int index = 0; index < count; index++) {
+                needs[index] = (float) Math.ceil(TextFit.width(measurer, labels.get(index), face) + PAD * 2 + 0.05F);
+                total += needs[index];
+                widest = Math.max(widest, needs[index]);
+            }
+            float share = (column.w() - gaps) / count;
+            float[] widths = new float[count];
+            if (widest <= share || cut) {
+                java.util.Arrays.fill(widths, share);
+            } else if (total <= column.w()) {
+                float extra = (column.w() - total) / count;
+                for (int index = 0; index < count; index++) {
+                    widths[index] = needs[index] + extra;
+                }
+            } else {
+                return null;
+            }
+            List<Rect> tabs = new ArrayList<>(count);
+            float x = column.x();
+            for (float width : widths) {
+                tabs.add(new Rect(x, y, width, height));
+                x += width + Metrics.GAP_SM;
+            }
+            return new Strip(tabs, face, cut && total > column.w());
+        }
     }
 }

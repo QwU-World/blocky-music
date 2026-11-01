@@ -9,7 +9,12 @@ package ru.gora.musicbattle.data;
  * just left, and the client's once-a-second drift correction seeked the music back with it. The jump lasted a
  * moment and the vote came round again. A skip therefore has to move the instant itself.
  *
- * <p>Pure arithmetic, so the rule is checked without a server (tools/BattleFeelChecks.java).
+ * <p>The server tells its players the exact jump, from one tick to another, and each client moves its own instant by
+ * the same amount ({@link #clientEpochAfterJump}). Where the song has to start again after the jump is a separate
+ * matter: see {@link MusicStartAlignment}.
+ *
+ * <p>Pure arithmetic, so the rule is checked without a server (tools/BattleFeelChecks.java,
+ * tools/BattleSkipSyncChecks.java).
  */
 public final class BattleSkipClock {
     private static final long TICK_NANOS = 50_000_000L;
@@ -26,12 +31,17 @@ public final class BattleSkipClock {
     }
 
     /**
-     * A client's epoch after it hears of a skip to {@code targetTick}. The server was already on that tick when it
-     * sent the news, and the packet took {@code oneWayMillis} to arrive, so the client places itself that far past
-     * the target - the same correction the start of the battle makes - instead of trailing the server for the rest
-     * of the song. {@code nowNanos} is the instant the client's clock is read at, a held pause included.
+     * A client's epoch after the server jumped from {@code fromTick} to {@code toTick}: moved by exactly the ticks the
+     * server skipped, the same move {@link #serverEpochAfterSkip} makes on the server.
+     *
+     * <p>The client used to rebuild its clock from the target instead: the arrival instant, less the target, less its
+     * one-way delay. That assumes the server stood exactly at the start of the target tick when it sent the news. It
+     * stood somewhere inside that tick, and the client takes the packet a frame or so later, so a hidden test client
+     * came out of every skip 0.76 ticks behind the server where it had been 0.12 ahead, and the bot's hits arrived
+     * early. Moving the client by the same whole number of ticks keeps whatever lead the start of the battle gave it,
+     * however late the news arrives.
      */
-    public static long clientEpochAfterSkip(long nowNanos, int targetTick, int oneWayMillis) {
-        return nowNanos - Math.max(0, targetTick) * TICK_NANOS - Math.max(0, oneWayMillis) * 1_000_000L;
+    public static long clientEpochAfterJump(long epochNanos, int fromTick, int toTick) {
+        return serverEpochAfterSkip(epochNanos, fromTick, toTick);
     }
 }

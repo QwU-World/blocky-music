@@ -21,7 +21,7 @@ import ru.gora.musicbattle.workshop.api.WorkshopDownloader;
 import ru.gora.musicbattle.workshop.api.WorkshopInbox;
 
 /**
- * Spec 06 section 8.2: installing Workshop sets never changes {@code MusicBattleTracks.availableTracks()}. Simulates
+ * Installing Workshop sets never changes {@code MusicBattleTracks.availableTracks()}. Simulates
  * singleplayer in one JVM: the real {@code MusicBattleTracks} bound to a world folder (the integrated server's catalogue)
  * and the client-global {@code music_battle_tracks} under the same game directory, then installs sets the three ways the
  * client can (downloader against a fake workshop, inbox, dropped file) and reloads every catalogue.

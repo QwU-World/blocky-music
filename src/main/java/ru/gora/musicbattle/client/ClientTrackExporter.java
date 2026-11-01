@@ -59,6 +59,15 @@ public final class ClientTrackExporter {
         }
     }
 
+    /**
+     * The description an imported beatmap starts with, in the player's language («Импортировано из FNF: bopeebo.json»).
+     * Saved beatmaps carry playerPartyOrderVersion, so the server no longer needs the old English description to
+     * recognise an FNF import (MusicBattleTracks.migrateLegacyFnfParties still reads it in beatmaps saved before).
+     */
+    public static String importedDescription(String source, String fileName) {
+        return I18n.get("music_battle.l10n.editor.imported_description", source, fileName);
+    }
+
     /** How many notes over {@link #MAX_NOTES} a chart is, or zero when it fits. */
     public static int notesOverLimit(int noteCount) {
         return Math.max(0, noteCount - MAX_NOTES);
@@ -151,7 +160,7 @@ public final class ClientTrackExporter {
                               List<BattleNote> notes, List<TrackEffect> effects) throws IOException {
         String id = safeId(rawId);
         if (id.isBlank()) {
-            throw new IOException("Track id is empty");
+            throw new Problem("music_battle.l10n.editor.beatmap_id_empty");
         }
 
         // Refused before anything touches the disk: the loader would keep only the first MAX_NOTES of them, so the
@@ -168,7 +177,7 @@ public final class ClientTrackExporter {
         Path rootDirectory = MusicBattleTracks.ensureTracksDirectory();
         Path directory = rootDirectory.resolve(id).toAbsolutePath().normalize();
         if (!directory.startsWith(rootDirectory)) {
-            throw new IOException("Unsafe track folder");
+            throw new Problem("music_battle.l10n.editor.unsafe_path");
         }
         Files.createDirectories(directory);
         String audioFile = copyAsset(rootDirectory, directory, id, audioSource, ".ogg");
@@ -237,7 +246,7 @@ public final class ClientTrackExporter {
 
         Path output = directory.resolve(id + ".json").toAbsolutePath().normalize();
         if (!output.startsWith(directory)) {
-            throw new IOException("Unsafe output path");
+            throw new Problem("music_battle.l10n.editor.unsafe_path");
         }
         // Written beside the chart and moved over it, so a full disk or a crash mid-write leaves the previous save
         // in place instead of a half-written file the loader skips.
@@ -280,7 +289,7 @@ public final class ClientTrackExporter {
     public static void deleteTrack(String id) throws IOException {
         String safe = safeId(id);
         if (safe.isBlank()) {
-            throw new IOException("Track id is empty");
+            throw new Problem("music_battle.l10n.editor.beatmap_id_empty");
         }
         Path root = MusicBattleTracks.ensureTracksDirectory();
         Path directory = root.resolve(safe).toAbsolutePath().normalize();
@@ -303,23 +312,22 @@ public final class ClientTrackExporter {
         }
         Path source = resolveRawOrAbsolute(requirePath(cleaned));
         if (!Files.isRegularFile(source)) {
-            throw new IOException("Asset not found: " + MusicBattleTracks.displayPath(source));
+            throw new Problem("music_battle.l10n.editor.asset_not_found", MusicBattleTracks.displayPath(source));
         }
         String lower = source.getFileName().toString().toLowerCase(Locale.ROOT);
         boolean preview = ".png".equals(requiredExtension);
         if (preview ? !ClientPreviewProcessor.isSupported(source) : !lower.endsWith(requiredExtension)) {
-            throw new IOException("Asset must be " + requiredExtension + ": " + MusicBattleTracks.displayPath(source));
+            throw new Problem(preview ? "music_battle.l10n.editor.asset_not_image" : "music_battle.l10n.editor.asset_not_ogg",
+                    MusicBattleTracks.displayPath(source));
         }
         return source;
     }
 
     /*
-     * The 1.5x and 2x copies of the song are not made here any more. Making them needs ffmpeg, which the mod does not
-     * ship and most players do not have, so every save of a chart with a song failed without it; with it, the two
-     * encodes held the render thread for up to a minute each on the first save. Nothing on the client reads those
-     * copies: battles play from the server's catalogue, and the server builds the copy it needs on its own worker
-     * (MusicBattleTracks.requestSpeedVariant) when a speed is voted for, falling back to 1x with a chat line when it
-     * cannot.
+     * The 1.5x and 2x copies of the song are not made here. Nothing on the client reads them: battles play from the
+     * server's catalogue, and the server builds the copy it needs on its own worker when a speed is voted for
+     * (MusicBattleTracks.requestSpeedVariant), falling back to 1x with a chat line when it cannot. Making them on
+     * save once held the render thread for the length of two encodes.
      */
     private static String copyAsset(Path rootDirectory, Path directory, String id, Path source, String requiredExtension) throws IOException {
         if (source == null) {
@@ -329,7 +337,7 @@ public final class ClientTrackExporter {
         String fileName = id + requiredExtension;
         Path target = directory.resolve(fileName).toAbsolutePath().normalize();
         if (!target.startsWith(directory)) {
-            throw new IOException("Unsafe asset path");
+            throw new Problem("music_battle.l10n.editor.unsafe_path");
         }
         if (!preview && Files.exists(target) && Files.isSameFile(source, target)) {
             return rootDirectory.relativize(target).toString().replace('\\', '/');
@@ -348,9 +356,23 @@ public final class ClientTrackExporter {
             if (Files.exists(raw)) {
                 return raw;
             }
+            // The way a saved beatmap's own song shows in the editor: below the Minecraft folder.
+            Path shown = MusicBattleTracks.gameFolderFile(path);
+            if (shown != null) {
+                return shown;
+            }
             path = MusicBattleTracks.tracksDirectory().resolve(path);
         }
         return path.toAbsolutePath().normalize();
+    }
+
+    /**
+     * What a song or picture box shows for a file a save has just written: the path below the Minecraft folder, as
+     * every other line of the mod shows one ({@link MusicBattleTracks#displayPath}). The boxes showed the whole
+     * absolute path, folders above the game included. The exporter and the editor read it back.
+     */
+    public static String boxValueOf(Path saved) {
+        return MusicBattleTracks.displayPath(saved);
     }
 
     private static String safeId(String input) {

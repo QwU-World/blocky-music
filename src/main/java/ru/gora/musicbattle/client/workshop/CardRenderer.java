@@ -27,13 +27,27 @@ import ru.gora.musicbattle.workshop.api.WorkshopDownloader;
  * difficulty dots and the button strip (favourite, install / progress / installed ✓ / update).
  *
  * <p>Drawing is split into passes so a grid batches: every card's shapes, then every cover, then pills, text and
- * icons (research {@code mc-gui-feasibility.md} section 3).
+ * icons.
  */
 public final class CardRenderer {
-    /** Per-card state the listing keeps. */
+    /** The right badge of a Workshop set among a battle's server tracks: its kind, as the track cards say theirs. */
+    public static final String KIND_WORKSHOP = "kind.workshop";
+
+    /**
+     * Per-card state the listing keeps. {@code rightBadge} is the badge's key - {@code update}, {@code withdrawn},
+     * {@code audio_removed}, {@code needs_audio} or {@link #KIND_WORKSHOP} - or null for none.
+     */
     public record Context(boolean extra, boolean hover, boolean expanded, boolean installedTab, long nowMillis,
                           WorkshopDownloader.Status status, boolean playing, boolean loadingPreview, float hoverAmount,
                           String rightBadge) {
+    }
+
+    /** The words of a right badge key, upper case as the pills are. */
+    public static String rightBadgeLabel(Tr tr, String key) {
+        if (key == null || key.isEmpty()) {
+            return null;
+        }
+        return WorkshopStrings.upper(tr.get(WorkshopStrings.KEY + (KIND_WORKSHOP.equals(key) ? "card." + key : "badge." + key)));
     }
 
     private CardRenderer() {
@@ -43,13 +57,17 @@ public final class CardRenderer {
         return "ws_" + setId;
     }
 
-    /** The layout of one card; the listing keeps it for hit-testing too. */
+    /**
+     * The layout of one card; the listing keeps it for hit-testing too. Its statistics come from
+     * {@link WorkshopStrings#cardStats}, which counts in plural forms as the beatmap page does.
+     */
     public static Layout layout(Rect rect, CardModel model, Context context, Tr tr) {
         CardLayout.State state = new CardLayout.State(context.extra(), context.hover(), context.expanded(),
                 context.installedTab(), model.title, model.artist,
                 tr.get(WorkshopStrings.KEY + "card.mapped_by", model.mapperName), model.source,
                 WorkshopStrings.status(tr, model.status), model.badges(tr), model.stars,
-                model.statsLine(tr, context.nowMillis()), context.rightBadge(), model.externalAudio(), model.hasFx,
+                WorkshopStrings.cardStats(tr, model.downloads, model.favourites, model.updatedAt, context.nowMillis()),
+                rightBadgeLabel(tr, context.rightBadge()), model.externalAudio(), model.hasFx,
                 context.expanded() ? model.chartNames.size() : 0, downloading(context.status()));
         return CardLayout.compute(rect, ru.gora.musicbattle.client.ui.TextStyles.measurer(), tr, state);
     }
@@ -134,6 +152,12 @@ public final class CardRenderer {
             WorkshopDraw.pill(g, badge, Palette.BG_1);
             WorkshopDraw.text(g, layout, "card.badge." + i + ".text", badgeColour(model, i, tr));
         }
+        // The badges that did not fit beside the title's first letters, counted ("+1"), in the dots' muted colour.
+        Rect moreBadges = layout.rect("card.badge.more");
+        if (!moreBadges.empty()) {
+            WorkshopDraw.pill(g, moreBadges, Palette.BG_1);
+            WorkshopDraw.text(g, layout, "card.badge.more.text", Palette.TEXT_3);
+        }
         Rect statusPill = layout.rect("card.status");
         if (!statusPill.empty()) {
             WorkshopDraw.pill(g, statusPill, WorkshopDraw.statusColour(model.status));
@@ -152,7 +176,7 @@ public final class CardRenderer {
         Rect rightBadge = layout.rect("card.right_badge");
         if (!rightBadge.empty()) {
             WorkshopDraw.pill(g, rightBadge, Palette.BG_1);
-            WorkshopDraw.text(g, layout, "card.right_badge.text", WorkshopDraw.badgeColour(badgeKey(context.rightBadge())));
+            WorkshopDraw.text(g, layout, "card.right_badge.text", WorkshopDraw.badgeColour(context.rightBadge()));
         }
 
         WorkshopDraw.text(g, layout, "card.title", Palette.TEXT_1);
@@ -220,10 +244,6 @@ public final class CardRenderer {
             return Palette.BADGE_LIBRARY;
         }
         return Palette.BADGE_AI;
-    }
-
-    private static String badgeKey(String label) {
-        return label == null ? "" : label.toLowerCase(java.util.Locale.ROOT);
     }
 
     /** A local file wins over the URL (installed sets work offline). */

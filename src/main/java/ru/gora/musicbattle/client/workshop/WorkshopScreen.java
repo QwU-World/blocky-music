@@ -60,7 +60,7 @@ import ru.gora.musicbattle.workshop.api.WorkshopDtos;
 import ru.gora.musicbattle.workshop.api.WorkshopSession;
 
 /**
- * The Workshop: one screen with the shell of spec 06 section 6 (title bar, tabs, account chip) and its internal views
+ * The Workshop: one screen with the shell (title bar, tabs, account chip) and its internal views
  * — the listing (Browse and Installed), the set page, the account view and the upload wizard as overlays that slide
  * over the listing and keep its state.
  *
@@ -144,7 +144,7 @@ public final class WorkshopScreen extends UiLayer implements WorkshopUi, Worksho
     private final WorkshopClient client = WorkshopClient.get();
     private final ListingView browse;
     private final ListingView installedTab;
-    /** The Server beatmaps tab, hidden until a server reports the feature (spec 06 section 9.1). */
+    /** The Server beatmaps tab, hidden until a server reports the feature. */
     private final ListingView serverTab;
     private final Deque<Overlay> overlays = new ArrayDeque<>();
     private final Motion.Tween overlaySlide = new Motion.Tween(0.0);
@@ -155,7 +155,10 @@ public final class WorkshopScreen extends UiLayer implements WorkshopUi, Worksho
     private final Queue<Runnable> pending = new ConcurrentLinkedQueue<>();
     /** The battle waiting for a map, or null when the Workshop was opened for its own sake. */
     private Picker picker;
-    /** Whether {@link #picker} fills a DJ playlist rather than a battle's vote: then there is no clock to show. */
+    /**
+     * Whether {@link #picker} adds to a DJ booth's beatmap library (DjPanelBlockEntity.library) rather than a battle's
+     * vote: then there is no clock to show.
+     */
     private boolean djPicker;
     /**
      * A Workshop that is never shown, only lent to "Add to server" for a DJ's pick. That flow reports back through
@@ -169,6 +172,10 @@ public final class WorkshopScreen extends UiLayer implements WorkshopUi, Worksho
     private ShellLayout.State shellState;
     private boolean opened;
     private long previewWanted;
+    /** The set whose clip is being downloaded right now (0: none), so its play button can show that it is busy. */
+    private long previewFetching;
+    /** The set whose clip download last failed (0: none); read once by the page that asked, see takePreviewFailure. */
+    private long previewFailedSetId;
 
     @Override
     public Screen musicBattleParent() {
@@ -205,8 +212,10 @@ public final class WorkshopScreen extends UiLayer implements WorkshopUi, Worksho
     }
 
     /**
-     * Opens the Workshop as a DJ playlist's map picker: the battle picker's tabs and cards, with the DJ panel's own
-     * tracks on the Server tab and no vote clock. The choice reaches {@code picker} as the Workshop closes back.
+     * Opens the Workshop as a DJ booth's beatmap picker: the battle picker's tabs and cards, with every beatmap the
+     * server offers the booth on the Server tab and no vote clock. The choice reaches {@code picker} as the Workshop
+     * closes back, and joins the booth's beatmap library (DjPanelBlockEntity.library), not its playlist: the playlist
+     * queues from that library with its own Add button.
      */
     public static void openDjPicker(Screen parent, Picker picker) {
         WorkshopScreen screen = new WorkshopScreen(parent);
@@ -681,6 +690,15 @@ public final class WorkshopScreen extends UiLayer implements WorkshopUi, Worksho
     }
 
     /**
+     * The page of one of the server's own beatmaps, under its {@code track_<id>} comment thread. The row is what the
+     * server's list says about it, and the page is built from it rather than from the Workshop, which never heard of it.
+     */
+    public void openServerTrackPage(long cardId, CardModel model, ru.gora.musicbattle.client.workshop.layout.BattleTracks.Track row,
+                                    Supplier<ResourceLocation> picture) {
+        pushOverlay(new SetPageView(this, client, cardId, model, "track_" + row.id(), picture, row));
+    }
+
+    /**
      * Whether the Workshop is open as a battle's map picker. The listing then makes Choose every card's primary action,
      * and a set page reads its primary button from {@link #primaryAction}.
      */
@@ -869,6 +887,11 @@ public final class WorkshopScreen extends UiLayer implements WorkshopUi, Worksho
         pushOverlay(new UploadWizardView(this, client, setId));
     }
 
+    /** The Network access switch turned access off: Browse shows its offline state with "Allow network". */
+    public void networkTurnedOff() {
+        browse.networkOff();
+    }
+
     public void openConsent() {
         minecraft.setScreen(new WorkshopConsentScreen(this, () -> {
             minecraft.setScreen(this);
@@ -978,7 +1001,7 @@ public final class WorkshopScreen extends UiLayer implements WorkshopUi, Worksho
 
     // ---------------------------------------------------------------- previews and files
 
-    /** Fetches a preview clip once, caches a few, and plays it (spec 06 section 6, previews stop with the screen). */
+    /** Fetches a preview clip once, caches a few, and plays it (previews stop with the screen). */
     public void fetchPreview(long setId, String url, long durationMs) {
         byte[] cached = previews.get(setId);
         if (cached != null) {
@@ -986,10 +1009,17 @@ public final class WorkshopScreen extends UiLayer implements WorkshopUi, Worksho
             return;
         }
         previewWanted = setId;
+        previewFetching = setId;
+        if (previewFailedSetId == setId) {
+            previewFailedSetId = 0;
+        }
         run(() -> {
             try {
                 byte[] bytes = client.api().fetchBytes(url, PreviewPlayer.MAX_PREVIEW_BYTES, CancelToken.none());
                 later(() -> {
+                    if (previewFetching == setId) {
+                        previewFetching = 0;
+                    }
                     previews.put(setId, bytes);
                     while (previews.size() > PREVIEW_CACHE) {
                         previews.remove(previews.keySet().iterator().next());
@@ -998,14 +1028,39 @@ public final class WorkshopScreen extends UiLayer implements WorkshopUi, Worksho
                         PreviewPlayer.play(CardRenderer.previewKey(setId), bytes, durationMs, client.previewVolume());
                     }
                 });
-            } catch (WorkshopApiException exception) {
-                MusicBattleMod.LOGGER.debug("Workshop preview failed: {}", exception.code());
+            } catch (WorkshopApiException | RuntimeException exception) {
+                // Said at once, not after the set page's 20-second wait: the page asks takePreviewFailure each frame.
+                MusicBattleMod.LOGGER.debug("Workshop preview failed: {}", exception instanceof WorkshopApiException api
+                        ? api.code() : exception.toString());
+                later(() -> {
+                    if (previewFetching == setId) {
+                        previewFetching = 0;
+                    }
+                    if (previewWanted == setId) {
+                        previewFailedSetId = setId;
+                    }
+                });
             }
         });
     }
 
+    /** True while the clip for {@code setId} is being downloaded, before the player has it. */
+    public boolean previewFetching(long setId) {
+        return setId != 0 && previewFetching == setId;
+    }
+
+    /** Whether the clip download for {@code setId} failed since it was last asked for; consumed by the reader. */
+    public boolean takePreviewFailure(long setId) {
+        if (setId != 0 && previewFailedSetId == setId) {
+            previewFailedSetId = 0;
+            return true;
+        }
+        return false;
+    }
+
     public void stopPreview() {
         previewWanted = 0;
+        previewFetching = 0;
         PreviewPlayer.stop();
     }
 
@@ -1048,8 +1103,9 @@ public final class WorkshopScreen extends UiLayer implements WorkshopUi, Worksho
     /**
      * Brings a Workshop set the DJ panel does not list yet to the server, by the doors a battle's map already uses: the
      * Workshop download when this client lacks the set, then "Add to server" once the server has said this DJ may
-     * add it. The server adds the chart to the playlist itself when the set is installed, so nothing here waits for
-     * that. {@code status} hears each step in words the playlist can show, and whether it is a problem.
+     * add it. The server adds the beatmap to the booth's library itself when the set is installed, so nothing here
+     * waits for that. {@code status} hears each step in words the panel's library line can show, and whether it is a
+     * problem.
      */
     public static void bringToDj(BlockPos panelPos, BattleSetup.Pick pick, BiConsumer<Component, Boolean> status) {
         if (pick == null || pick.setId() <= 0 || pick.chartKey().isEmpty()) {
@@ -1090,7 +1146,10 @@ public final class WorkshopScreen extends UiLayer implements WorkshopUi, Worksho
         }
     }
 
-    /** The server lets this DJ add the set: "Add to server" starts, and the chart joins the playlist when it lands. */
+    /**
+     * The server lets this DJ add the set: "Add to server" starts, and the beatmap joins the booth's library when it
+     * lands.
+     */
     public static void djUploadApproved(long setId) {
         DjCourier courier = djCourier;
         if (courier == null || courier.pick().setId() != setId) {
@@ -1103,7 +1162,7 @@ public final class WorkshopScreen extends UiLayer implements WorkshopUi, Worksho
         ServerWorkshopClient.addToServer(lent, setId);
     }
 
-    /** The server's last word on a DJ pick - in the playlist, or refused - so nothing more is owed for it. */
+    /** The server's last word on a DJ pick - in the booth's library, or refused - so nothing more is owed for it. */
     public static void djAnswered(long setId) {
         DjCourier courier = djCourier;
         if (courier != null && courier.pick().setId() == setId) {

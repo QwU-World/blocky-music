@@ -3,8 +3,8 @@ package ru.gora.musicbattle.client.ui;
 import java.util.Locale;
 
 /**
- * Difficulty colours by star rating, mirroring the website's {@code client/spectrum.ts} (spec 03 section 3.3,
- * re-exported as {@code src/shared/spectrum.ts}): the same stops, the same maths, the same pill and dot rules.
+ * Difficulty colours by star rating, mirroring the website's {@code client/spectrum.ts} (re-exported as
+ * {@code src/shared/spectrum.ts}): the same stops, the same maths, the same pill and dot rules.
  * The ui-toolkit check compares this class with the website's generated {@code spectrum.css} when the website
  * repository sits next to this one.
  *

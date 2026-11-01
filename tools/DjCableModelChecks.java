@@ -38,7 +38,7 @@ public final class DjCableModelChecks {
                 net.minecraft.core.registries.BuiltInRegistries.ITEM).unfreeze();
         boolean packaged = args.length > 1;
         Path assets = packaged
-                ? FileSystems.newFileSystem(Path.of(args[0], "build/libs/blocky_music-0.1.0.jar")).getPath("/assets")
+                ? FileSystems.newFileSystem(packagedJar(Path.of(args[0]))).getPath("/assets")
                 : Path.of(args[0], "src/main/resources/assets");
         installResources(assets);
         verifyResources(assets);
@@ -224,5 +224,15 @@ public final class DjCableModelChecks {
             }
             return bounds;
         }
+    }
+
+    /** The packaged jar of this build: build/libs/blocky_music-<mod_version from gradle.properties>.jar. */
+    private static Path packagedJar(Path root) throws java.io.IOException {
+        for (String line : java.nio.file.Files.readAllLines(root.resolve("gradle.properties"))) {
+            if (line.startsWith("mod_version=")) {
+                return root.resolve("build/libs/blocky_music-" + line.substring("mod_version=".length()).trim() + ".jar");
+            }
+        }
+        throw new IllegalStateException("no mod_version in " + root.resolve("gradle.properties"));
     }
 }

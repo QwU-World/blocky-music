@@ -86,7 +86,9 @@ public final class DjAudiencePreloadQueue {
         bind(server);
 
         BlockPos immutablePanelPos = panelPos.immutable();
-        if (!(level.getBlockEntity(immutablePanelPos) instanceof DjPanelBlockEntity panel)) {
+        // Asked from the audience pass every few ticks: read the booth only if its chunk is already loaded, so a
+        // preload never renews the chunk's ticket (DjPlaybackManager.loadedBlockEntity).
+        if (!(DjPlaybackManager.loadedBlockEntity(level, immutablePanelPos) instanceof DjPanelBlockEntity panel)) {
             return new RequestResult(Result.INVALID_REQUEST, 0, 0);
         }
 
@@ -183,7 +185,8 @@ public final class DjAudiencePreloadQueue {
 
             ServerLevel panelLevel = server.getLevel(request.key.dimension);
             if (panelLevel == null
-                    || !(panelLevel.getBlockEntity(BlockPos.of(request.key.panelPos)) instanceof DjPanelBlockEntity)) {
+                    || !(DjPlaybackManager.loadedBlockEntity(panelLevel, BlockPos.of(request.key.panelPos))
+                    instanceof DjPanelBlockEntity)) {
                 cancelRequest(request, false, now);
                 continue;
             }

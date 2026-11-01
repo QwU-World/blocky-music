@@ -7,7 +7,7 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import ru.gora.musicbattle.MusicBattleMod;
 
 /**
- * A vote for one of the voter's own installed sets (spec 06 section 9.4). The server checks
+ * A vote for one of the voter's own installed sets. The server checks
  * {@code workshop.allowPlayerMaps}, then either already holds that content or asks the voter for the package over
  * the same chunk channel as "Add to server", into {@code <world>/blocky_music/workshop_cache/}.
  */

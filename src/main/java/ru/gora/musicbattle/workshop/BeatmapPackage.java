@@ -127,7 +127,7 @@ public final class BeatmapPackage {
                 }
                 validateContents(manifest, staging);
                 Files.write(staging.resolve(WorkshopLayout.MANIFEST_FILE_NAME), manifestBytes, StandardOpenOption.CREATE_NEW);
-                // The site's signature travels with the set (spec 08 A5.3): without it an installed copy could never
+                // The site's signature travels with the set: without it an installed copy could never
                 // be offered to a server again, because a repack would carry no proof of where it came from. It is
                 // not a chart, audio or cover name, so neither the loader nor the catalog scan ever reads it.
                 ZipEntry signature = entries.get(WorkshopLayout.SIGNATURE_FILE_NAME);

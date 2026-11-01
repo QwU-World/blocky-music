@@ -4,9 +4,9 @@ import java.util.List;
 import java.util.function.Consumer;
 
 /**
- * Where wave M3 plugs the server side into the finished screens (spec 06 sections 9.1 and 9.2). Until then nothing is
- * registered: the "Server beatmaps" tab stays hidden and the "Server comments" button is drawn disabled, so no screen
- * code has to change when the payloads arrive.
+ * Where the Minecraft server's Workshop features plug into the Workshop screens. While nothing is registered, the
+ * "Server beatmaps" tab stays hidden and the "Server comments" button is drawn disabled, so the screens need no
+ * separate code for a server without these features.
  *
  * <p>Registration happens on the render thread when the client joins a server that reports the feature, and
  * {@link #clear()} runs on disconnect.

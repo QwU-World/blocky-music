@@ -9,9 +9,10 @@ $jars = foreach ($group in $groups) {
     $dir = Join-Path $env:USERPROFILE ".gradle/caches/modules-2/files-2.1/$group"
     if (Test-Path -LiteralPath $dir) { Get-ChildItem -LiteralPath $dir -Recurse -File -Filter '*.jar' | Where-Object Name -notmatch '(-sources|-javadoc|-natives-)' | Select-Object -ExpandProperty FullName }
 }
-$production = if ($Packaged) { "$root/build/libs/blocky_music-0.1.0.jar" } else { "$root/build/classes/java/main" }
+$modVersion = (Select-String -LiteralPath "$root/gradle.properties" -Pattern '^mod_version=(.+)$').Matches[0].Groups[1].Value.Trim()
+$production = if ($Packaged) { "$root/build/libs/blocky_music-$modVersion.jar" } else { "$root/build/classes/java/main" }
 $cp = (@($out, $production, "$root/build/moddev/artifacts/neoforge-21.1.230-merged.jar", "$root/build/moddev/artifacts/neoforge-21.1.230-client-extra-aka-minecraft-resources.jar") + @($jars)) -join [IO.Path]::PathSeparator
-$jdk = 'C:/Program Files/Eclipse Adoptium/jdk-21.0.11.10-hotspot/bin'
+$jdk = & (Join-Path $PSScriptRoot 'find-jdk.ps1')
 $sources = @("$root/tools/animation-check-support/ru/gora/musicbattle/MusicBattleMod.java", "$root/tools/speaker-model-support/net/minecraft/client/renderer/RenderType.java", "$root/tools/SpeakerModelChecks.java")
 if (-not $Packaged) { $sources += "$root/src/main/java/ru/gora/musicbattle/client/BattleCameraModel.java" }
 & "$jdk/javac.exe" -proc:none -encoding UTF-8 -cp $cp -d $out @sources

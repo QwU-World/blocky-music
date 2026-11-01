@@ -6,7 +6,7 @@ import ru.gora.musicbattle.workshop.api.WorkshopDtos.AuthResult;
 import ru.gora.musicbattle.workshop.api.WorkshopDtos.DeviceCodes;
 
 /**
- * Device-code sign-in for the mod (spec 02 section 4.2, RFC 8628; 08 A1.2). A state machine a screen drives:
+ * Device-code sign-in for the mod (RFC 8628). A state machine a screen drives:
  *
  * <pre>
  * IDLE -start-> WAITING -poll: authorization_pending-> WAITING

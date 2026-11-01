@@ -8,6 +8,7 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import ru.gora.musicbattle.MusicBattleMod;
 import ru.gora.musicbattle.data.BattleNote;
+import ru.gora.musicbattle.data.ChartBeat;
 import ru.gora.musicbattle.data.NoteAppearance;
 import ru.gora.musicbattle.data.TrackEffect;
 
@@ -48,21 +49,57 @@ public record SpectatorBattlePayload(
         List<BattleNote> notes,
         List<TrackEffect> effects,
         NoteAppearance leftAppearance,
-        NoteAppearance rightAppearance
+        NoteAppearance rightAppearance,
+        /**
+         * The notes settled by {@code startTick} that a panel cannot tell from the chart alone: those that ended less
+         * than the hit window before it (BattleManager.Battle#spectatorJoin). Older ones it takes as over itself.
+         */
+        List<Integer> settledNotes,
+        /** The holds being held on {@code startTick}. */
+        List<Integer> startedNotes,
+        /**
+         * A mob's actions from the ticks it has played ahead of {@code startTick}, in the order it made them, each for
+         * the panel to hold until its tick, as every panel already watching does.
+         */
+        List<BattleActionPayload> leadActions,
+        /**
+         * Where beat 1 falls on this playback's clock, in ms ({@code ChartBeat}), already divided by a sped-up battle's
+         * speed: the battle's {@code effectiveOffsetMs}, or the DJ song's offset at the panel's speed. 0 for a chart
+         * without one. The watcher's beat visuals count their beats from it, as the fighters' do.
+         */
+        int beatOffsetMs
 ) implements CustomPacketPayload {
+    /** A panel without the battle's notes (a DJ session), or a refresh of one: nothing settled, held or ahead. */
     public SpectatorBattlePayload(UUID battleId, int durationTicks, int startTick, int bpm, float speedMultiplier,
             int leftEntityId, int rightEntityId, int cameraEntityId, float cameraYaw, float cameraPitch, float cameraFov,
             int leftColor, int rightColor, float leftPanelOpacity, float leftLaneOpacity, float leftPanelWidthScale,
             float leftPanelHeightScale, float leftNoteWidthScale, float leftNoteHeightScale, float rightPanelOpacity,
             float rightLaneOpacity, float rightPanelWidthScale, float rightPanelHeightScale, float rightNoteWidthScale,
             float rightNoteHeightScale, float leftSpeed, float rightSpeed, int leftScore, int rightScore,
-            int leftCombo, int rightCombo, int leftHeldMask, int rightHeldMask, List<BattleNote> notes, List<TrackEffect> effects) {
+            int leftCombo, int rightCombo, int leftHeldMask, int rightHeldMask, List<BattleNote> notes,
+            List<TrackEffect> effects, NoteAppearance leftAppearance, NoteAppearance rightAppearance, int beatOffsetMs) {
         this(battleId, durationTicks, startTick, bpm, speedMultiplier, leftEntityId, rightEntityId, cameraEntityId,
                 cameraYaw, cameraPitch, cameraFov, leftColor, rightColor, leftPanelOpacity, leftLaneOpacity,
                 leftPanelWidthScale, leftPanelHeightScale, leftNoteWidthScale, leftNoteHeightScale, rightPanelOpacity,
                 rightLaneOpacity, rightPanelWidthScale, rightPanelHeightScale, rightNoteWidthScale, rightNoteHeightScale,
                 leftSpeed, rightSpeed, leftScore, rightScore, leftCombo, rightCombo, leftHeldMask, rightHeldMask, notes,
-                effects, NoteAppearance.solid(leftColor), NoteAppearance.solid(rightColor));
+                effects, leftAppearance, rightAppearance, List.of(), List.of(), List.of(), beatOffsetMs);
+    }
+
+    public SpectatorBattlePayload(UUID battleId, int durationTicks, int startTick, int bpm, float speedMultiplier,
+            int leftEntityId, int rightEntityId, int cameraEntityId, float cameraYaw, float cameraPitch, float cameraFov,
+            int leftColor, int rightColor, float leftPanelOpacity, float leftLaneOpacity, float leftPanelWidthScale,
+            float leftPanelHeightScale, float leftNoteWidthScale, float leftNoteHeightScale, float rightPanelOpacity,
+            float rightLaneOpacity, float rightPanelWidthScale, float rightPanelHeightScale, float rightNoteWidthScale,
+            float rightNoteHeightScale, float leftSpeed, float rightSpeed, int leftScore, int rightScore,
+            int leftCombo, int rightCombo, int leftHeldMask, int rightHeldMask, List<BattleNote> notes, List<TrackEffect> effects,
+            int beatOffsetMs) {
+        this(battleId, durationTicks, startTick, bpm, speedMultiplier, leftEntityId, rightEntityId, cameraEntityId,
+                cameraYaw, cameraPitch, cameraFov, leftColor, rightColor, leftPanelOpacity, leftLaneOpacity,
+                leftPanelWidthScale, leftPanelHeightScale, leftNoteWidthScale, leftNoteHeightScale, rightPanelOpacity,
+                rightLaneOpacity, rightPanelWidthScale, rightPanelHeightScale, rightNoteWidthScale, rightNoteHeightScale,
+                leftSpeed, rightSpeed, leftScore, rightScore, leftCombo, rightCombo, leftHeldMask, rightHeldMask, notes,
+                effects, NoteAppearance.solid(leftColor), NoteAppearance.solid(rightColor), beatOffsetMs);
     }
     public static final Type<SpectatorBattlePayload> TYPE = new Type<>(MusicBattleMod.id("spectator_battle"));
     /**
@@ -70,6 +107,8 @@ public record SpectatorBattlePayload(
      * arrives here as twice that. At 4096 a spectator silently lost the second half of a long shared chart.
      */
     private static final int MAX_NOTES = 8192;
+    /** A mob plays three ticks ahead (BattleManager.AI_LEAD_TICKS): a handful of actions, two mobs at most. */
+    private static final int MAX_LEAD_ACTIONS = 256;
 
     public static final StreamCodec<RegistryFriendlyByteBuf, SpectatorBattlePayload> STREAM_CODEC = new StreamCodec<>() {
         @Override
@@ -124,7 +163,9 @@ public record SpectatorBattlePayload(
                     rightLaneOpacity, rightPanelWidthScale, rightPanelHeightScale, rightNoteWidthScale,
                     rightNoteHeightScale, leftSpeed, rightSpeed, leftScore, rightScore, leftCombo, rightCombo,
                     leftHeldMask, rightHeldMask,
-                    List.copyOf(notes), List.copyOf(effects), NoteAppearanceCodec.read(buffer), NoteAppearanceCodec.read(buffer));
+                    List.copyOf(notes), List.copyOf(effects), NoteAppearanceCodec.read(buffer), NoteAppearanceCodec.read(buffer),
+                    readIndices(buffer), readIndices(buffer), readLeadActions(buffer),
+                    ChartBeat.clampOffsetMs(buffer.readVarInt()));
         }
 
         @Override
@@ -174,8 +215,42 @@ public record SpectatorBattlePayload(
             }
             NoteAppearanceCodec.write(buffer, payload.leftAppearance());
             NoteAppearanceCodec.write(buffer, payload.rightAppearance());
+            writeIndices(buffer, payload.settledNotes());
+            writeIndices(buffer, payload.startedNotes());
+            int leadCount = Math.min(payload.leadActions().size(), MAX_LEAD_ACTIONS);
+            buffer.writeVarInt(leadCount);
+            for (int i = 0; i < leadCount; i++) {
+                BattleActionPayload.STREAM_CODEC.encode(buffer, payload.leadActions().get(i));
+            }
+            buffer.writeVarInt(ChartBeat.clampOffsetMs(payload.beatOffsetMs()));
         }
     };
+
+    private static List<Integer> readIndices(RegistryFriendlyByteBuf buffer) {
+        int count = Math.min(buffer.readVarInt(), MAX_NOTES);
+        List<Integer> indices = new ArrayList<>(count);
+        for (int i = 0; i < count; i++) {
+            indices.add(buffer.readVarInt());
+        }
+        return List.copyOf(indices);
+    }
+
+    private static void writeIndices(RegistryFriendlyByteBuf buffer, List<Integer> indices) {
+        int count = Math.min(indices.size(), MAX_NOTES);
+        buffer.writeVarInt(count);
+        for (int i = 0; i < count; i++) {
+            buffer.writeVarInt(indices.get(i));
+        }
+    }
+
+    private static List<BattleActionPayload> readLeadActions(RegistryFriendlyByteBuf buffer) {
+        int count = Math.min(buffer.readVarInt(), MAX_LEAD_ACTIONS);
+        List<BattleActionPayload> actions = new ArrayList<>(count);
+        for (int i = 0; i < count; i++) {
+            actions.add(BattleActionPayload.STREAM_CODEC.decode(buffer));
+        }
+        return List.copyOf(actions);
+    }
 
     @Override
     public Type<? extends CustomPacketPayload> type() {

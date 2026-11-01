@@ -84,8 +84,9 @@ public final class NotePanelGpuChecks {
     }
 
     private static void checkUniformArrowBorder(GpuGraphics graphics) throws Exception {
+        // The glyph is drawn into the box its lane gives it (BattlePanelRenderer.Lanes), centred here on (160, 260).
         var draw = BattlePanelRenderer.class.getDeclaredMethod("drawShapedGlyph",GuiGraphics.class,
-                BattlePanelRenderer.Panel.class,int.class,int.class,int.class,int.class,int.class,int.class);
+                BattlePanelRenderer.Panel.class,int.class,BattlePanelRenderer.Box.class,int.class,int.class);
         draw.setAccessible(true);
         var panel = new BattlePanelRenderer.Panel(0,0,true,"Border",1F,0xFF111111,
                 1F,1F,1F,1F,1F,1F,0,0,new int[4],new int[4],new String[]{"A","S","W","D"},
@@ -98,7 +99,9 @@ public final class NotePanelGpuChecks {
         for (float[] fixture : new float[][]{{40,2F},{74,2F},{112,2F},{16,2F},{6,.75F}}) {
             for (int lane=0;lane<4;lane++) {
                 sink.captured.clear();
-                draw.invoke(null,graphics,panel,lane,160,260,(int)fixture[0],0xFFFF0000,0xFF0000FF);
+                int size=(int)fixture[0];
+                draw.invoke(null,graphics,panel,lane,new BattlePanelRenderer.Box(160-size/2,260-size/2,160-size/2+size,260-size/2+size),
+                        0xFFFF0000,0xFF0000FF);
                 require(sink.captured.size()==14,"Arrow boundary topology changed; review edge-distance fixture");
                 for(int edge=0;edge<7;edge++) {
                     float[] outer=sink.captured.get(edge), inner=sink.captured.get(edge+7);

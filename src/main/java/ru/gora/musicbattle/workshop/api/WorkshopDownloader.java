@@ -28,7 +28,7 @@ import ru.gora.musicbattle.workshop.WorkshopLayout;
 import ru.gora.musicbattle.workshop.api.WorkshopDtos.DownloadTicket;
 
 /**
- * Downloads and installs workshop sets (spec 06 section 8.1, 08 A5.5).
+ * Downloads and installs workshop sets.
  *
  * <ul>
  *   <li>One global queue, at most {@value #MAX_CONCURRENT} downloads at a time, one job per set.</li>

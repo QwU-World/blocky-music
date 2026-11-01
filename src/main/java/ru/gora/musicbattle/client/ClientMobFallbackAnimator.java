@@ -14,7 +14,19 @@ public final class ClientMobFallbackAnimator {
     }
 
     static void prepare(LivingEntity entity, int triggerSerial, int heldLaneMask, int bpm, float battleTick) {
-        BounceState state = STATES.computeIfAbsent(entity, ignored -> new BounceState());
+        prepare(entity, triggerSerial, heldLaneMask, bpm, battleTick, 0.0F);
+    }
+
+    /** {@code beatOrigin}: beat 1 on the battle clock, in ticks; the hop's arc is timed on beats counted from it. */
+    static void prepare(LivingEntity entity, int triggerSerial, int heldLaneMask, int bpm, float battleTick,
+                        float beatOrigin) {
+        update(STATES.computeIfAbsent(entity, ignored -> new BounceState()), triggerSerial, heldLaneMask, bpm, battleTick,
+                beatOrigin);
+    }
+
+    /** What {@link #prepare} keeps for one mob this frame. Pure, for beat-one. */
+    static void update(BounceState state, int triggerSerial, int heldLaneMask, int bpm, float battleTick,
+                       float beatOrigin) {
         if (!state.triggerSerialInitialized) {
             // Joining/recreating the renderer observes an existing serial. It
             // must not manufacture a bounce when no note was just played.
@@ -27,6 +39,7 @@ public final class ClientMobFallbackAnimator {
         state.heldLaneMask = heldLaneMask;
         state.bpm = Math.max(20, bpm);
         state.battleTick = battleTick;
+        state.beatOrigin = Float.isFinite(beatOrigin) ? beatOrigin : 0.0F;
     }
 
     public static void applyPreparedBounce(LivingEntity entity, PoseStack poseStack, float partialTick) {
@@ -41,10 +54,19 @@ public final class ClientMobFallbackAnimator {
             return;
         }
 
+        float height = hopHeight(state);
+        if (height > 0.0F) {
+            poseStack.translate(0.0F, height, 0.0F);
+        }
+    }
+
+    /** How high the mob hops now: an arc over each beat counted from beat 1, after a note or while one is held. */
+    static float hopHeight(BounceState state) {
         float height = 0.0F;
         if (state.battleTick >= 0) {
             float beatTicks = 1200.0F / state.bpm;
-            float phase = (state.battleTick % beatTicks + beatTicks) % beatTicks / beatTicks;
+            float sinceBeatOne = state.battleTick - state.beatOrigin;
+            float phase = (sinceBeatOne % beatTicks + beatTicks) % beatTicks / beatTicks;
             float sinceTrigger = state.battleTick - state.triggerBattleTick;
             if (sinceTrigger >= 0.0F && sinceTrigger < beatTicks) {
                 height = Math.max(height, (float)Math.sin(Math.PI * phase) * 0.34F);
@@ -53,9 +75,7 @@ public final class ClientMobFallbackAnimator {
                 height = Math.max(height, (float)Math.sin(Math.PI * phase) * 0.24F);
             }
         }
-        if (height > 0.0F) {
-            poseStack.translate(0.0F, height, 0.0F);
-        }
+        return height;
     }
 
     static void stop(LivingEntity entity) {
@@ -77,12 +97,13 @@ public final class ClientMobFallbackAnimator {
         STATES.clear();
     }
 
-    private static final class BounceState {
+    static final class BounceState {
         private int lastTriggerSerial = Integer.MIN_VALUE;
         private boolean triggerSerialInitialized;
         private float triggerBattleTick = -Float.MAX_VALUE;
         private int heldLaneMask;
         private int bpm = 120;
         private float battleTick = -Float.MAX_VALUE;
+        private float beatOrigin;
     }
 }

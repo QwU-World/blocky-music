@@ -43,7 +43,7 @@ import ru.gora.musicbattle.workshop.api.WorkshopDtos;
 import ru.gora.musicbattle.workshop.api.WorkshopUploader;
 
 /**
- * The in-game upload wizard, drawn like the website's {@code /upload} page (spec 06 section 6.5): the step rail, then
+ * The in-game upload wizard, drawn like the website's {@code /upload} page: the step rail, then
  * "Before you upload" while the account still owes the acceptance, Files (which of the player's tracks become charts,
  * the audio and the cover), Details, Publish with the rights confirmation, and the stage rows with the result. All
  * geometry comes from the pure {@link UploadLayout}; this class keeps the player's work, draws the boxes, routes
@@ -83,6 +83,11 @@ public final class UploadWizardView implements WorkshopScreen.Overlay {
     private WorkshopDtos.Rules rules = WorkshopDtos.Rules.UNKNOWN;
     private boolean acceptingRules;
     private long previewStartMs;
+    /**
+     * Whether the preview point is the uploader's own (moved on the strip) or the set's (an update), rather than the
+     * site's default of 40% into the song that follows the chosen beatmaps' length.
+     */
+    private boolean previewPointChosen;
     private long durationMs = 60_000;
     private List<UploadLayout.Issue> issues = List.of();
     private Map<String, String> fieldErrors = Map.of();
@@ -96,6 +101,8 @@ public final class UploadWizardView implements WorkshopScreen.Overlay {
     private Rect area = Rect.EMPTY;
     private UploadLayout.Page page;
     private boolean draggingWindow;
+    /** Where in the window the pointer took hold of it, in song milliseconds from the window's start. */
+    private long dragGripMs = UploadLayout.PREVIEW_MS / 2;
     private boolean shownPlaying;
 
     public UploadWizardView(WorkshopScreen screen, WorkshopClient client, Long updateSetId) {
@@ -107,6 +114,7 @@ public final class UploadWizardView implements WorkshopScreen.Overlay {
         loadTracks();
         if (updateSetId != null) {
             step = UploadLayout.Step.FILES;
+            loadPreviewPoint(updateSetId);
         }
         rebuild();
         openedWith = work();
@@ -120,6 +128,7 @@ public final class UploadWizardView implements WorkshopScreen.Overlay {
         if (track != null) {
             input("wizard.title").setValue(track.title());
             durationMs = track.durationTicks() * 50L;
+            defaultPreviewPoint();
         }
         step = firstStep();
         rebuild();
@@ -356,6 +365,35 @@ public final class UploadWizardView implements WorkshopScreen.Overlay {
             }
         }
         return true;
+    }
+
+    /** An update starts from the set's own preview point, as the site's edit page does, until the uploader moves it. */
+    private void loadPreviewPoint(long setId) {
+        if (!client.networkAllowed()) {
+            return;
+        }
+        screen.run(() -> {
+            try {
+                // Signed in: the uploader's own set may be pending or hidden, which only the owner can read.
+                WorkshopDtos.SetDetail detail = client.session().authorized(api -> api.set(setId, CancelToken.none()));
+                screen.later(() -> {
+                    if (!previewPointChosen && detail != null) {
+                        previewPointChosen = true;
+                        previewStartMs = Math.max(0, detail.previewStartMs());
+                        rebuild();
+                    }
+                });
+            } catch (WorkshopApiException exception) {
+                MusicBattleMod.LOGGER.debug("Workshop upload: the set's preview point could not be read: {}", exception.code());
+            }
+        });
+    }
+
+    /** The site's default point while nobody has chosen one: 40% into the song, clamped like a moved window. */
+    private void defaultPreviewPoint() {
+        if (!previewPointChosen) {
+            previewStartMs = clampPreviewStart(durationMs * 4 / 10, durationMs);
+        }
     }
 
     /** Reads the acceptance state of the signed-in account, so a person who accepted never sees the panel again. */
@@ -652,7 +690,10 @@ public final class UploadWizardView implements WorkshopScreen.Overlay {
                         0F, 0xFFFFFFFF, 0xFFFFFFFF);
             }
         } else if (id.equals("cover.panel.choose") || id.equals("pp.play")) {
-            RoundedRect.fill(g, rect.x(), rect.y(), rect.w(), rect.h(), Palette.RADIUS_SM, hover ? Palette.BG_4 : Palette.BG_3);
+            // While the clip plays the site fills its Play button with the strong accent (.is-playing); so does this one.
+            boolean lit = id.equals("pp.play") && PreviewPlayer.isCurrent("wizard_preview");
+            RoundedRect.fill(g, rect.x(), rect.y(), rect.w(), rect.h(), Palette.RADIUS_SM,
+                    lit ? Palette.ACCENT_STRONG : hover ? Palette.BG_4 : Palette.BG_3);
             if (id.equals("pp.play")) {
                 float size = rect.h() * 0.5F;
                 if (PreviewPlayer.isCurrent("wizard_preview")) {
@@ -673,6 +714,7 @@ public final class UploadWizardView implements WorkshopScreen.Overlay {
             float handle = Math.min(17F, rect.h() * 0.5F);
             RoundedRect.pill(g, rect.x() - 1.4F, rect.centerY() - handle * 0.5F, 2.8F, handle, Palette.ACCENT);
             RoundedRect.pill(g, rect.right() - 1.4F, rect.centerY() - handle * 0.5F, 2.8F, handle, Palette.ACCENT);
+            drawPlayhead(g, rect);
         } else if (id.startsWith("select.")) {
             if (id.endsWith(".prev") || id.endsWith(".next")) {
                 WorkshopDraw.icon(g, rect.inset(rect.w() * 0.3F, rect.h() * 0.3F),
@@ -779,6 +821,26 @@ public final class UploadWizardView implements WorkshopScreen.Overlay {
             RoundedRect.fill(g, rect.x() + i * step + step * 0.25F, rect.centerY() - h * 0.5F, Math.max(1F, step * 0.5F), h, 0.6F,
                     Palette.withAlpha(Palette.ACCENT, 0.55F));
         }
+    }
+
+    /**
+     * The site's playhead: while the clip plays, a 2 px line in the text colour with an accent glow walks through the
+     * window, at (start + elapsed) / duration of the strip, which is the window's left edge plus the heard fraction of
+     * its width. Nothing is drawn while the clip is still decoding or after it stops.
+     */
+    private void drawPlayhead(GuiGraphics g, Rect window) {
+        float heard = PreviewPlayer.progress("wizard_preview");
+        if (!PreviewPlayer.isCurrent("wizard_preview") || PreviewPlayer.isLoading("wizard_preview")) {
+            return;
+        }
+        float x = playheadX(window.x(), window.w(), heard);
+        RoundedRect.fill(g, x - 3F, window.y(), 6F, window.h(), 3F, Palette.withAlpha(Palette.ACCENT, 0.35F));
+        RoundedRect.fill(g, x - 1F, window.y(), 2F, window.h(), 0F, Palette.TEXT_1);
+    }
+
+    /** Pure maths of the playhead: the window's left edge plus the heard fraction of its width. */
+    static float playheadX(float windowX, float windowW, float heard) {
+        return windowX + windowW * Math.max(0F, Math.min(1F, heard));
     }
 
     private void drawHeaderPreview(GuiGraphics g, Rect rect) {
@@ -1012,6 +1074,7 @@ public final class UploadWizardView implements WorkshopScreen.Overlay {
                     input("wizard.title").setValue(track.title());
                 }
                 durationMs = Math.max(durationMs, track.durationTicks() * 50L);
+                defaultPreviewPoint();
                 issues = List.of();
                 rebuild();
             }
@@ -1049,7 +1112,7 @@ public final class UploadWizardView implements WorkshopScreen.Overlay {
                 rebuild();
             }
             case "pp.strip" -> {
-                movePreview(mouseX);
+                grabPreview(mouseX);
                 draggingWindow = true;
             }
             case "pp.play" -> {
@@ -1099,17 +1162,55 @@ public final class UploadWizardView implements WorkshopScreen.Overlay {
         }
     }
 
-    /** Puts the 30-second window under the pointer, centred on it, as dragging the site's window does. */
-    private void movePreview(double mouseX) {
-        Rect strip = screenRect(page.content().rect("pp.strip"), 0);
-        if (strip.empty() || durationMs <= 0) {
+    /**
+     * A press on the strip, as on the site: grabbing the window keeps the point under the pointer where it was in the
+     * window; a press outside it puts the window's middle under the pointer. The drag then moves it by that grip.
+     */
+    private void grabPreview(double mouseX) {
+        long at = previewMsAt(mouseX);
+        if (at < 0) {
             return;
         }
-        double fraction = Math.max(0, Math.min(1, (mouseX - strip.x()) / Math.max(1, strip.w())));
-        long start = (long) (fraction * durationMs) - UploadLayout.PREVIEW_MS / 2;
-        long latest = Math.max(0, durationMs - UploadLayout.PREVIEW_MS);
-        previewStartMs = Math.max(0, Math.min(latest, start / 1000 * 1000));
+        dragGripMs = at >= previewStartMs && at <= previewStartMs + UploadLayout.PREVIEW_MS ? at - previewStartMs
+                : UploadLayout.PREVIEW_MS / 2;
+        previewPointChosen = true;
+        movePreview(mouseX);
+    }
+
+    /** Moves the 30-second window with the pointer by the grip taken at the press, in 100 ms steps as the site does. */
+    private void movePreview(double mouseX) {
+        long at = previewMsAt(mouseX);
+        if (at < 0) {
+            return;
+        }
+        long start = clampPreviewStart(at - dragGripMs, durationMs);
+        if (start == previewStartMs) {
+            return;
+        }
+        previewStartMs = start;
+        previewPointChosen = true;
+        // The site stops the clip when its window moves; the next Play starts from the new point.
+        if (PreviewPlayer.isCurrent("wizard_preview")) {
+            PreviewPlayer.stop();
+        }
         rebuild();
+    }
+
+    /** The song time under the pointer on the strip, or -1 when there is no strip or no song. */
+    private long previewMsAt(double mouseX) {
+        Rect strip = screenRect(page.content().rect("pp.strip"), 0);
+        if (strip.empty() || durationMs <= 0) {
+            return -1;
+        }
+        double fraction = Math.max(0, Math.min(1, (mouseX - strip.x()) / Math.max(1, strip.w())));
+        return Math.round(fraction * durationMs);
+    }
+
+    /** The site's clampStart: rounded to 100 ms, never before 0 nor so late that the 30 seconds run past the end. */
+    static long clampPreviewStart(long startMs, long durationMs) {
+        long latest = Math.max(0, durationMs - UploadLayout.PREVIEW_MS);
+        long rounded = Math.round(startMs / 100.0) * 100;
+        return Math.max(0, Math.min(latest, rounded));
     }
 
     private static int cycle(int current, int[] values, boolean forward) {
@@ -1127,7 +1228,8 @@ public final class UploadWizardView implements WorkshopScreen.Overlay {
     private void playPreview() {
         Path audio = audioFile();
         if (audio != null) {
-            PreviewPlayer.play("wizard_preview", audio, UploadLayout.PREVIEW_MS, client.previewVolume());
+            // From the chosen point, as the site plays it: the published clip starts there too (previewStartMs).
+            PreviewPlayer.play("wizard_preview", audio, UploadLayout.PREVIEW_MS, client.previewVolume(), previewStartMs);
         }
     }
 

@@ -15,6 +15,7 @@ import static org.lwjgl.opengl.GL11.*;
 public final class UiForegroundChecks {
     private static Method foreground;
     private static Method modal;
+    private static Method tip;
     private static final int SIZE = 32;
     private static final int GREEN = 0x22CC55;
     private static final int MAGENTA = 0xDD22CC;
@@ -59,8 +60,15 @@ public final class UiForegroundChecks {
                 throw new AssertionError("Nested color picker needs a modal layer above the editor's +800 foreground", missing);
             }
             checkNestedModal();
+            try {
+                tip = foreground.getDeclaringClass().getMethod("renderTip", PoseStack.class, Runnable.class, Runnable.class);
+                tip.setAccessible(true);
+            } catch (NoSuchMethodException missing) {
+                throw new AssertionError("Editor tips need a layer above the controls' shadowed glyphs (+800.03)", missing);
+            }
+            checkTipLayer();
             require(glGetError() == GL_NO_ERROR, "Unexpected OpenGL error");
-            System.out.println("PASS: 7 checks; foreground/modal pixels, parent batch boundary, pose restoration, renderer/flush exceptions");
+            System.out.println("PASS: 10 checks; foreground/modal/tip pixels, parent batch boundary, pose restoration, renderer/flush exceptions");
             System.out.println("NOT COVERED: real GuiGraphics/font batches, screen integration, and in-game visual QA");
         } finally {
             GLFW.glfwDestroyWindow(window);
@@ -148,6 +156,59 @@ public final class UiForegroundChecks {
         require(batches.isEmpty(), "Modal batches leaked beyond its pose scope");
         require(poses.last().pose().equals(initial) && poses.clear(), "Modal leaked its pose");
         require(glIsEnabled(GL_DEPTH_TEST), "Modal disabled caller depth testing");
+    }
+
+    /**
+     * The FX editor's tip card went up in the controls' own layer (+800), and vanilla draws an
+     * EditBox's text with a drop shadow, the text itself 0.03 forward (Font.SHADOW_OFFSET), so a number box's value
+     * printed through the card. The tip layer lies over that glyph, and a modal drawn over the editor still lies over the
+     * tip's own glyphs.
+     */
+    private static void checkTipLayer() throws Exception {
+        clear();
+        PoseStack legacy = new PoseStack();
+        List<Runnable> batches = new ArrayList<>();
+        Runnable flush = () -> {
+            for (Runnable batch : List.copyOf(batches)) batch.run();
+            batches.clear();
+        };
+        // A number box's shadowed value in the controls' layer, then the card in that same layer: the old FX editor.
+        invoke(legacy, flush, () -> {
+            float textDepth = legacy.last().pose().m32() + 0.03F;
+            batches.add(() -> quad(textDepth, MAGENTA));
+        });
+        invoke(legacy, flush, () -> {
+            float cardDepth = legacy.last().pose().m32();
+            batches.add(() -> quad(cardDepth, GREEN));
+        });
+        require(pixel() == MAGENTA, "Legacy fixture did not reproduce a shadowed control value printing through its tip");
+        System.out.println("REPRODUCED: a tip in the controls' layer lies under their shadowed glyphs");
+
+        clear();
+        PoseStack poses = new PoseStack();
+        Matrix4f initial = new Matrix4f(poses.last().pose());
+        invoke(poses, flush, () -> {
+            float textDepth = poses.last().pose().m32() + 0.03F;
+            batches.add(() -> quad(textDepth, MAGENTA));
+        });
+        float[] tipText = {0F};
+        tip.invoke(null, poses, flush, (Runnable) () -> {
+            require(batches.isEmpty(), "Control batches leaked into the tip layer");
+            float cardDepth = poses.last().pose().m32();
+            tipText[0] = cardDepth + 0.03F;
+            batches.add(() -> quad(cardDepth, GREEN));
+        });
+        require(pixel() == GREEN, "A tip still lies under the controls' shadowed glyphs");
+        require(batches.isEmpty() && poses.last().pose().equals(initial) && poses.clear(), "The tip layer leaked its pose or batches");
+
+        clear();
+        quad(tipText[0], MAGENTA);
+        modal.invoke(null, poses, flush, (Runnable) () -> {
+            float modalDepth = poses.last().pose().m32();
+            batches.add(() -> quad(modalDepth, GREEN));
+        });
+        require(pixel() == GREEN, "A dialog over the editor no longer covers the editor's tip");
+        require(glIsEnabled(GL_DEPTH_TEST), "The tip layer disabled caller depth testing");
     }
 
     private static void invoke(PoseStack poses, Runnable flush, Runnable draw) throws Exception {

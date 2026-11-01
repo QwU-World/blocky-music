@@ -13,7 +13,7 @@ body:
     attributes:
       label: Blocky Music version
       description: The jar's name, as it is in your mods folder.
-      placeholder: blocky_music-0.1.0.jar
+      placeholder: blocky_music-0.2.0-beta.2.jar
     validations:
       required: true
 
@@ -46,7 +46,7 @@ body:
       label: What happened
       description: What you did, what you expected, and what you got instead.
       placeholder: |
-        I challenged my friend and picked a map from the Workshop. The download finished, but the battle never started.
+        I challenged my friend and picked a beatmap from the Workshop. The download finished, but the battle never started.
     validations:
       required: true
 

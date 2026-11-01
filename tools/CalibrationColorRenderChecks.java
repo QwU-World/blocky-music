@@ -2,21 +2,30 @@ import java.lang.invoke.MethodHandles;
 import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.List;
-import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.network.chat.Component;
-import net.minecraft.network.chat.FormattedText;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassVisitor;
 import org.objectweb.asm.ClassWriter;
 import org.objectweb.asm.MethodVisitor;
 import org.objectweb.asm.Opcodes;
 import ru.gora.musicbattle.client.ClientBattleSettings;
+import ru.gora.musicbattle.client.ui.Palette;
 import ru.gora.musicbattle.data.NoteAppearance;
 
-/** Executes production drawNote while isolating only its clock, localization, and GPU sinks. */
+/**
+ * Executes production drawNote while isolating only its clock, localization, and GPU sinks.
+ *
+ * <p>What mirrors a battle must look like the battle: the note and the hit flash take the player's first lane colour.
+ * The rest is the toolkit's: the hit line was the first interface's cyan (0xFF52D6EC) until the UI toolkit moved it to
+ * {@code Palette.TEXT_2}, and the words went from their own mint and amber to {@code Palette.OK} and {@code Palette.WARN}
+ * at the same time, on purpose.
+ */
 public final class CalibrationColorRenderChecks {
+    /** The hit line at rest: the toolkit's secondary text tone, no longer the first interface's cyan. */
+    private static final int LINE = Palette.TEXT_2;
+
     private static double elapsedMs;
 
     public static double elapsed(Object ignoredMetronome) {
@@ -27,12 +36,21 @@ public final class CalibrationColorRenderChecks {
         return Component.literal(key);
     }
 
+    /**
+     * Stands in for the screen's drawFeedback: the judgement word is drawn in the toolkit's TrueType face, which needs a
+     * running client, so the probe hands the word and its colour here instead, exactly as drawNote chose them.
+     */
+    public static void drawFeedback(GuiGraphics graphics, Component word, float centerX, float y, int colour) {
+        ((Capture) graphics).labels.add(new Label(word.getString(), colour));
+    }
+
     public static void main(String[] args) throws Exception {
         Class<?> probeType = isolateDrawNote();
         Object probe = probeType.getConstructor().newInstance();
         probeType.getField("controlWidth").setInt(probe, 220);
         probeType.getField("width").setInt(probe, 600);
         probeType.getField("height").setInt(probe, 400);
+        probeType.getField("stageFoot").setInt(probe, 90);
         probeType.getField("metronome").set(probe, new Object());
         probeType.getField("lastTapElapsedMs").setDouble(probe, -1000.0);
         probeType.getField("lastError").setDouble(probe, Double.NaN);
@@ -71,12 +89,22 @@ public final class CalibrationColorRenderChecks {
         require(countColor(flash, 0x96FFFFFF) == 8,
                 "Hit particles did not retain eight neutral-white 200*burst fills");
 
-        assertFeedback(probeType, probe, 0.0, "hit", 0xFF81F7BC);
-        assertFeedback(probeType, probe, -80.0, "early", 0xFFFFCE79);
-        assertFeedback(probeType, probe, 80.0, "late", 0xFFFFCE79);
+        assertFeedback(probeType, probe, 0.0, "hit", Palette.OK);
+        assertFeedback(probeType, probe, -80.0, "early", Palette.WARN);
+        assertFeedback(probeType, probe, 80.0, "late", Palette.WARN);
+        require(LINE != 0xFF52D6EC && Palette.OK != 0xFF81F7BC && Palette.WARN != 0xFFFFCE79,
+                "the calibration test is back on the first interface's cyan, mint or amber");
+
+        // The stage gives up height to a long note under it: with a foot of 102 the frame ends 12 units higher.
+        probeType.getField("stageFoot").setInt(probe, 102);
+        Capture raised = draw(probeType, probe, 700.0,
+                appearance(blue, 0xFFAA3311, 0xFF22BB55, 0xFF6633CC), 0xFF09121B);
+        requireFill(raised, 254, 277, 582, 281, LINE, "the hit line does not follow the stage's foot");
+        probeType.getField("stageFoot").setInt(probe, 90);
 
         System.out.println("PASS: production calibration drawNote follows current lane-zero color across two palettes");
         System.out.println("PASS: other lanes/panel are isolated; geometry, reference, flash alpha, whites, and feedback meanings are preserved");
+        System.out.println("PASS: the hit line and the words are toolkit tokens (TEXT_2, OK, WARN); the line follows the stage's foot");
         System.out.println("NOT COVERED: real Minecraft font batching, sound clock, GPU integration, or live screen rendering");
     }
 
@@ -91,7 +119,7 @@ public final class CalibrationColorRenderChecks {
     }
 
     private static void assertApproachingNote(Capture capture, int laneColor, int highlightColor, String context) {
-        requireFill(capture, 254, 289, 582, 293, 0xFF52D6EC,
+        requireFill(capture, 254, 289, 582, 293, LINE,
                 context + ": pre-hit reference moved or changed color");
         requireFill(capture, 400, 166, 436, 174, laneColor,
                 context + ": moving note does not use current lane zero");
@@ -149,7 +177,7 @@ public final class CalibrationColorRenderChecks {
         ClassWriter writer = new ClassWriter(ClassWriter.COMPUTE_FRAMES | ClassWriter.COMPUTE_MAXS);
         writer.visit(Opcodes.V21, Opcodes.ACC_PUBLIC, probe, null, "java/lang/Object", null);
         for (String[] field : new String[][]{
-                {"controlWidth", "I"}, {"width", "I"}, {"height", "I"},
+                {"controlWidth", "I"}, {"width", "I"}, {"height", "I"}, {"stageFoot", "I"},
                 {"metronome", "Ljava/lang/Object;"}, {"lastTapElapsedMs", "D"}, {"lastError", "D"},
                 {"font", "Lnet/minecraft/client/gui/Font;"},
                 {"minecraft", "Lnet/minecraft/client/Minecraft;"}}) {
@@ -192,6 +220,8 @@ public final class CalibrationColorRenderChecks {
                                 super.visitMethodInsn(Opcodes.INVOKESTATIC, test, "elapsed", "(Ljava/lang/Object;)D", false);
                             } else if (owner.equals(source) && name.equals("tr")) {
                                 super.visitMethodInsn(Opcodes.INVOKESTATIC, test, "tr", descriptor, false);
+                            } else if (owner.equals(source) && name.equals("drawFeedback")) {
+                                super.visitMethodInsn(Opcodes.INVOKESTATIC, test, "drawFeedback", descriptor, false);
                             } else if (owner.equals(source) && name.equals("lighten")) {
                                 super.visitMethodInsn(Opcodes.INVOKESTATIC, probe, name, descriptor, false);
                             } else {
@@ -207,7 +237,7 @@ public final class CalibrationColorRenderChecks {
     }
 
     private static boolean isProbeField(String name) {
-        return name.equals("controlWidth") || name.equals("width") || name.equals("height")
+        return name.equals("controlWidth") || name.equals("width") || name.equals("height") || name.equals("stageFoot")
                 || name.equals("metronome") || name.equals("lastTapElapsedMs") || name.equals("lastError")
                 || name.equals("font") || name.equals("minecraft");
     }
@@ -249,10 +279,7 @@ public final class CalibrationColorRenderChecks {
         @Override public void enableScissor(int left, int top, int right, int bottom) { }
         @Override public void disableScissor() { }
 
-        @Override public void drawCenteredString(Font font, Component text, int x, int y, int color) {
-            labels.add(new Label(text.getString(), color));
-        }
-
-        @Override public void drawWordWrap(Font font, FormattedText text, int x, int y, int width, int color) { }
+        // No text sinks: drawNote's only words go through drawFeedback, and its status line was moved out of it with
+        // the rest of the chrome. A string drawn here again would reach the real GuiGraphics and fail this check.
     }
 }

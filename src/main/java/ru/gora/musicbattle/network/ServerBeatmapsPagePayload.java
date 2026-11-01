@@ -8,7 +8,7 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import ru.gora.musicbattle.MusicBattleMod;
 
 /**
- * One page of server beatmaps (spec 06 section 9.1 with 08 A5.5: the cards carry their charts, the explicit flag
+ * One page of server beatmaps (the cards carry their charts, the explicit flag
  * and whether a cover exists, so the tab draws the same card as Browse without asking the website).
  */
 public record ServerBeatmapsPagePayload(List<Item> items, String nextCursor, boolean canManage)

@@ -1,7 +1,17 @@
 package ru.gora.musicbattle.client;
 
 import java.util.ArrayDeque;
+import ru.gora.musicbattle.client.ui.HandCursor;
 import ru.gora.musicbattle.client.ui.Palette;
+import ru.gora.musicbattle.client.ui.RoundedRect;
+import ru.gora.musicbattle.client.ui.TextStyle;
+import ru.gora.musicbattle.client.ui.TextStyles;
+import ru.gora.musicbattle.client.ui.UiClip;
+import ru.gora.musicbattle.client.workshop.WorkshopDraw;
+import ru.gora.musicbattle.client.workshop.layout.Rect;
+import ru.gora.musicbattle.client.ui.UiTooltip;
+import net.minecraft.client.Minecraft;
+import ru.gora.musicbattle.client.workshop.layout.TextFit;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Deque;
@@ -23,13 +33,33 @@ import ru.gora.musicbattle.data.FxRange;
 import ru.gora.musicbattle.data.TrackEffect;
 import ru.gora.musicbattle.data.TrackEffectSettings;
 
-/** One inspector for both the placement template and a concrete timeline effect. */
+/**
+ * One inspector for both the placement template and a concrete timeline effect.
+ *
+ * <p>Drawn with the toolkit like the DJ screens around it: a raised rounded panel in the page colours with the effect's
+ * colour as a dot beside its heading, every label in Nunito, the toolkit's sliders, switches with the Workshop's check
+ * box, its scrollbar and its pickers' cards. It was a flat slab of the first look's blue-grey with a strip of the
+ * effect's colour on top, the bitmap font and square teal sliders. Every control is where it always was, and the panel
+ * still moves by its heading and resizes from its corner.
+ */
 public final class TrackEffectEditScreen extends Screen implements DjPanelOwnedScreen {
+    /**
+     * The wash over the preview behind the panel. It stays this light on purpose: an effect is judged against the world
+     * (or the broadcast camera) behind it, so the world must stay in sight; it only takes the glare off so the panel
+     * reads. The page colour at the alpha the literal wash always had, 48 of 255.
+     */
+    static final int WASH = Palette.withAlpha(Palette.BG_0, 48 / 255.0F);
+    /** The "dark" preview background: the page colour, the darkest the toolkit has. */
+    static final int DARK_BACKGROUND = Palette.BG_0;
+    /** Behind a picker of effects or fonts, which hides the preview while it is open, as it always did. */
+    static final int PICKER_BACKDROP = Palette.withAlpha(Palette.BG_0, 0.94F);
     private static final int LIVE_PREVIEW_DEBOUNCE_TICKS = 1;
     private static final String[] TEXT_ANIMATIONS = {"none", "letters", "words", "fade", "slide_left", "slide_right", "slide_up", "slide_down", "zoom", "pop", "spin"};
     private static final String[] TEXT_EXIT_ANIMATIONS = {"none", "fade", "slide_left", "slide_right", "slide_up", "slide_down", "zoom", "shrink", "spin"};
     private static final String[] HIGHLIGHT_MODES = {"both", "p1", "p2", "alternate", "pulse"};
     private static final String[] VISUALIZER_POSITIONS = {"bottom", "top", "left", "right"};
+    /** The visualizer's bar counts, in the order its button steps through them. */
+    private static final int[] VISUALIZER_SECTIONS = {8, 12, 16, 24, 32, 48, 64};
     private static final String[] STAR_DIRECTIONS = {"down_right", "down", "down_left", "left", "up_left", "up", "up_right", "right"};
     private static final String[] PLACEMENT_MODES = {"point", "length", "range"};
     private static final String[] BACKGROUNDS = {"world", "dark", "light", "checker", "red", "green"};
@@ -162,12 +192,17 @@ public final class TrackEffectEditScreen extends Screen implements DjPanelOwnedS
     private boolean previewOnly;
     private boolean fontPickerOpen;
     private boolean effectPickerOpen;
+    /** How far the open picker's cards are scrolled; each picker opens at its top. */
+    private int pickerScroll;
     private final List<AbstractWidget> contentWidgets = new ArrayList<>();
     /** Every numeric box keeps a slider beside it; the box stays the way to type an exact value. */
     private final Map<EditBox, FxSlider> sliders = new IdentityHashMap<>();
     private boolean syncingBoxes;
     private final List<AbstractWidget> actionWidgets = new ArrayList<>();
-    private final List<LabeledControl> visibleControls = new ArrayList<>();
+    /** The labels of the controls in the viewport, with the lines the layout set them in. */
+    private final List<Shown> visibleLabels = new ArrayList<>();
+    /** The font metrics the rows are laid out with; see {@link #measurer()}. */
+    private ru.gora.musicbattle.client.ui.TextMeasurer measurer;
     private final Deque<Draft> settingsUndo = new ArrayDeque<>();
     private final Deque<Draft> settingsRedo = new ArrayDeque<>();
     private int panelLeft;
@@ -201,6 +236,7 @@ public final class TrackEffectEditScreen extends Screen implements DjPanelOwnedS
         this.host = host;
         this.original = original;
         this.seed = seed;
+        this.backgroundIndex = startingBackground();
         this.type = seed.type();
         this.lane = seed.layer();
         this.fontId = seed.font();
@@ -262,6 +298,18 @@ public final class TrackEffectEditScreen extends Screen implements DjPanelOwnedS
             public void refreshEffectBrush(TrackEffect.Type type) {
                 parent.refreshEffectBrush(type);
             }
+
+            // The chart's own tempo and beat 1, so the preview pulses on the beats the effect will meet in the song;
+            // it used to beat at the default 120 BPM from 0 s whatever the chart said.
+            @Override
+            public int previewBpm() {
+                return parent.chartBpm();
+            }
+
+            @Override
+            public int previewBeatOffsetMs() {
+                return parent.chartOffsetMs();
+            }
         };
     }
 
@@ -271,7 +319,7 @@ public final class TrackEffectEditScreen extends Screen implements DjPanelOwnedS
         contentWidgets.clear();
         sliders.clear();
         actionWidgets.clear();
-        visibleControls.clear();
+        visibleLabels.clear();
         previewStartedNanos = System.nanoTime();
         if (host.managesPreviewAudio()) {
             ClientAudioAnalyzer.activate(host.effectPreviewAudioPath());
@@ -318,7 +366,8 @@ public final class TrackEffectEditScreen extends Screen implements DjPanelOwnedS
         fontButton = addButton(fontLabel(), x0, row5, third, this::openFontPicker);
         animationButton = addButton(animationLabel(), x0 + third + gap, row5, third, () -> mutate(this::cycleAnimation));
         exitAnimationButton = addButton(exitAnimationLabel(), x0 + (third + gap) * 2, row5, third, () -> mutate(this::cycleExitAnimation));
-        variantButton = addButton(variantLabel(), x0 + (third + gap) * 2, row5, third, () -> mutate(this::cycleVariant));
+        variantButton = addToggle(variantLabel(), x0 + (third + gap) * 2, row5, third,
+                () -> type == TrackEffect.Type.VISUALIZER ? visualizerFullWidth(variant) : null, () -> mutate(this::cycleVariant));
 
         int row6 = top + 258;
         textSpeedBox = addBox(x0, row6, quarter, format(seed.textSpeed()));
@@ -439,34 +488,36 @@ public final class TrackEffectEditScreen extends Screen implements DjPanelOwnedS
         gradientButton = addButton(gradientLabel(), x0, row6, third, () -> mutate(this::cycleVisualizerGradient));
         sectionsButton = addButton(sectionsLabel(), x0 + third + gap, row6, third, () -> mutate(this::cycleVisualizerSections));
 
-        beatReactiveButton = addButton(beatReactiveLabel(), x0, top + 302, inner, () -> mutate(this::toggleBeatReactive));
-        flashBeatButton = addButton(flashBeatLabel(), x0, top + 302, inner, () -> mutate(this::toggleFlashBeat));
-        tvSweepButton = addButton(tvSweepLabel(), x0, top + 302, inner, () -> mutate(this::toggleTvSweep));
-        cinematicAnimationButton = addButton(cinematicAnimationLabel(), x0, top + 302, inner, () -> mutate(this::toggleCinematicAnimation));
-        fishEyeRemoveBlackEdgesButton = addButton(fishEyeRemoveBlackEdgesLabel(), x0, top + 302, inner,
+        beatReactiveButton = addToggle(beatReactiveLabel(), x0, top + 302, inner, () -> beatReactive, () -> mutate(this::toggleBeatReactive));
+        flashBeatButton = addToggle(flashBeatLabel(), x0, top + 302, inner, this::flashFollowsBeat, () -> mutate(this::toggleFlashBeat));
+        tvSweepButton = addToggle(tvSweepLabel(), x0, top + 302, inner, () -> tvSweepEnabled, () -> mutate(this::toggleTvSweep));
+        cinematicAnimationButton = addToggle(cinematicAnimationLabel(), x0, top + 302, inner, () -> cinematicAnimated,
+                () -> mutate(this::toggleCinematicAnimation));
+        fishEyeRemoveBlackEdgesButton = addToggle(fishEyeRemoveBlackEdgesLabel(), x0, top + 302, inner, () -> fishEyeRemoveBlackEdges,
                 () -> mutate(this::toggleFishEyeRemoveBlackEdges));
-        overlayTextButton = addButton(overlayTextLabel(), x0, top + 302, inner, () -> mutate(this::toggleOverlayText));
-        overlayInterfaceButton = addButton(overlayInterfaceLabel(), x0, top + 302, inner, () -> mutate(this::toggleOverlayInterface));
-        overlayPlayersButton = addButton(overlayPlayersLabel(), x0, top + 302, inner,
+        overlayTextButton = addToggle(overlayTextLabel(), x0, top + 302, inner, () -> overlayText, () -> mutate(this::toggleOverlayText));
+        overlayInterfaceButton = addToggle(overlayInterfaceLabel(), x0, top + 302, inner, () -> overlayInterface,
+                () -> mutate(this::toggleOverlayInterface));
+        overlayPlayersButton = addToggle(overlayPlayersLabel(), x0, top + 302, inner, () -> overlayPlayers,
                 () -> mutate(this::toggleOverlayPlayers));
-        overlayEntitiesButton = addButton(overlayEntitiesLabel(), x0, top + 302, inner,
+        overlayEntitiesButton = addToggle(overlayEntitiesLabel(), x0, top + 302, inner, () -> overlayEntities,
                 () -> mutate(this::toggleOverlayEntities));
-        highlightSpectatorsButton = addButton(highlightSpectatorsLabel(), x0, top + 302, inner,
+        highlightSpectatorsButton = addToggle(highlightSpectatorsLabel(), x0, top + 302, inner, () -> highlightSpectators,
                 () -> mutate(this::toggleHighlightSpectators));
-        highlightEntitiesButton = addButton(highlightEntitiesLabel(), x0, top + 302, inner,
+        highlightEntitiesButton = addToggle(highlightEntitiesLabel(), x0, top + 302, inner, () -> highlightEntities,
                 () -> mutate(this::toggleHighlightEntities));
-        highlightModelGlowButton = addButton(highlightModelGlowLabel(), x0, top + 302, inner,
+        highlightModelGlowButton = addToggle(highlightModelGlowLabel(), x0, top + 302, inner, () -> highlightModelGlow,
                 () -> mutate(this::toggleHighlightModelGlow));
-        hideParticlesButton = addButton(hideParticlesLabel(), x0, top + 302, inner,
+        hideParticlesButton = addToggle(hideParticlesLabel(), x0, top + 302, inner, () -> hideParticles,
                 () -> mutate(() -> { hideParticles = !hideParticles; hideParticlesButton.setMessage(hideParticlesLabel()); }));
-        hideFirstPersonHandButton = addButton(hideHandLabel(), x0, top + 302, inner,
+        hideFirstPersonHandButton = addToggle(hideHandLabel(), x0, top + 302, inner, () -> hideFirstPersonHand,
                 () -> mutate(() -> { hideFirstPersonHand = !hideFirstPersonHand; hideFirstPersonHandButton.setMessage(hideHandLabel()); }));
-        hideHudButton = addButton(hideHudLabel(), x0, top + 302, inner,
+        hideHudButton = addToggle(hideHudLabel(), x0, top + 302, inner, () -> hideHud,
                 () -> mutate(() -> { hideHud = !hideHud; hideHudButton.setMessage(hideHudLabel()); }));
-        hideBlockyMusicHudButton = addButton(hideBlockyMusicHudLabel(), x0, top + 302, inner,
+        hideBlockyMusicHudButton = addToggle(hideBlockyMusicHudLabel(), x0, top + 302, inner, () -> hideBlockyMusicHud,
                 () -> mutate(() -> { hideBlockyMusicHud = !hideBlockyMusicHud; hideBlockyMusicHudButton.setMessage(hideBlockyMusicHudLabel()); }));
-        fadeInButton = addButton(fadeInLabel(), x0, top + 302, inner, () -> mutate(this::toggleFadeIn));
-        fadeOutButton = addButton(fadeOutLabel(), x0, top + 302, inner, () -> mutate(this::toggleFadeOut));
+        fadeInButton = addToggle(fadeInLabel(), x0, top + 302, inner, () -> fadeInEnabled, () -> mutate(this::toggleFadeIn));
+        fadeOutButton = addToggle(fadeOutLabel(), x0, top + 302, inner, () -> fadeOutEnabled, () -> mutate(this::toggleFadeOut));
         visualizerPositionButton = addButton(visualizerPositionLabel(), x0, top + 302, inner,
                 () -> mutate(this::cycleVisualizerPosition));
         starDirectionButton = addButton(starDirectionLabel(), x0, top + 302, inner,
@@ -486,7 +537,15 @@ public final class TrackEffectEditScreen extends Screen implements DjPanelOwnedS
     }
 
     private Button addButton(Component label, int x, int y, int width, Runnable action) {
-        Button button = this.addRenderableWidget(FancyButton.create(label, ignored -> action.run(), x, y, width, 20));
+        Button button = this.addRenderableWidget(new InspectorButton(label, ignored -> action.run(), x, y, width, 20, null));
+        contentWidgets.add(button);
+        return button;
+    }
+
+    /** A switch: its words, and a check box that reads {@code state} as it draws (null for a plain button). */
+    private Button addToggle(Component label, int x, int y, int width, java.util.function.Supplier<Boolean> state,
+                             Runnable action) {
+        Button button = this.addRenderableWidget(new InspectorButton(label, ignored -> action.run(), x, y, width, 20, state));
         contentWidgets.add(button);
         return button;
     }
@@ -536,7 +595,7 @@ public final class TrackEffectEditScreen extends Screen implements DjPanelOwnedS
     }
 
     private void addAction(Component label, Runnable action, int x, int y) {
-        Button button = this.addRenderableWidget(FancyButton.create(label, ignored -> action.run(), x, y, 80, 22));
+        Button button = this.addRenderableWidget(new InspectorButton(label, ignored -> action.run(), x, y, 80, 22, null));
         actionWidgets.add(button);
     }
 
@@ -592,6 +651,10 @@ public final class TrackEffectEditScreen extends Screen implements DjPanelOwnedS
         }
     }
 
+    /** What {@link #tip} was asked to show this frame, and over what; drawn and cleared at the end of render. */
+    private Component pendingTip;
+    private Rect pendingTipOver;
+
     @Override
     public void renderBackground(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
     }
@@ -603,13 +666,15 @@ public final class TrackEffectEditScreen extends Screen implements DjPanelOwnedS
         int previewBpm = Math.max(20, host.previewBpm());
         float previewSpeed = Mth.clamp(host.previewPlaybackSpeed(), 1.0F, 2.0F);
         int effectivePreviewBpm = Math.max(20, Math.round(previewBpm * previewSpeed));
+        float beatOrigin = (float) ru.gora.musicbattle.data.ChartBeat.originTicks(
+                ru.gora.musicbattle.data.ChartBeat.effectiveOffsetMs(host.previewBeatOffsetMs(), previewSpeed));
         ClientTrackEffects.EffectState state = ClientTrackEffects.sample(List.of(), -1.0F,
-                effectivePreviewBpm, previewSpeed);
+                effectivePreviewBpm, previewSpeed, 1.0F, beatOrigin);
         if (preview != null) {
             float elapsed = Math.max(0L, System.nanoTime() - previewStartedNanos) / 50_000_000.0F;
             int loop = Math.max(24, preview.visibleDurationTicks() + 10);
             tick = preview.tick() + elapsed % loop;
-            state = ClientTrackEffects.sample(List.of(preview), tick, effectivePreviewBpm, previewSpeed);
+            state = ClientTrackEffects.sample(List.of(preview), tick, effectivePreviewBpm, previewSpeed, 1.0F, beatOrigin);
         }
         boolean activeCameraVisible = drawPreviewBackground(graphics, partialTick, state);
         if (preview != null) {
@@ -634,6 +699,29 @@ public final class TrackEffectEditScreen extends Screen implements DjPanelOwnedS
 
         ClientUiForeground.render(graphics.pose(), graphics::flush,
                 () -> renderInspectorUi(graphics, mouseX, mouseY, partialTick));
+        // Whatever was asked to show whole this frame, in the toolkit's card over everything, kept off what it explains.
+        Component shownTip = pendingTip;
+        Rect shownOver = pendingTipOver;
+        pendingTip = null;
+        pendingTipOver = null;
+        if (shownTip != null) {
+            // Above the inspector's layer: in it, a number box's shadowed value (drawn 0.03 forward) printed through it.
+            ClientUiForeground.renderTip(graphics.pose(), graphics::flush, () -> {
+                UiTooltip.draw(graphics, shownTip, mouseX, mouseY, shownOver, this.width, this.height);
+                graphics.flush();
+            });
+        }
+    }
+
+    /**
+     * Shows {@code text} whole under the pointer this frame: a control's name the layout had to cut, or a picker card's
+     * name and description. These used to go to vanilla's tooltip, the purple frame in the bitmap font, in exactly the
+     * languages the dj-dialogs check never measures (a third-party language pack with longer words). Now they are the
+     * toolkit's card ({@link UiTooltip}), kept clear of {@code over}, the control the pointer rests on.
+     */
+    private void tip(Component text, Rect over) {
+        pendingTip = text;
+        pendingTipOver = over;
     }
 
     private void renderInspectorUi(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
@@ -650,30 +738,88 @@ public final class TrackEffectEditScreen extends Screen implements DjPanelOwnedS
             return;
         }
 
-        graphics.fill(panelLeft, panelTop, panelLeft + panelWidth, panelTop + panelHeight, 0xFF121C25);
-        graphics.fill(panelLeft, panelTop, panelLeft + panelWidth, panelTop + 3, type.color());
-        graphics.drawCenteredString(this.font, this.title, panelLeft + panelWidth / 2, panelTop + 11, 0xFFFFFFFF);
-        graphics.enableScissor(panelLeft + 7, contentTop, panelLeft + panelWidth - 12, contentBottom);
-        for (LabeledControl control : visibleControls) {
-            label(graphics, control.label(), control.widget().getX(), control.widget().getY() - 10);
+        // The toolkit's dialog panel, opaque as the old one was: the controls read over any effect and any world.
+        RoundedRect.shadow(graphics, panelLeft, panelTop + 2.0F, panelWidth, panelHeight, Palette.RADIUS_LG, 12.0F,
+                Palette.SHADOW_LIFTED);
+        RoundedRect.fill(graphics, panelLeft, panelTop, panelWidth, panelHeight, Palette.RADIUS_LG, Palette.BG_1);
+        RoundedRect.stroke(graphics, panelLeft, panelTop, panelWidth, panelHeight, Palette.RADIUS_LG, 1.0F, Palette.LINE);
+        drawHeading(graphics, mouseX, mouseY);
+        UiClip.push(graphics, panelLeft + 7, contentTop, panelLeft + panelWidth - 12, contentBottom);
+        for (Shown shown : visibleLabels) {
+            label(graphics, shown, mouseX, mouseY);
         }
         for (AbstractWidget widget : contentWidgets) {
             if (widget.visible) widget.render(graphics, mouseX, mouseY, partialTick);
         }
-        graphics.disableScissor();
+        UiClip.pop(graphics);
         if (maxScroll > 0) drawScrollbar(graphics);
         int messageY = panelTop + panelHeight - 47;
         String message = !error.isBlank() ? error : notice;
         if (!message.isBlank()) {
-            graphics.drawCenteredString(this.font, this.font.plainSubstrByWidth(message, panelWidth - 24),
-                    panelLeft + panelWidth / 2, messageY, error.isBlank() ? 0xFF92C5D8 : 0xFFFF8798);
+            String fitted = TextFit.ellipsize(TextStyles.measurer(), message, TextStyle.CAPTION, panelWidth - 24.0F);
+            TextStyles.queueCentered(graphics, TextStyles.text(fitted, TextStyle.CAPTION).getVisualOrderText(),
+                    panelLeft + panelWidth / 2.0F, messageY, error.isBlank() ? Palette.TEXT_3 : Palette.DANGER);
         }
         for (AbstractWidget widget : actionWidgets) widget.render(graphics, mouseX, mouseY, partialTick);
-        int grip = 10;
-        graphics.fill(panelLeft + panelWidth - grip, panelTop + panelHeight - 2,
-                panelLeft + panelWidth, panelTop + panelHeight, 0xFFE3A6FF);
-        graphics.fill(panelLeft + panelWidth - 2, panelTop + panelHeight - grip,
-                panelLeft + panelWidth, panelTop + panelHeight, 0xFFE3A6FF);
+        drawGrip(graphics, mouseX, mouseY);
+    }
+
+    /**
+     * The heading the panel is dragged by: the effect's name with a dot of the effect's colour before it, the colour the
+     * timeline gives its blocks, where a strip of it used to run along the top.
+     */
+    private void drawHeading(GuiGraphics graphics, int mouseX, int mouseY) {
+        boolean over = mouseX >= panelLeft && mouseX <= panelLeft + panelWidth && mouseY >= panelTop && mouseY <= panelTop + 27;
+        if (over || draggingWindow) {
+            HandCursor.request(HandCursor.Kind.HAND);
+        }
+        float room = panelWidth - 48.0F;
+        var heading = TextStyles.ellipsize(TextStyles.styled(this.title, TextStyle.TITLE), room);
+        float headingWidth = TextStyles.width(heading);
+        float dot = 6.0F;
+        float left = panelLeft + (panelWidth - headingWidth - dot - 6.0F) / 2.0F;
+        float capY = panelTop + 9.0F;
+        float dotY = capY + TextStyle.TITLE.capHeight() / 2.0F;
+        RoundedRect.circle(graphics, left + dot / 2.0F, dotY, dot / 2.0F, 0xFF000000 | type.color());
+        // A faint ring, so an effect whose colour is black or as dark as the panel still shows its dot.
+        RoundedRect.stroke(graphics, left, dotY - dot / 2.0F, dot, dot, dot / 2.0F, 1.0F,
+                Palette.withAlpha(Palette.TEXT_1, 0.22F));
+        TextStyles.queue(graphics, heading, left + dot + 6.0F, capY, Palette.TEXT_1);
+        RoundedRect.fill(graphics, panelLeft + 14, panelTop + 25, panelWidth - 28.0F, 1.0F, 0.0F,
+                Palette.withAlpha(Palette.LINE, 0.7F));
+    }
+
+    /** The resize corner: three short diagonal rules, lit while it is pointed at or dragged. */
+    private void drawGrip(GuiGraphics graphics, int mouseX, int mouseY) {
+        boolean over = mouseX >= panelLeft + panelWidth - 12 && mouseX <= panelLeft + panelWidth
+                && mouseY >= panelTop + panelHeight - 12 && mouseY <= panelTop + panelHeight;
+        if (over || resizingWindow) {
+            HandCursor.request(HandCursor.Kind.HAND);
+        }
+        int colour = over || resizingWindow ? Palette.ACCENT : Palette.TEXT_MUTE;
+        float right = panelLeft + panelWidth - 4.0F;
+        float bottom = panelTop + panelHeight - 4.0F;
+        for (int step = 0; step < 3; step++) {
+            float reach = 3.0F + step * 3.0F;
+            for (int dotIndex = 0; dotIndex <= step; dotIndex++) {
+                RoundedRect.circle(graphics, right - reach + dotIndex * 3.0F, bottom - dotIndex * 3.0F, 0.9F, colour);
+            }
+        }
+    }
+
+    /**
+     * "World" in a world, "Dark" without one: the editor opened from the title screen has no world behind it, and the
+     * first background a player sees there should be a test ground, not a stand-in. They can still pick "World" and get
+     * the title's panorama.
+     */
+    private static int startingBackground() {
+        Minecraft game = Minecraft.getInstance();
+        return startingBackground(game == null || game.level != null);
+    }
+
+    /** The background the editor opens on: "World" in a world, "Dark" without one (D04). Pure, for ui-leftovers. */
+    static int startingBackground(boolean inWorld) {
+        return inWorld ? 0 : java.util.Arrays.asList(BACKGROUNDS).indexOf("dark");
     }
 
     private boolean drawPreviewBackground(GuiGraphics graphics, float partialTick,
@@ -683,16 +829,27 @@ public final class TrackEffectEditScreen extends Screen implements DjPanelOwnedS
             DjPanelScreen owner = owningDjPanel();
             if (owner != null && owner.renderActiveCameraPreview(
                     graphics, 0, 0, this.width, this.height, partialTick, effectState)) {
-                graphics.fill(0, 0, this.width, this.height, 0x30070A10);
+                graphics.fill(0, 0, this.width, this.height, WASH);
                 return true;
             }
-            // No camera to show - none linked, a shader in the way, the chunk not loaded. Drawing nothing left the
-            // world and the live effects visible underneath the one being edited, which is exactly the double
-            // image that was reported. Fall back to the plain dark background instead.
-            graphics.fill(0, 0, this.width, this.height, 0xFF090C12);
+            if (this.minecraft == null || this.minecraft.level == null) {
+                // Opened from the title screen (library, editor, FX): there is no world to show, and the empty frame
+                // under the wash was black. The title's panorama stands in for it, under the same wash.
+                renderPanorama(graphics, partialTick);
+                graphics.fill(0, 0, this.width, this.height, WASH);
+                return false;
+            }
+            // No camera to show - none linked, a shader in the way, the chunk not loaded: the world around the player
+            // is the background, under the camera's light wash. This was an opaque fill for a while, to hide the
+            // running effects behind the one being edited; that stack is silent for whoever has an effect editor
+            // open (ClientBattleController.authoringDjFx), so the fill only hid the world the effect is judged against.
+            graphics.fill(0, 0, this.width, this.height, WASH);
             return false;
         }
-        int first = "light".equals(mode) ? 0xFFE8EDF1 : "red".equals(mode) ? 0xFF50151D : "green".equals(mode) ? 0xFF143E28 : 0xFF090C12;
+        // The other backgrounds are test grounds for an effect, not interface: white, a red, a green and a checkerboard
+        // keep the colours that make each one useful; the dark one is the toolkit's page colour.
+        int first = "light".equals(mode) ? 0xFFE8EDF1 : "red".equals(mode) ? 0xFF50151D : "green".equals(mode) ? 0xFF143E28
+                : DARK_BACKGROUND;
         graphics.fill(0, 0, this.width, this.height, first);
         if ("checker".equals(mode)) {
             int cell = 24;
@@ -705,8 +862,8 @@ public final class TrackEffectEditScreen extends Screen implements DjPanelOwnedS
         return false;
     }
 
-    private float beatEnvelope(float tick, int bpm, float playbackSpeed) {
-        float phase = ClientTrackEffects.beatPhase(tick, bpm, playbackSpeed);
+    private float beatEnvelope(float tick, int bpm, float playbackSpeed, float origin) {
+        float phase = ClientTrackEffects.beatPhase(tick, bpm, playbackSpeed, origin);
         return Mth.clamp(1.0F - phase * 4.0F, 0.0F, 1.0F);
     }
 
@@ -717,8 +874,9 @@ public final class TrackEffectEditScreen extends Screen implements DjPanelOwnedS
         }
         int y = this.height - 108;
         float visibility = ClientTrackEffects.visibility(effect, tick);
-        boolean left = highlightOwner(effect, tick, state.bpm(), state.playbackSpeed(), 0);
-        boolean right = highlightOwner(effect, tick, state.bpm(), state.playbackSpeed(), 1);
+        float sinceBeatOne = tick - state.beatOriginTicks();
+        boolean left = highlightOwner(effect, sinceBeatOne, state.bpm(), state.playbackSpeed(), 0);
+        boolean right = highlightOwner(effect, sinceBeatOne, state.bpm(), state.playbackSpeed(), 1);
         drawPreviewPerson(graphics, 14, y, effect, effect.colorA(), left, visibility);
         drawPreviewPerson(graphics, this.width - 48, y, effect, effect.colorB(), right, visibility);
     }
@@ -766,7 +924,7 @@ public final class TrackEffectEditScreen extends Screen implements DjPanelOwnedS
         if (effect == null) return;
         float visibility = ClientTrackEffects.visibility(effect, tick);
         float rhythm = effect.beatReactive()
-                ? 0.18F + 0.82F * beatEnvelope(tick, state.bpm(), state.playbackSpeed()) : 1.0F;
+                ? 0.18F + 0.82F * beatEnvelope(tick, state.bpm(), state.playbackSpeed(), state.beatOriginTicks()) : 1.0F;
         int alpha = Mth.clamp(Math.round(255.0F * effect.opacity() * visibility * rhythm), 0, 255);
         int animatedColor = ClientTrackEffects.objectOutlineColor(effect, tick, state.playbackSpeed());
         int color = (alpha << 24) | (animatedColor & 0x00FFFFFF);
@@ -805,14 +963,51 @@ public final class TrackEffectEditScreen extends Screen implements DjPanelOwnedS
         graphics.fill(x + 18 - spread, y + 48 - spread, x + 26 + spread, y + 74 + spread, color);
     }
 
-    private void label(GuiGraphics graphics, String text, int x, int y) {
-        graphics.drawString(this.font, text, x, y, Palette.TEXT_2, false);
+    /**
+     * A control's name over its cell, in the quiet label face of a form (the colour picker's), on the one or two lines the
+     * layout set it in, the last of them just above the control. Many names carry their range ("Длительность появления
+     * 0–200 тиков (0 = стандарт)"); they used to be cut to a quarter of the panel, with the whole name as a tooltip. The
+     * layout now gives every name the room it needs; only a language the dj-dialogs check never measured can leave one
+     * cut, and then it still shows whole under the pointer.
+     */
+    private void label(GuiGraphics graphics, Shown shown, int mouseX, int mouseY) {
+        LabeledControl control = shown.control();
+        AbstractWidget widget = control.widget();
+        AbstractWidget companion = control.companion();
+        float cell = companion == null ? widget.getWidth() : companion.getX() + companion.getWidth() - widget.getX();
+        float y = widget.getY() - (float) InspectorLayout.LABEL_LINE * shown.lines().size();
+        for (String line : shown.lines()) {
+            TextStyles.queue(graphics, TextStyles.text(line, TextStyle.CAPTION).getVisualOrderText(), widget.getX(), y,
+                    Palette.TEXT_3);
+            y += InspectorLayout.LABEL_LINE;
+        }
+        boolean whole = String.join(" ", shown.lines()).equals(String.join(" ", control.label().trim().split(" +")));
+        float top = widget.getY() - InspectorLayout.LABEL_LINE * Math.max(1, shown.lines().size()) - 2;
+        boolean over = mouseX >= widget.getX() && mouseX < widget.getX() + cell && mouseY >= top
+                && mouseY < widget.getY() + widget.getHeight() && mouseY >= contentTop && mouseY < contentBottom;
+        if (over && !whole) {
+            tip(Component.literal(control.label()), Rect.of(widget.getX(), top, cell, widget.getY() + widget.getHeight() - top));
+        }
+    }
+
+    /**
+     * The font metrics the rows are laid out with: the game's own font in play. The dj-dialogs check sets Minecraft's
+     * glyph metrics here before it builds the screen without a game; the other checks that build it to test its state,
+     * not its words, get six units a letter, the bitmap font's advance, so that their layout still runs.
+     */
+    private ru.gora.musicbattle.client.ui.TextMeasurer measurer() {
+        if (measurer == null) {
+            measurer = minecraft != null ? TextStyles.measurer()
+                    : (text, style) -> text == null ? 0.0F : text.length() * 6.0F;
+        }
+        return measurer;
     }
 
     private void relayout() {
         if (contentWidgets.isEmpty()) return;
         List<List<LabeledControl>> rows = controlRows();
-        int maxWidth = Math.max(360, this.width - 10);
+        // Never wider than the window: a floor of 360 units pushed the panel's right third off a 320-unit window.
+        int maxWidth = Math.max(240, this.width - 10);
         int maxHeight = Math.max(190, this.height - 10);
         panelWidth = Mth.clamp(panelWidth, Math.min(400, maxWidth), maxWidth);
         panelHeight = Mth.clamp(panelHeight, Math.min(210, maxHeight), maxHeight);
@@ -821,47 +1016,140 @@ public final class TrackEffectEditScreen extends Screen implements DjPanelOwnedS
         contentTop = panelTop + 29;
         contentBottom = panelTop + panelHeight - 52;
         int viewportHeight = Math.max(40, contentBottom - contentTop);
-        maxScroll = Math.max(0, rows.size() * 40 - viewportHeight);
+        InspectorLayout layout = InspectorLayout.arrange(cells(rows), panelWidth - 34, measurer());
+        maxScroll = Math.max(0, layout.height() - viewportHeight);
         scrollOffset = Mth.clamp(scrollOffset, 0, maxScroll);
         contentWidgets.forEach(widget -> widget.visible = false);
-        visibleControls.clear();
+        visibleLabels.clear();
         int innerLeft = panelLeft + 14;
-        int innerWidth = panelWidth - 34;
-        int gap = 6;
-        for (int rowIndex = 0; rowIndex < rows.size(); rowIndex++) {
-            List<LabeledControl> row = rows.get(rowIndex);
-            int count = row.size();
-            int cellWidth = Math.max(48, (innerWidth - gap * (count - 1)) / count);
-            int widgetY = contentTop + 13 + rowIndex * 40 - scrollOffset;
-            for (int column = 0; column < count; column++) {
-                LabeledControl control = row.get(column);
-                AbstractWidget widget = control.widget();
-                int cellX = innerLeft + column * (cellWidth + gap);
-                boolean visible = widgetY + 20 > contentTop && widgetY < contentBottom;
-                AbstractWidget companion = control.companion();
-                if (companion == null) {
-                    widget.setRectangle(cellWidth, 20, cellX, widgetY);
-                } else {
-                    // Slider first, then a box just wide enough to type an exact value into.
-                    int boxWidth = Mth.clamp(cellWidth / 3, 30, 52);
-                    int sliderWidth = Math.max(24, cellWidth - boxWidth - 4);
-                    widget.setRectangle(sliderWidth, 20, cellX, widgetY);
-                    companion.setRectangle(boxWidth, 20, cellX + sliderWidth + 4, widgetY);
-                    companion.visible = visible;
-                }
-                widget.visible = visible;
-                if (visible) visibleControls.add(control);
+        for (InspectorLayout.Placed placed : layout.cells()) {
+            LabeledControl control = rows.get(placed.row()).get(placed.column());
+            AbstractWidget widget = control.widget();
+            int cellX = innerLeft + placed.x();
+            int cellWidth = placed.width();
+            int widgetY = contentTop + placed.y() - scrollOffset;
+            boolean visible = widgetY + InspectorLayout.CONTROL > contentTop && widgetY < contentBottom;
+            AbstractWidget companion = control.companion();
+            if (companion == null) {
+                widget.setRectangle(cellWidth, InspectorLayout.CONTROL, cellX, widgetY);
+            } else {
+                // Slider first, then a box just wide enough to type an exact value into.
+                int boxWidth = InspectorLayout.boxWidth(cellWidth);
+                int sliderWidth = cellWidth - boxWidth - InspectorLayout.BOX_GAP;
+                widget.setRectangle(sliderWidth, InspectorLayout.CONTROL, cellX, widgetY);
+                companion.setRectangle(boxWidth, InspectorLayout.CONTROL, cellX + sliderWidth + InspectorLayout.BOX_GAP,
+                        widgetY);
+                companion.visible = visible;
             }
+            if (widget instanceof InspectorButton button) {
+                button.face = placed.face();
+            }
+            widget.visible = visible;
+            if (visible) visibleLabels.add(new Shown(control, placed.label()));
         }
         int count = actionWidgets.size();
         int actionGap = 6;
         int actionWidth = (panelWidth - 28 - actionGap * (count - 1)) / count;
         int actionY = panelTop + panelHeight - 31;
-        for (int index = 0; index < count; index++) {
-            actionWidgets.get(index).setRectangle(actionWidth, 22,
-                    panelLeft + 14 + index * (actionWidth + actionGap), actionY);
-            actionWidgets.get(index).visible = true;
+        List<String> actionLabels = new ArrayList<>();
+        for (AbstractWidget action : actionWidgets) {
+            actionLabels.add(action.getMessage().getString());
         }
+        TextStyle actionFace = InspectorLayout.actionFace(actionLabels, actionWidth, measurer());
+        for (int index = 0; index < count; index++) {
+            AbstractWidget action = actionWidgets.get(index);
+            action.setRectangle(actionWidth, 22, panelLeft + 14 + index * (actionWidth + actionGap), actionY);
+            action.visible = true;
+            if (action instanceof InspectorButton button) {
+                button.face = actionFace;
+            }
+        }
+    }
+
+    /** The rows as the layout reads them: every control's label, what kind of control it is and every word it shows. */
+    private List<List<InspectorLayout.Cell>> cells(List<List<LabeledControl>> rows) {
+        List<List<InspectorLayout.Cell>> cells = new ArrayList<>(rows.size());
+        for (List<LabeledControl> row : rows) {
+            List<InspectorLayout.Cell> line = new ArrayList<>(row.size());
+            for (LabeledControl control : row) {
+                line.add(cell(control));
+            }
+            cells.add(line);
+        }
+        return cells;
+    }
+
+    /** The rows of the inspector as it stands, for the dj-dialogs check, which lays them out at every width. */
+    List<List<InspectorLayout.Cell>> inspectorCells() {
+        return cells(controlRows());
+    }
+
+    private InspectorLayout.Cell cell(LabeledControl control) {
+        AbstractWidget widget = control.widget();
+        List<String> labels = new ArrayList<>();
+        labels.add(control.label());
+        labels.addAll(control.alternatives());
+        if (control.companion() != null) {
+            return new InspectorLayout.Cell(labels, InspectorLayout.Kind.SLIDER, List.of());
+        }
+        if (widget instanceof InspectorButton button) {
+            boolean check = button.state != null && button.state.get() != null;
+            return new InspectorLayout.Cell(labels, check ? InspectorLayout.Kind.SWITCH : InspectorLayout.Kind.BUTTON,
+                    buttonTexts(button));
+        }
+        return new InspectorLayout.Cell(labels, widget instanceof ExactColorButton ? InspectorLayout.Kind.COLOR
+                : InspectorLayout.Kind.FIELD, List.of());
+    }
+
+    /**
+     * Every word a button can show: the values a cycling button steps through, or the one label of any other. The layout
+     * makes room for the longest, so a row never rearranges itself under the pointer while the DJ clicks through them.
+     * The effect's button does not cycle: it opens the picker, and the inspector is laid out anew for the effect chosen,
+     * so its current name is all it needs room for.
+     */
+    private List<String> buttonTexts(Button button) {
+        List<String> texts = new ArrayList<>();
+        if (button == backgroundButton) {
+            for (String background : BACKGROUNDS) {
+                texts.add(Component.translatable("music_battle.l10n.fx.background_value",
+                        Component.translatable("music_battle.l10n.fx.background." + background)).getString());
+            }
+        } else if (button == fontButton) {
+            for (BattleTextFonts.FontPreset preset : BattleTextFonts.presets()) {
+                texts.add(Component.translatable("music_battle.l10n.fx.font_value", preset.displayName()).getString());
+            }
+        } else if (button == animationButton || button == exitAnimationButton) {
+            boolean entrance = button == animationButton;
+            for (String value : entrance ? TEXT_ANIMATIONS : TEXT_EXIT_ANIMATIONS) {
+                texts.add(Component.translatable(entrance ? "music_battle.l10n.fx.entrance_value"
+                        : "music_battle.l10n.fx.exit_value", animationName(value)).getString());
+            }
+        } else if (button == variantButton && type != TrackEffect.Type.VISUALIZER) {
+            for (String mode : HIGHLIGHT_MODES) {
+                texts.add(Component.translatable("music_battle.l10n.fx.mode_value",
+                        Component.translatable("music_battle.l10n.fx.highlight." + mode)).getString());
+            }
+        } else if (button == gradientButton) {
+            texts.add(tr("music_battle.l10n.fx.label_121"));
+            texts.add(tr("music_battle.l10n.fx.label_122"));
+        } else if (button == sectionsButton) {
+            for (int sections : VISUALIZER_SECTIONS) {
+                texts.add(Component.translatable("music_battle.l10n.fx.bars_value", sections).getString());
+            }
+        } else if (button == visualizerPositionButton) {
+            for (String position : VISUALIZER_POSITIONS) {
+                texts.add(Component.translatable("music_battle.l10n.fx.position_value", visualizerPositionName(position))
+                        .getString());
+            }
+        } else if (button == starDirectionButton) {
+            for (String direction : STAR_DIRECTIONS) {
+                texts.add(Component.translatable("effect.music_battle.stars.direction.value",
+                        Component.translatable("effect.music_battle.stars.direction." + direction)).getString());
+            }
+        } else {
+            texts.add(button.getMessage().getString());
+        }
+        return texts;
     }
 
     private List<List<LabeledControl>> controlRows() {
@@ -877,10 +1165,11 @@ public final class TrackEffectEditScreen extends Screen implements DjPanelOwnedS
         }
         if (type == TrackEffect.Type.HIDE_BATTLE_PANELS || type == TrackEffect.Type.HIDE_PARTICLES_HAND) {
             if (type == TrackEffect.Type.HIDE_PARTICLES_HAND) {
-                rows.add(List.of(control(hideParticlesButton, tr("music_battle.fx.hide_particles")),
-                        control(hideFirstPersonHandButton, tr("music_battle.fx.hide_hand"))));
-                rows.add(List.of(control(hideHudButton, tr("music_battle.fx.hide_hud"))));
-                rows.add(List.of(control(hideBlockyMusicHudButton, tr("music_battle.fx.hide_blocky_music_hud"))));
+                // Each label names what its switch hides; the switch keeps the words the guide quotes ("Hide HUD").
+                rows.add(List.of(control(hideParticlesButton, tr("music_battle.fx.particles")),
+                        control(hideFirstPersonHandButton, tr("music_battle.fx.hand"))));
+                rows.add(List.of(control(hideHudButton, tr("music_battle.fx.hud"))));
+                rows.add(List.of(control(hideBlockyMusicHudButton, tr("music_battle.fx.blocky_music_hud"))));
             }
             if (host.showTimelineControls()) {
                 List<LabeledControl> timeline = new ArrayList<>();
@@ -923,12 +1212,18 @@ public final class TrackEffectEditScreen extends Screen implements DjPanelOwnedS
                 || type == TrackEffect.Type.PLAYER_HIGHLIGHT || type == TrackEffect.Type.VIGNETTE
                 || type == TrackEffect.Type.CINEMATIC_BARS || type == TrackEffect.Type.OBJECT_OUTLINE;
         if (type == TrackEffect.Type.OBJECT_OUTLINE) {
+            // A colour's label names it selected or not, with its code; the layout measures both forms with the widest
+            // code there is, so choosing or recolouring one never rearranges the palette under the pointer.
+            String widestCode = widestColorCode();
             for (int start = 0; start < objectOutlineColors.size(); start += 4) {
                 List<LabeledControl> paletteRow = new ArrayList<>();
                 for (int index = start; index < Math.min(start + 4, objectOutlineColors.size()); index++) {
-                    paletteRow.add(control(objectOutlineColorButtons.get(index),
+                    LabeledControl swatch = control(objectOutlineColorButtons.get(index),
                             tr(index == selectedObjectOutlineColor ? "music_battle.l10n.fx.selected_palette_color"
-                                    : "music_battle.l10n.fx.palette_color", index + 1, colorText(objectOutlineColors.get(index)))));
+                                    : "music_battle.l10n.fx.palette_color", index + 1, colorText(objectOutlineColors.get(index))));
+                    paletteRow.add(swatch.withAlternatives(List.of(
+                            tr("music_battle.l10n.fx.selected_palette_color", index + 1, widestCode),
+                            tr("music_battle.l10n.fx.palette_color", index + 1, widestCode))));
                 }
                 rows.add(paletteRow);
             }
@@ -1050,20 +1345,37 @@ public final class TrackEffectEditScreen extends Screen implements DjPanelOwnedS
         FxSlider slider = widget instanceof EditBox box ? sliders.get(box) : null;
         // A numeric field occupies its cell as slider + box; everything else keeps the whole cell.
         return slider == null ? new LabeledControl(widget, label)
-                : new LabeledControl(slider, label, widget);
+                : new LabeledControl(slider, label, widget, List.of());
     }
 
+    /** A colour code as wide as any can be in the caption face: each of its six digits the widest hex digit. */
+    private String widestColorCode() {
+        char widest = '0';
+        float width = -1.0F;
+        for (char digit : "0123456789ABCDEF".toCharArray()) {
+            float candidate = measurer().width(String.valueOf(digit), TextStyle.CAPTION);
+            if (candidate > width) {
+                width = candidate;
+                widest = digit;
+            }
+        }
+        return "#" + String.valueOf(widest).repeat(6);
+    }
+
+    /** The Workshop's scrollbar in the gutter at the panel's right edge. */
     private void drawScrollbar(GuiGraphics graphics) {
-        int x = panelLeft + panelWidth - 8;
-        graphics.fill(x, contentTop, x + 3, contentBottom, 0xFF263847);
         int track = contentBottom - contentTop;
-        int thumb = Math.max(18, Math.round(track * track / (float) (track + maxScroll)));
-        int y = contentTop + Math.round((track - thumb) * scrollOffset / (float) maxScroll);
-        graphics.fill(x, y, x + 3, y + thumb, 0xFFE3A6FF);
+        WorkshopDraw.scrollbar(graphics, new Rect(panelLeft + panelWidth - 13.0F, contentTop, 8.0F, track), scrollOffset,
+                track + maxScroll, false);
     }
 
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
+        if (effectPickerOpen || fontPickerOpen) {
+            PickerLayout picker = effectPickerOpen ? effectPicker() : fontPicker();
+            pickerScroll = Mth.clamp(pickerScroll - (int) Math.round(scrollY * 28.0D), 0, picker.maxScroll());
+            return true;
+        }
         if (!fontPickerOpen && maxScroll > 0 && mouseX >= panelLeft && mouseX < panelLeft + panelWidth
                 && mouseY >= contentTop && mouseY < contentBottom) {
             scrollOffset = Mth.clamp(scrollOffset - (int) Math.round(scrollY * 28.0D), 0, maxScroll);
@@ -1095,8 +1407,8 @@ public final class TrackEffectEditScreen extends Screen implements DjPanelOwnedS
     private void cycleLayer() { lane = (lane + 1) % 4; layerButton.setMessage(layerLabel()); }
     private void cyclePlacement() { placementMode = next(PLACEMENT_MODES, placementMode); placementButton.setMessage(placementLabel()); }
     private void cycleBackground() { backgroundIndex = (backgroundIndex + 1) % BACKGROUNDS.length; backgroundButton.setMessage(backgroundLabel()); }
-    private void openFontPicker() { fontPickerOpen = true; }
-    private void openEffectPicker() { effectPickerOpen = true; }
+    private void openFontPicker() { fontPickerOpen = true; pickerScroll = 0; }
+    private void openEffectPicker() { effectPickerOpen = true; pickerScroll = 0; }
     private void cycleAnimation() { animation = next(TEXT_ANIMATIONS, animation); animationButton.setMessage(animationLabel()); }
     private void cycleExitAnimation() { exitAnimation = next(TEXT_EXIT_ANIMATIONS, exitAnimation); exitAnimationButton.setMessage(exitAnimationLabel()); }
     private void cycleVariant() {
@@ -1112,7 +1424,7 @@ public final class TrackEffectEditScreen extends Screen implements DjPanelOwnedS
     }
 
     private void cycleVisualizerSections() {
-        int[] values = {8, 12, 16, 24, 32, 48, 64};
+        int[] values = VISUALIZER_SECTIONS;
         int current = visualizerSections(variant);
         int next = values[0];
         for (int index = 0; index < values.length; index++) {
@@ -1777,8 +2089,9 @@ public final class TrackEffectEditScreen extends Screen implements DjPanelOwnedS
             }
             return true;
         }
-        if (hasControlDown() && keyCode == org.lwjgl.glfw.GLFW.GLFW_KEY_Z) {
-            if (hasShiftDown()) redoSettings(); else undoSettings();
+        // Ctrl on every system, Cmd too on a Mac (Screen.hasControlDown() there is Cmd only), as in the chart editor.
+        if (EditorShortcuts.shortcutDown() && keyCode == org.lwjgl.glfw.GLFW.GLFW_KEY_Z) {
+            if (EditorShortcuts.shiftDown()) redoSettings(); else undoSettings();
             return true;
         }
         if (keyCode == org.lwjgl.glfw.GLFW.GLFW_KEY_TAB) {
@@ -1880,130 +2193,296 @@ public final class TrackEffectEditScreen extends Screen implements DjPanelOwnedS
         return super.mouseReleased(mouseX, mouseY, button);
     }
 
+    /**
+     * The effects to choose from, as cards in a dialog over the preview. The dialog stays inside the window and its cards
+     * scroll when the window is too short for all sixteen: on a 320x240 window the old one ran off the bottom.
+     */
     private void drawEffectPicker(GuiGraphics graphics, int mouseX, int mouseY) {
         graphics.flush();
         TrackEffect.Type[] types = TrackEffect.Type.values();
-        int columns = effectPickerColumns();
-        int rows = (types.length + columns - 1) / columns;
-        int cardHeight = effectPickerCardHeight(rows);
-        int pickerWidth = Math.min(this.width - 20, columns * 204 + 28);
-        int pickerHeight = 50 + rows * (cardHeight + 6) + 22;
-        int left = this.width / 2 - pickerWidth / 2;
-        int top = Math.max(4, this.height / 2 - pickerHeight / 2);
-        int cardWidth = (pickerWidth - 28 - (columns - 1) * 6) / columns;
-        graphics.fill(0, 0, this.width, this.height, 0xFF081018);
-        graphics.fill(left, top, left + pickerWidth, top + pickerHeight, 0xFA111B25);
-        graphics.fill(left, top, left + pickerWidth, top + 3, 0xFFE3A6FF);
-        graphics.drawCenteredString(this.font, tr("music_battle.l10n.fx.label_114"),
-                this.width / 2, top + 13, 0xFFFFFFFF);
+        List<String> names = new ArrayList<>(types.length);
+        for (TrackEffect.Type candidate : types) {
+            names.add(effectName(candidate));
+        }
+        PickerLayout picker = effectPicker();
+        pickerScroll = Mth.clamp(pickerScroll, 0, picker.maxScroll());
+        drawPickerPanel(graphics, picker);
+        UiClip.push(graphics, picker.left() + 4, picker.viewportTop() - 2, picker.right() - 4, picker.viewportBottom() + 2);
+        float textWidth = picker.cardWidth() - PickerLayout.EFFECT_TEXT_PAD;
+        String tooltip = null;
+        Rect tooltipCard = null;
         for (int index = 0; index < types.length; index++) {
             TrackEffect.Type candidate = types[index];
-            int column = index % columns;
-            int row = index / columns;
-            int x = left + 14 + column * (cardWidth + 6);
-            int y = top + 36 + row * (cardHeight + 6);
-            boolean hovered = mouseX >= x && mouseX < x + cardWidth && mouseY >= y && mouseY < y + cardHeight;
+            Rect card = picker.card(index, pickerScroll);
+            if (!picker.visible(card)) {
+                continue;
+            }
+            boolean hovered = picker.hit(card, mouseX, mouseY);
             boolean selected = candidate == type;
-            int border = selected ? 0xFFE3A6FF : hovered ? Palette.ACCENT : 0xFF304658;
-            graphics.fill(x, y, x + cardWidth, y + cardHeight, border);
-            graphics.fill(x + 2, y + 2, x + cardWidth - 2, y + cardHeight - 2,
-                    hovered ? 0xFF263947 : 0xFF182631);
-            graphics.fill(x + 2, y + 2, x + 7, y + cardHeight - 2, candidate.color());
-            graphics.drawString(this.font, effectName(candidate), x + 13, y + 7,
-                    selected ? 0xFFFFD7FF : 0xFFFFFFFF, false);
-            String description = this.font.plainSubstrByWidth(effectDescription(candidate), cardWidth - 22);
-            graphics.drawString(this.font, description, x + 13, y + 25, Palette.TEXT_3, false);
+            drawPickerCard(graphics, card, hovered, selected);
+            // The effect's colour, the one its blocks have on the timeline, as the card's rail.
+            RoundedRect.pill(graphics, card.x() + 2.0F, card.y() + 5.0F, 3.0F, card.h() - 10.0F, 0xFF000000 | candidate.color());
+            TextStyle face = PickerLayout.nameFace(TextStyles.measurer(), names.get(index), textWidth);
+            String name = TextFit.ellipsize(TextStyles.measurer(), names.get(index), face, textWidth);
+            TextStyles.queue(graphics, TextStyles.text(name, face).getVisualOrderText(), card.x() + 11, card.y() + 7,
+                    selected ? Palette.ACCENT : Palette.TEXT_1);
+            String description = effectDescription(candidate);
+            List<String> lines = TextFit.wrap(TextStyles.measurer(), description, TextStyle.CAPTION, textWidth, 2);
+            float lineY = card.y() + 21;
+            for (String line : lines) {
+                TextStyles.queue(graphics, TextStyles.text(line, TextStyle.CAPTION).getVisualOrderText(), card.x() + 11, lineY,
+                        Palette.TEXT_3);
+                lineY += ru.gora.musicbattle.client.workshop.layout.Metrics.lineHeight(TextStyle.CAPTION);
+            }
+            // What a card cannot say whole, it says under the pointer.
+            boolean cut = !name.equals(names.get(index)) || !String.join(" ", lines).equals(String.join(" ", description.split(" +")));
+            if (hovered && cut) {
+                tooltip = names.get(index) + "\n" + description;
+                tooltipCard = card;
+            }
+        }
+        UiClip.pop(graphics);
+        WorkshopDraw.scrollbar(graphics, new Rect(picker.left() + 14, picker.viewportTop(), picker.width() - 22.0F,
+                picker.viewportBottom() - picker.viewportTop()), pickerScroll, picker.contentHeight(), false);
+        if (tooltip != null) {
+            tip(Component.literal(tooltip), tooltipCard);
+        }
+    }
+
+    /** A picker's dialog over the preview: the page colour behind it, the raised panel and its heading over a hairline. */
+    private void drawPickerPanel(GuiGraphics graphics, PickerLayout picker) {
+        graphics.fill(0, 0, this.width, this.height, PICKER_BACKDROP);
+        RoundedRect.shadow(graphics, picker.left(), picker.top() + 2.0F, picker.width(), picker.height(), Palette.RADIUS_LG,
+                12.0F, Palette.SHADOW_LIFTED);
+        RoundedRect.fill(graphics, picker.left(), picker.top(), picker.width(), picker.height(), Palette.RADIUS_LG, Palette.BG_1);
+        RoundedRect.stroke(graphics, picker.left(), picker.top(), picker.width(), picker.height(), Palette.RADIUS_LG, 1.0F,
+                Palette.LINE);
+        float y = picker.top() + PickerLayout.HEADING_Y;
+        for (String line : picker.heading()) {
+            TextStyles.queueCentered(graphics, TextStyles.text(line, picker.headingFace()).getVisualOrderText(),
+                    picker.left() + picker.width() / 2.0F, y, Palette.TEXT_1);
+            y += ru.gora.musicbattle.client.workshop.layout.Metrics.lineHeight(picker.headingFace());
+        }
+        RoundedRect.fill(graphics, picker.left() + 14, picker.ruleY(), picker.width() - 28.0F, 1.0F, 0.0F, Palette.LINE);
+    }
+
+    /** A choice in a picker, as the Workshop draws a card: lifted under the pointer, the current one in the accent. */
+    private static void drawPickerCard(GuiGraphics graphics, Rect card, boolean hovered, boolean selected) {
+        if (hovered) {
+            HandCursor.request(HandCursor.Kind.HAND);
+            RoundedRect.shadow(graphics, card.x(), card.y() + 2, card.w(), card.h(), Palette.RADIUS_MD, 7.0F,
+                    Palette.SHADOW_LIFTED);
+        }
+        int fill = selected ? Palette.mix(Palette.BG_3, Palette.ACCENT_DEEP, 0.85F) : hovered ? Palette.BG_3 : Palette.BG_2;
+        RoundedRect.fill(graphics, card.x(), card.y(), card.w(), card.h(), Palette.RADIUS_MD, fill);
+        if (selected || hovered) {
+            RoundedRect.stroke(graphics, card.x(), card.y(), card.w(), card.h(), Palette.RADIUS_MD, 1.0F,
+                    selected ? Palette.ACCENT : Palette.fade(Palette.ACCENT, 0.5F));
         }
     }
 
     private int effectPresetAt(double mouseX, double mouseY) {
-        TrackEffect.Type[] types = TrackEffect.Type.values();
-        int columns = effectPickerColumns();
-        int rows = (types.length + columns - 1) / columns;
-        int cardHeight = effectPickerCardHeight(rows);
-        int pickerWidth = Math.min(this.width - 20, columns * 204 + 28);
-        int pickerHeight = 50 + rows * (cardHeight + 6) + 22;
-        int left = this.width / 2 - pickerWidth / 2;
-        int top = Math.max(4, this.height / 2 - pickerHeight / 2);
-        int cardWidth = (pickerWidth - 28 - (columns - 1) * 6) / columns;
-        for (int index = 0; index < types.length; index++) {
-            int x = left + 14 + (index % columns) * (cardWidth + 6);
-            int y = top + 36 + (index / columns) * (cardHeight + 6);
-            if (mouseX >= x && mouseX < x + cardWidth && mouseY >= y && mouseY < y + cardHeight) {
+        PickerLayout picker = effectPicker();
+        for (int index = 0; index < TrackEffect.Type.values().length; index++) {
+            if (picker.hit(picker.card(index, pickerScroll), mouseX, mouseY)) {
                 return index;
             }
         }
         return -1;
     }
 
-    private int effectPickerColumns() {
-        if (this.width >= 820) return 4;
-        return this.width >= 520 ? 3 : 2;
-    }
-
-    private int effectPickerCardHeight(int rows) {
-        int availablePerRow = Math.max(38, (this.height - 78) / Math.max(1, rows) - 6);
-        return Mth.clamp(availablePerRow, 38, 52);
+    private PickerLayout effectPicker() {
+        List<String> names = new ArrayList<>();
+        for (TrackEffect.Type candidate : TrackEffect.Type.values()) {
+            names.add(effectName(candidate));
+        }
+        return PickerLayout.fitting(this.width, this.height, names, this.width >= 820 ? 4 : this.width >= 520 ? 3 : 2,
+                PickerLayout.EFFECT_CARD, PickerLayout.EFFECT_TEXT_PAD, TextStyle.CAPTION,
+                tr("music_battle.l10n.fx.label_114"), TextStyles.measurer());
     }
 
     private static String effectDescription(TrackEffect.Type candidate) {
         return Component.translatable(candidate.translationKey() + ".description").getString();
     }
 
+    /** The fonts of a text effect, each card showing the effect's own text in that font; scrolls like the effects. */
     private void drawFontPicker(GuiGraphics graphics, int mouseX, int mouseY) {
         graphics.flush();
         List<BattleTextFonts.FontPreset> presets = BattleTextFonts.presets();
-        int columns = this.width >= 600 ? 3 : 2;
-        int panelWidth = Math.min(this.width - 20, columns * 204 + 28);
-        int rows = (presets.size() + columns - 1) / columns;
-        int cardHeight = 46;
-        int panelHeight = 50 + rows * (cardHeight + 6) + 22;
-        int left = this.width / 2 - panelWidth / 2;
-        int top = Math.max(4, this.height / 2 - panelHeight / 2);
-        int cardWidth = (panelWidth - 28 - (columns - 1) * 6) / columns;
-        graphics.fill(0, 0, this.width, this.height, 0xFF081018);
-        graphics.fill(left, top, left + panelWidth, top + panelHeight, 0xFA111B25);
-        graphics.fill(left, top, left + panelWidth, top + 3, 0xFFE3A6FF);
-        graphics.drawCenteredString(this.font, tr("music_battle.l10n.fx.label_115"), this.width / 2, top + 13, 0xFFFFFFFF);
+        PickerLayout picker = fontPicker();
+        pickerScroll = Mth.clamp(pickerScroll, 0, picker.maxScroll());
+        drawPickerPanel(graphics, picker);
         String sample = textBox == null || textBox.getValue().isBlank() ? "Blocky Music 123" : textBox.getValue();
+        String tooltip = null;
+        Rect tooltipCard = null;
         for (int index = 0; index < presets.size(); index++) {
-            int column = index % columns;
-            int row = index / columns;
-            int x = left + 14 + column * (cardWidth + 6);
-            int y = top + 36 + row * (cardHeight + 6);
-            boolean hovered = mouseX >= x && mouseX < x + cardWidth && mouseY >= y && mouseY < y + cardHeight;
+            Rect card = picker.card(index, pickerScroll);
+            if (!picker.visible(card)) {
+                continue;
+            }
+            int x = Math.round(card.x());
+            int y = Math.round(card.y());
+            int cardWidth = Math.round(card.w());
+            int cardHeight = Math.round(card.h());
+            boolean hovered = picker.hit(card, mouseX, mouseY);
             boolean selected = presets.get(index).id().equals(fontId);
-            int border = selected ? 0xFFE3A6FF : hovered ? Palette.ACCENT : 0xFF304658;
-            graphics.fill(x, y, x + cardWidth, y + cardHeight, border);
-            graphics.fill(x + 2, y + 2, x + cardWidth - 2, y + cardHeight - 2, hovered ? 0xFF263947 : 0xFF182631);
-            graphics.drawString(this.font, presets.get(index).displayName(), x + 6, y + 5,
-                    selected ? 0xFFFFD7FF : Palette.TEXT_2, false);
+            UiClip.push(graphics, picker.left() + 4, picker.viewportTop() - 2, picker.right() - 4, picker.viewportBottom() + 2);
+            drawPickerCard(graphics, card, hovered, selected);
+            String fullName = presets.get(index).displayName();
+            String name = TextFit.ellipsize(TextStyles.measurer(), fullName, TextStyle.LABEL,
+                    cardWidth - PickerLayout.FONT_TEXT_PAD);
+            TextStyles.queue(graphics, TextStyles.text(name, TextStyle.LABEL).getVisualOrderText(), x + 6, y + 6,
+                    selected ? Palette.ACCENT : Palette.TEXT_2);
+            UiClip.pop(graphics);
+            if (hovered && !name.equals(fullName)) {
+                tooltip = fullName;
+                tooltipCard = card;
+            }
+            // The sample is the font itself, drawn by the battle's own text renderer: it is the thing being chosen.
             String fitted = this.font.plainSubstrByWidth(sample,
                     Math.max(20, Math.round((cardWidth - 12) / presets.get(index).widthScale())));
-            graphics.enableScissor(x + 3, y + 20, x + cardWidth - 3, y + cardHeight - 3);
-            BattleTextFonts.drawCentered(graphics, this.font, fitted, presets.get(index).id(),
-                    x + cardWidth / 2.0F, y + 25.0F, 0xFFFFFFFF, 0xFF000000, 0.0F);
-            graphics.disableScissor();
+            int sampleTop = Math.max(y + 20, Math.round(picker.viewportTop()));
+            int sampleBottom = Math.min(y + cardHeight - 3, Math.round(picker.viewportBottom()));
+            if (sampleBottom > sampleTop) {
+                UiClip.push(graphics, x + 3, sampleTop, x + cardWidth - 3, sampleBottom);
+                BattleTextFonts.drawCentered(graphics, this.font, fitted, presets.get(index).id(),
+                        x + cardWidth / 2.0F, y + 25.0F, 0xFFFFFFFF, 0xFF000000, 0.0F);
+                UiClip.pop(graphics);
+            }
+        }
+        WorkshopDraw.scrollbar(graphics, new Rect(picker.left() + 14, picker.viewportTop(), picker.width() - 22.0F,
+                picker.viewportBottom() - picker.viewportTop()), pickerScroll, picker.contentHeight(), false);
+        if (tooltip != null) {
+            tip(Component.literal(tooltip), tooltipCard);
         }
     }
 
     private int fontPresetAt(double mouseX, double mouseY) {
-        int columns = this.width >= 600 ? 3 : 2;
-        int panelWidth = Math.min(this.width - 20, columns * 204 + 28);
-        int rows = (BattleTextFonts.presets().size() + columns - 1) / columns;
-        int cardHeight = 46;
-        int panelHeight = 50 + rows * (cardHeight + 6) + 22;
-        int left = this.width / 2 - panelWidth / 2;
-        int top = Math.max(4, this.height / 2 - panelHeight / 2);
-        int cardWidth = (panelWidth - 28 - (columns - 1) * 6) / columns;
+        PickerLayout picker = fontPicker();
         for (int index = 0; index < BattleTextFonts.presets().size(); index++) {
-            int x = left + 14 + (index % columns) * (cardWidth + 6);
-            int y = top + 36 + (index / columns) * (cardHeight + 6);
-            if (mouseX >= x && mouseX < x + cardWidth && mouseY >= y && mouseY < y + cardHeight) {
+            if (picker.hit(picker.card(index, pickerScroll), mouseX, mouseY)) {
                 return index;
             }
         }
         return -1;
+    }
+
+    private PickerLayout fontPicker() {
+        List<String> names = new ArrayList<>();
+        for (BattleTextFonts.FontPreset preset : BattleTextFonts.presets()) {
+            names.add(preset.displayName());
+        }
+        return PickerLayout.fitting(this.width, this.height, names, this.width >= 600 ? 3 : 2, PickerLayout.FONT_CARD,
+                PickerLayout.FONT_TEXT_PAD, TextStyle.LABEL, tr("music_battle.l10n.fx.label_115"), TextStyles.measurer());
+    }
+
+    /**
+     * Where a picker of effects or fonts sits: a panel no wider than the window less twenty units and no taller than the
+     * window less eight, its heading in up to two lines of the title face, and a viewport of cards under a hairline that
+     * scrolls when the window is too short for all of them. Pure, for the dj-dialogs check.
+     */
+    record PickerLayout(int left, int top, int width, int height, List<String> heading, TextStyle headingFace, int ruleY,
+                        int viewportTop, int viewportBottom, int columns, int cardWidth, int cardHeight, int contentHeight) {
+        /** An effect's card: its name and two lines of its description. */
+        static final int EFFECT_CARD = 46;
+        /** A font's card: its name and a sample of the text in the font. */
+        static final int FONT_CARD = 46;
+        static final int HEADING_Y = 10;
+        static final int CARD_GAP = 6;
+        /** What a card keeps beside its name: the rail and the margins of an effect's card, the margins of a font's. */
+        static final float EFFECT_TEXT_PAD = 22.0F;
+        static final float FONT_TEXT_PAD = 12.0F;
+
+        /**
+         * The picker with as many columns as the window allows, or fewer: the first count, down to one, in which every name
+         * is whole in its card in the smallest face it may take. In Russian "Скрытие панелей над игроками" does not fit a
+         * card of two columns on a 320-unit window even in captions, so there the picker is one column that scrolls.
+         */
+        static PickerLayout fitting(int windowWidth, int windowHeight, List<String> names, int maxColumns, int cardHeight,
+                                    float textPad, TextStyle smallest, String title,
+                                    ru.gora.musicbattle.client.ui.TextMeasurer measurer) {
+            PickerLayout layout = null;
+            for (int columns = maxColumns; columns >= 1; columns--) {
+                layout = of(windowWidth, windowHeight, names.size(), columns, cardHeight, title, measurer);
+                boolean whole = true;
+                for (String name : names) {
+                    whole &= TextFit.width(measurer, name, smallest) <= layout.cardWidth() - textPad;
+                }
+                if (whole) {
+                    return layout;
+                }
+            }
+            return layout;
+        }
+
+        static PickerLayout of(int windowWidth, int windowHeight, int count, int columns, int cardHeight, String title,
+                               ru.gora.musicbattle.client.ui.TextMeasurer measurer) {
+            int width = Math.max(120, Math.min(windowWidth - 20, columns * 204 + 28));
+            int cardWidth = (width - 28 - (columns - 1) * CARD_GAP) / columns;
+            // The heading in the title face on two lines at most, else in the strong face on two, then three: the
+            // Russian "Выбери FX: каждый инструмент сохраняет свои настройки" needs three on a 320-unit window.
+            TextStyle headingFace = TextStyle.STRONG;
+            List<String> heading = null;
+            for (Object[] shape : new Object[][]{{TextStyle.TITLE, 2}, {TextStyle.STRONG, 2}, {TextStyle.STRONG, 3}}) {
+                TextStyle face = (TextStyle) shape[0];
+                List<String> lines = TextFit.wrap(measurer, title, face, width - 28.0F);
+                boolean wordsWhole = true;
+                for (String word : title.split(" ")) {
+                    wordsWhole &= TextFit.width(measurer, word, face) <= width - 28.0F;
+                }
+                if (wordsWhole && lines.size() <= (int) shape[1]) {
+                    headingFace = face;
+                    heading = lines;
+                    break;
+                }
+            }
+            if (heading == null) {
+                heading = TextFit.wrap(measurer, title, headingFace, width - 28.0F, 3);
+            }
+            int ruleY = (int) Math.ceil(HEADING_Y + heading.size()
+                    * ru.gora.musicbattle.client.workshop.layout.Metrics.lineHeight(headingFace)) + 4;
+            int rows = (count + columns - 1) / columns;
+            int contentHeight = rows * (cardHeight + CARD_GAP) - CARD_GAP;
+            int needed = ruleY + 9 + contentHeight + 14;
+            int height = Math.min(Math.max(ruleY + 9 + cardHeight + 14, windowHeight - 8), needed);
+            int top = Math.max(4, (windowHeight - height) / 2);
+            int left = (windowWidth - width) / 2;
+            return new PickerLayout(left, top, width, height, heading, headingFace, top + ruleY, top + ruleY + 9,
+                    top + height - 14, columns, cardWidth, cardHeight, contentHeight);
+        }
+
+        /** The face a name takes in its card: the strong face, else body, else captions (cut, with a tooltip, past that). */
+        static TextStyle nameFace(ru.gora.musicbattle.client.ui.TextMeasurer measurer, String name, float width) {
+            for (TextStyle face : new TextStyle[]{TextStyle.STRONG, TextStyle.BODY, TextStyle.CAPTION}) {
+                if (TextFit.width(measurer, name, face) <= width) {
+                    return face;
+                }
+            }
+            return TextStyle.CAPTION;
+        }
+
+        int right() {
+            return left + width;
+        }
+
+        int maxScroll() {
+            return Math.max(0, contentHeight - (viewportBottom - viewportTop));
+        }
+
+        Rect card(int index, int scroll) {
+            return new Rect(left + 14 + (index % columns) * (cardWidth + CARD_GAP),
+                    viewportTop + (index / columns) * (cardHeight + CARD_GAP) - scroll, cardWidth, cardHeight);
+        }
+
+        /** Whether any of a card shows inside the scrolling viewport. */
+        boolean visible(Rect card) {
+            return card.bottom() > viewportTop && card.y() < viewportBottom;
+        }
+
+        /** A click lands on a card only where the card shows. */
+        boolean hit(Rect card, double mouseX, double mouseY) {
+            return card.contains(mouseX, mouseY) && mouseY >= viewportTop && mouseY < viewportBottom;
+        }
     }
 
     private Component typeLabel() { return Component.translatable("music_battle.l10n.fx.effect_value", Component.translatable(type.translationKey())); }
@@ -2021,7 +2500,7 @@ public final class TrackEffectEditScreen extends Screen implements DjPanelOwnedS
     private Component animationLabel() { return Component.translatable("music_battle.l10n.fx.entrance_value", animationName(animation)); }
     private Component exitAnimationLabel() { return Component.translatable("music_battle.l10n.fx.exit_value", animationName(exitAnimation)); }
     private Component variantLabel() {
-        if (type == TrackEffect.Type.VISUALIZER) return checkboxLabel(visualizerFullWidth(variant), tr("music_battle.l10n.fx.label_120"));
+        if (type == TrackEffect.Type.VISUALIZER) return switchLabel(tr("music_battle.l10n.fx.label_120"));
         return Component.translatable("music_battle.l10n.fx.mode_value", Component.translatable("music_battle.l10n.fx.highlight." + variant));
     }
     private Component gradientLabel() { return Component.translatable(visualizerVertical(variant) ? "music_battle.l10n.fx.label_121" : "music_battle.l10n.fx.label_122"); }
@@ -2032,31 +2511,37 @@ public final class TrackEffectEditScreen extends Screen implements DjPanelOwnedS
                 Component.translatable("effect.music_battle.stars.direction." + starDirection));
     }
     private Component beatReactiveLabel() {
-        return checkboxLabel(beatReactive, type == TrackEffect.Type.OBJECT_OUTLINE
+        return switchLabel(type == TrackEffect.Type.OBJECT_OUTLINE
                 ? tr("music_battle.l10n.fx.label_125") : tr("music_battle.l10n.fx.label_126"));
     }
     private boolean flashFollowsBeat() { return !"steady".equalsIgnoreCase(variant); }
-    private Component flashBeatLabel() { return checkboxLabel(flashFollowsBeat(), tr("music_battle.l10n.fx.label_125")); }
-    private Component tvSweepLabel() { return checkboxLabel(tvSweepEnabled, tr("music_battle.l10n.fx.label_061")); }
-    private Component cinematicAnimationLabel() { return checkboxLabel(cinematicAnimated, tr("music_battle.l10n.fx.label_127")); }
-    private Component fishEyeRemoveBlackEdgesLabel() { return checkboxLabel(fishEyeRemoveBlackEdges, tr("music_battle.l10n.fx.label_128")); }
-    private Component overlayTextLabel() { return checkboxLabel(overlayText, tr("music_battle.l10n.fx.label_129")); }
-    private Component overlayInterfaceLabel() { return checkboxLabel(overlayInterface, tr("music_battle.l10n.fx.label_130")); }
-    private Component overlayPlayersLabel() { return checkboxLabel(overlayPlayers, tr("music_battle.l10n.fx.label_131")); }
-    private Component overlayEntitiesLabel() { return checkboxLabel(overlayEntities, tr("music_battle.l10n.fx.label_132")); }
-    private Component highlightSpectatorsLabel() { return checkboxLabel(highlightSpectators, tr("music_battle.l10n.fx.label_133")); }
-    private Component highlightEntitiesLabel() { return checkboxLabel(highlightEntities, tr("music_battle.l10n.fx.label_134")); }
-    private Component hideParticlesLabel() { return checkboxLabel(hideParticles, tr("music_battle.fx.hide_particles")); }
-    private Component hideHandLabel() { return checkboxLabel(hideFirstPersonHand, tr("music_battle.fx.hide_hand")); }
-    private Component hideHudLabel() { return checkboxLabel(hideHud, tr("music_battle.fx.hide_hud")); }
-    private Component hideBlockyMusicHudLabel() { return checkboxLabel(hideBlockyMusicHud, tr("music_battle.fx.hide_blocky_music_hud")); }
+    private Component flashBeatLabel() { return switchLabel(tr("music_battle.l10n.fx.label_125")); }
+    /**
+     * The sweep switch says what it does: its row's label above it names the sweeping scanline, and the switch used to
+     * repeat that name word for word.
+     */
+    private Component tvSweepLabel() { return switchLabel(tr("music_battle.l10n.fx.tv_sweep_switch")); }
+    private Component cinematicAnimationLabel() { return switchLabel(tr("music_battle.l10n.fx.label_127")); }
+    private Component fishEyeRemoveBlackEdgesLabel() { return switchLabel(tr("music_battle.l10n.fx.label_128")); }
+    private Component overlayTextLabel() { return switchLabel(tr("music_battle.l10n.fx.label_129")); }
+    private Component overlayInterfaceLabel() { return switchLabel(tr("music_battle.l10n.fx.label_130")); }
+    private Component overlayPlayersLabel() { return switchLabel(tr("music_battle.l10n.fx.label_131")); }
+    private Component overlayEntitiesLabel() { return switchLabel(tr("music_battle.l10n.fx.label_132")); }
+    private Component highlightSpectatorsLabel() { return switchLabel(tr("music_battle.l10n.fx.label_133")); }
+    private Component highlightEntitiesLabel() { return switchLabel(tr("music_battle.l10n.fx.label_134")); }
+    private Component hideParticlesLabel() { return switchLabel(tr("music_battle.fx.hide_particles")); }
+    private Component hideHandLabel() { return switchLabel(tr("music_battle.fx.hide_hand")); }
+    private Component hideHudLabel() { return switchLabel(tr("music_battle.fx.hide_hud")); }
+    private Component hideBlockyMusicHudLabel() { return switchLabel(tr("music_battle.fx.hide_blocky_music_hud")); }
 
-    private Component highlightModelGlowLabel() { return checkboxLabel(highlightModelGlow, tr("music_battle.l10n.fx.label_135")); }
-    private Component fadeInLabel() { return checkboxLabel(fadeInEnabled, tr("music_battle.l10n.fx.label_027")); }
-    private Component fadeOutLabel() { return checkboxLabel(fadeOutEnabled, tr("music_battle.l10n.fx.label_029")); }
+    private Component highlightModelGlowLabel() { return switchLabel(tr("music_battle.l10n.fx.label_135")); }
+    /** The fade switches say what they do; their rows' labels above them name the fade, as the sweep's does. */
+    private Component fadeInLabel() { return switchLabel(tr("music_battle.l10n.fx.fade_in_switch")); }
+    private Component fadeOutLabel() { return switchLabel(tr("music_battle.l10n.fx.fade_out_switch")); }
 
-    private static Component checkboxLabel(boolean checked, String text) {
-        return Component.literal((checked ? "☑ " : "☐ ") + text);
+    /** A switch's words; whether it is on is its check box (InspectorButton), which reads the state as it draws. */
+    private static Component switchLabel(String text) {
+        return Component.literal(text);
     }
 
     private void updateFadeControls() {
@@ -2164,10 +2649,265 @@ public final class TrackEffectEditScreen extends Screen implements DjPanelOwnedS
         };
     }
 
-    /** A row cell: one control, plus the optional numeric box that shares the cell with it. */
-    private record LabeledControl(AbstractWidget widget, String label, AbstractWidget companion) {
+    /**
+     * A row cell: one control, the optional numeric box that shares the cell with it, and the other forms its label can
+     * take, which the layout measures too.
+     */
+    private record LabeledControl(AbstractWidget widget, String label, AbstractWidget companion, List<String> alternatives) {
         private LabeledControl(AbstractWidget widget, String label) {
-            this(widget, label, null);
+            this(widget, label, null, List.of());
+        }
+
+        private LabeledControl withAlternatives(List<String> forms) {
+            return new LabeledControl(widget, label, companion, List.copyOf(forms));
+        }
+    }
+
+    /** A label in the viewport and the lines the layout set it in. */
+    private record Shown(LabeledControl control, List<String> lines) {
+    }
+
+    /**
+     * Where the inspector's controls sit across the panel's inner width, and how their words are set. A row keeps its
+     * cells equal, as it always did, while every label is whole over its cell on one line of captions; else on two; else
+     * the row breaks into lines of fewer cells (four become two and two, three become two and one), then fewer again,
+     * until each control has the room its words need. A label never breaks inside a word. A button's words are whole too:
+     * every word a cycling button can show, in one face for the whole line of buttons - the body face where all of them
+     * fit it, captions where one does not - so «Перекрывать игроков» no longer sits in one size beside its neighbour in
+     * another. Numbers have a floor: a slider keeps room for its knob and the box beside it, a colour button for its swatch
+     * and its code.
+     *
+     * <p>Rows used to be cut into equal cells whatever their words. At 427x240, the window most players get with the
+     * automatic GUI scale, 90 of the Russian labels were cut, and so were switches such as «Плавный въезд/выезд»; even the
+     * default panel cut the fish-eye's «Приближение 0.25–8 (1 = без приближения)». The dj-dialogs check lays out every
+     * effect's rows in English and Russian at every inner width the panel can have and at every GUI scale, with
+     * Minecraft's own glyph metrics, and fails on the first word that would not fit. Pure, for that check.
+     */
+    static final class InspectorLayout {
+        /** Between two cells of a line. */
+        static final int GAP = 6;
+        /** A line whose labels take one line: thirteen units of label over the twenty-unit control, seven under it. */
+        static final int ROW = 40;
+        static final int ABOVE = 13;
+        static final int CONTROL = 20;
+        /** The advance of a label's next line: the caption face's line height (Metrics.lineHeight, 9.0). */
+        static final int LABEL_LINE = 9;
+        static final int MAX_LABEL_LINES = 2;
+        /** InspectorButton gives its words its width less ten, and a switch's check box takes twelve more. */
+        static final float BUTTON_PAD = 10.0F;
+        static final float CHECK = 12.0F;
+        /** The gap between a slider and the box for its exact value. */
+        static final int BOX_GAP = 4;
+        /**
+         * A slider with room to drag beside a box of thirty; a colour button's swatch and its widest "#RRGGBB" in captions
+         * (ExactColorButton.codeRoom, which the dj-fx-leftovers check measures at every GUI scale); the text field.
+         */
+        static final int SLIDER_MIN = 76;
+        static final int COLOR_MIN = 68;
+        static final int FIELD_MIN = 80;
+
+        enum Kind { BUTTON, SWITCH, SLIDER, COLOR, FIELD }
+
+        /**
+         * One control. {@code labels} holds its label first and then any other form the label can take; {@code texts}
+         * every word a button can show. All of them are measured.
+         */
+        record Cell(List<String> labels, Kind kind, List<String> texts) {
+            String label() {
+                return labels.isEmpty() ? "" : labels.getFirst();
+            }
+        }
+
+        /**
+         * A cell placed: its row and column in the rows given, its left edge and its control's top from the content's
+         * top-left, its width, its label's lines and the face of its line's buttons.
+         */
+        record Placed(int row, int column, int x, int y, int width, List<String> label, TextStyle face) {
+        }
+
+        /** One line of cells as fitted: their width, their labels' lines, the lines the labels need and the face. */
+        private record Line(int first, int cellWidth, List<List<String>> labels, int labelLines, TextStyle face) {
+        }
+
+        private final List<Placed> cells;
+        private final int height;
+        private final List<String> problems;
+
+        private InspectorLayout(List<Placed> cells, int height, List<String> problems) {
+            this.cells = List.copyOf(cells);
+            this.height = height;
+            this.problems = List.copyOf(problems);
+        }
+
+        List<Placed> cells() {
+            return cells;
+        }
+
+        /** The content's height: what the viewport scrolls through. */
+        int height() {
+            return height;
+        }
+
+        /** Every row no arrangement fitted, with why; empty on every window the check measures. */
+        List<String> problems() {
+            return problems;
+        }
+
+        /** The box for a slider's exact value: a third of the cell, from thirty to fifty-two units. */
+        static int boxWidth(int cellWidth) {
+            return Mth.clamp(cellWidth / 3, 30, 52);
+        }
+
+        static InspectorLayout arrange(List<List<Cell>> rows, int width, ru.gora.musicbattle.client.ui.TextMeasurer measurer) {
+            List<Placed> placed = new ArrayList<>();
+            List<String> problems = new ArrayList<>();
+            int top = 0;
+            for (int row = 0; row < rows.size(); row++) {
+                List<Cell> cells = rows.get(row);
+                if (cells.isEmpty()) {
+                    continue;
+                }
+                List<Line> lines = fit(cells, width, measurer);
+                if (lines == null) {
+                    problems.add("row " + (row + 1) + " " + labels(cells) + " fits no arrangement in " + width + " units");
+                    lines = fallback(cells, width, measurer);
+                }
+                for (Line line : lines) {
+                    int controlY = top + ABOVE + LABEL_LINE * (line.labelLines() - 1);
+                    for (int index = 0; index < line.labels().size(); index++) {
+                        placed.add(new Placed(row, line.first() + index, index * (line.cellWidth() + GAP), controlY,
+                                line.cellWidth(), line.labels().get(index), line.face()));
+                    }
+                    top += ROW + LABEL_LINE * (line.labelLines() - 1);
+                }
+            }
+            return new InspectorLayout(placed, top, problems);
+        }
+
+        /**
+         * The first arrangement of a row in which everything fits: all its cells on one line, with one-line labels and then
+         * two-line ones, then on two lines of cells, and so on to one cell a line. Null when even that does not fit.
+         */
+        private static List<Line> fit(List<Cell> cells, int width, ru.gora.musicbattle.client.ui.TextMeasurer measurer) {
+            for (int count = 1; count <= cells.size(); count++) {
+                for (int labelLines = 1; labelLines <= MAX_LABEL_LINES; labelLines++) {
+                    List<Line> lines = new ArrayList<>(count);
+                    int start = 0;
+                    for (int line = 0; line < count && lines != null; line++) {
+                        // As even as the cells allow, the earlier lines taking one more: four make two and two, three
+                        // make two and one.
+                        int size = (cells.size() - start + count - line - 1) / (count - line);
+                        Line fitted = line(cells.subList(start, start + size), start, width, labelLines, measurer);
+                        if (fitted == null) {
+                            lines = null;
+                        } else {
+                            lines.add(fitted);
+                            start += size;
+                        }
+                    }
+                    if (lines != null) {
+                        return lines;
+                    }
+                }
+            }
+            return null;
+        }
+
+        /** One line of equal cells, or null when a label needs more lines than allowed or a word more room than a cell. */
+        private static Line line(List<Cell> cells, int first, int width, int labelLines,
+                                 ru.gora.musicbattle.client.ui.TextMeasurer measurer) {
+            int cellWidth = (width - GAP * (cells.size() - 1)) / cells.size();
+            List<List<String>> labels = new ArrayList<>(cells.size());
+            int lines = 1;
+            boolean body = true;
+            for (Cell cell : cells) {
+                if (cellWidth < minimum(cell)) {
+                    return null;
+                }
+                List<String> label = null;
+                for (String form : cell.labels()) {
+                    List<String> wrapped = wrapWhole(measurer, form, cellWidth);
+                    if (wrapped == null || wrapped.size() > labelLines) {
+                        return null;
+                    }
+                    if (label == null) {
+                        label = wrapped;
+                    }
+                }
+                label = label == null ? List.of() : label;
+                labels.add(label);
+                lines = Math.max(lines, label.size());
+                if (cell.kind() == Kind.BUTTON || cell.kind() == Kind.SWITCH) {
+                    float room = room(cell, cellWidth);
+                    for (String text : cell.texts()) {
+                        body &= TextFit.width(measurer, text, TextStyle.BODY) <= room;
+                        if (TextFit.width(measurer, text, TextStyle.CAPTION) > room) {
+                            return null;
+                        }
+                    }
+                }
+            }
+            return new Line(first, cellWidth, labels, lines, body ? TextStyle.BODY : TextStyle.CAPTION);
+        }
+
+        /** Nothing fits (only in a language the check never measured): one cell a line, cut where it must be. */
+        private static List<Line> fallback(List<Cell> cells, int width, ru.gora.musicbattle.client.ui.TextMeasurer measurer) {
+            List<Line> lines = new ArrayList<>();
+            for (int index = 0; index < cells.size(); index++) {
+                List<String> label = TextFit.wrap(measurer, cells.get(index).label(), TextStyle.CAPTION, width,
+                        MAX_LABEL_LINES);
+                lines.add(new Line(index, width, List.of(label), Math.max(1, label.size()), TextStyle.CAPTION));
+            }
+            return lines;
+        }
+
+        /** The room a button leaves its words in a cell of this width. */
+        static float room(Cell cell, int cellWidth) {
+            return cellWidth - BUTTON_PAD - (cell.kind() == Kind.SWITCH ? CHECK : 0.0F);
+        }
+
+        static int minimum(Cell cell) {
+            return switch (cell.kind()) {
+                case SLIDER -> SLIDER_MIN;
+                case COLOR -> COLOR_MIN;
+                case FIELD -> FIELD_MIN;
+                case BUTTON, SWITCH -> 0;
+            };
+        }
+
+        /** A label's lines at a width, or null when one of its words is wider than the width on its own. */
+        static List<String> wrapWhole(ru.gora.musicbattle.client.ui.TextMeasurer measurer, String text, float width) {
+            if (text == null || text.isBlank()) {
+                return List.of();
+            }
+            for (String word : text.trim().split(" +")) {
+                if (TextFit.width(measurer, word, TextStyle.CAPTION) > width) {
+                    return null;
+                }
+            }
+            return TextFit.wrap(measurer, text.trim(), TextStyle.CAPTION, width);
+        }
+
+        /** The face of the action buttons along the bottom: body where every label fits it, else captions, else null. */
+        static TextStyle actionFace(List<String> labels, int buttonWidth, ru.gora.musicbattle.client.ui.TextMeasurer measurer) {
+            for (TextStyle face : new TextStyle[]{TextStyle.BODY, TextStyle.CAPTION}) {
+                boolean whole = true;
+                for (String label : labels) {
+                    whole &= TextFit.width(measurer, label, face) <= buttonWidth - BUTTON_PAD;
+                }
+                if (whole) {
+                    return face;
+                }
+            }
+            return null;
+        }
+
+        private static List<String> labels(List<Cell> cells) {
+            List<String> labels = new ArrayList<>(cells.size());
+            for (Cell cell : cells) {
+                labels.add(cell.label());
+            }
+            return labels;
         }
     }
 
@@ -2222,19 +2962,63 @@ public final class TrackEffectEditScreen extends Screen implements DjPanelOwnedS
             return visible && active && super.keyPressed(keyCode, scanCode, modifiers);
         }
 
+        /**
+         * The toolkit's slider without a label: the box beside it shows the exact value, so the slider is the track and
+         * its knob alone, centred in the field. It was a square teal track with a white bar of a handle.
+         */
         @Override
         public void renderWidget(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
-            int x = getX();
-            int y = getY();
-            int width = getWidth();
-            int height = getHeight();
-            graphics.fill(x, y, x + width, y + height, active ? Palette.BG_1 : 0xFF121A20);
-            graphics.fill(x, y, x + width, y + 1, active ? Palette.ACCENT_STRONG : 0xFF2A3A44);
-            graphics.fill(x + 5, y + height / 2 - 2, x + width - 5, y + height / 2 + 2, 0xFF0B1218);
-            int fill = x + 5 + Math.round((width - 10) * (float) value);
-            graphics.fill(x + 5, y + height / 2 - 2, fill, y + height / 2 + 2,
-                    active ? Palette.ACCENT : 0xFF3C6B7C);
-            graphics.fill(fill - 2, y + 2, fill + 2, y + height - 2, active ? Palette.TEXT_1 : 0xFF8AA0AC);
+            ru.gora.musicbattle.client.ui.Slider.paint(graphics, Rect.of(getX(), getY(), getWidth(), getHeight()), value,
+                    Component.empty(), isHoveredOrFocused(), active);
+        }
+    }
+
+    /**
+     * A button of the inspector, drawn as FancyButton draws the mod's buttons - the toolkit's surface, the label in Nunito
+     * - with two differences. A switch shows the Workshop's check box in front of its words, ticked while it is on: its
+     * words used to begin with ☑ or ☐, symbols Nunito does not have, which Minecraft drew in its bitmap font. And its face
+     * is the one the layout chose for its whole line of buttons, the body face or captions, with room for every word the
+     * button can show. Only a language the layout was never measured with can leave a label too long even so; it is cut
+     * then, and shows whole as a tooltip under the pointer.
+     */
+    private static final class InspectorButton extends Button {
+        private final java.util.function.Supplier<Boolean> state;
+        /** The face {@link InspectorLayout} chose for this button's line; null until it is laid out. */
+        private TextStyle face;
+
+        private InspectorButton(Component message, OnPress onPress, int x, int y, int width, int height,
+                                java.util.function.Supplier<Boolean> state) {
+            super(x, y, width, height, message, onPress, DEFAULT_NARRATION);
+            this.state = state;
+        }
+
+        @Override
+        protected void renderWidget(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
+            Rect rect = Rect.of(getX(), getY(), getWidth(), getHeight());
+            boolean hovered = isHoveredOrFocused();
+            if (hovered && active) {
+                HandCursor.request(HandCursor.Kind.HAND);
+            }
+            WorkshopDraw.button(graphics, rect, WorkshopDraw.ButtonStyle.SECONDARY, hovered, active);
+            Boolean ticked = state == null ? null : state.get();
+            int colour = !active ? Palette.TEXT_MUTE : hovered ? Palette.TEXT_1 : Palette.TEXT_2;
+            float mark = ticked == null ? 0.0F : InspectorLayout.CHECK;
+            float room = Math.max(4.0F, getWidth() - InspectorLayout.BUTTON_PAD - mark);
+            String label = getMessage().getString();
+            TextStyle face = this.face != null ? this.face
+                    : getHeight() >= 18 && TextFit.width(TextStyles.measurer(), label, TextStyle.BODY) <= room
+                    ? TextStyle.BODY : TextStyle.CAPTION;
+            String text = TextFit.ellipsize(TextStyles.measurer(), label, face, room);
+            float left = rect.centerX() - (mark + TextFit.width(TextStyles.measurer(), text, face)) / 2.0F;
+            if (ticked != null) {
+                WorkshopDraw.check(graphics, new Rect(left, rect.centerY() - 4.0F, 8.0F, 8.0F), ticked, false, active);
+            }
+            TextStyles.queue(graphics, TextStyles.text(text, face).getVisualOrderText(), left + mark,
+                    TextStyles.centeredCapY(face, rect.y(), rect.h()), colour);
+            if (isHovered() && !text.equals(label)
+                    && net.minecraft.client.Minecraft.getInstance().screen instanceof TrackEffectEditScreen editor) {
+                editor.tip(getMessage(), rect);
+            }
         }
     }
 

@@ -54,6 +54,14 @@ public final class ClientModelGlowEngine {
     private static final int RESERVED_ENTITY_STENCIL_BIT = StencilManager.reserveBit();
     private static final int ENTITY_STENCIL_MASK = RESERVED_ENTITY_STENCIL_BIT >= 0 && RESERVED_ENTITY_STENCIL_BIT < 8
             ? 1 << RESERVED_ENTITY_STENCIL_BIT : 0;
+    /**
+     * A spectator's panels above the fighters. They are the spectator's gameplay panels - hideBlockyMusicHud hides them
+     * with the HUD - so an effect that does not cover the interface must not cover them either; drawn in the world,
+     * they were under every full-screen effect, and a visualizer took the scores away for its whole section.
+     */
+    private static final int RESERVED_PANEL_STENCIL_BIT = StencilManager.reserveBit();
+    private static final int PANEL_STENCIL_MASK = RESERVED_PANEL_STENCIL_BIT >= 0 && RESERVED_PANEL_STENCIL_BIT < 8
+            ? 1 << RESERVED_PANEL_STENCIL_BIT : 0;
     private static boolean mirroredGuiWinding;
     private static boolean renderingGlowShell;
     private static boolean stencilPreparationFailed;
@@ -62,8 +70,21 @@ public final class ClientModelGlowEngine {
     private static boolean textMaskWritten;
     private static boolean playerMaskWritten;
     private static boolean entityMaskWritten;
+    private static boolean panelMaskWritten;
     private static int protectedFxStencilMask;
     private static final IrisApiAccess IRIS_API = findIrisApi();
+    /** The public no-argument getOriginal() of a buffer source wrapper, or null for any other class. */
+    private static final ClassValue<Method> WRAPPED_BUFFER_SOURCE = new ClassValue<>() {
+        @Override
+        protected Method computeValue(Class<?> type) {
+            try {
+                Method method = type.getMethod("getOriginal");
+                return MultiBufferSource.class.isAssignableFrom(method.getReturnType()) ? method : null;
+            } catch (NoSuchMethodException | SecurityException | LinkageError exception) {
+                return null;
+            }
+        }
+    };
     private static final ThreadLocal<ArrayDeque<StencilModelContext>> STENCIL_MODEL_CONTEXTS =
             ThreadLocal.withInitial(ArrayDeque::new);
     private static final ThreadLocal<ArrayDeque<EntityFxMaskContext>> ENTITY_FX_MASK_CONTEXTS =
@@ -103,6 +124,7 @@ public final class ClientModelGlowEngine {
         private final boolean previousTextMask = textMaskWritten;
         private final boolean previousPlayerMask = playerMaskWritten;
         private final boolean previousEntityMask = entityMaskWritten;
+        private final boolean previousPanelMask = panelMaskWritten;
         private final int previousProtectedMask = protectedFxStencilMask;
         private final ArrayDeque<StencilModelContext> previousModelContexts =
                 new ArrayDeque<>(STENCIL_MODEL_CONTEXTS.get());
@@ -122,6 +144,7 @@ public final class ClientModelGlowEngine {
             textMaskWritten = previousTextMask;
             playerMaskWritten = previousPlayerMask;
             entityMaskWritten = previousEntityMask;
+            panelMaskWritten = previousPanelMask;
             protectedFxStencilMask = previousProtectedMask;
             STENCIL_MODEL_CONTEXTS.get().clear();
             STENCIL_MODEL_CONTEXTS.get().addAll(previousModelContexts);
@@ -160,6 +183,10 @@ public final class ClientModelGlowEngine {
         // Iris renders entities a second time for its shadow map. The battle glow is a
         // screen-space effect and must not flush/change that unrelated framebuffer pass.
         if (isIrisShadowPass()) return;
+        // A highlight reaches only as far as its music: spectators and mobs fade out over the last
+        // blocks of the audible area and are not lit at all beyond it, whatever the audience lists say.
+        float audibleFade = FxAudibleAreaResolver.entityFade(entityId);
+        if (audibleFade <= 0.001F) return;
         // Injected before vanilla requests its body buffer, so this cannot
         // invalidate a VertexConsumer already handed to the model.
         flushBuffers(buffers);
@@ -167,7 +194,7 @@ public final class ClientModelGlowEngine {
         float glow = Mth.clamp(effect.glowStrength(), 0.0F, 5.0F);
         int passes = Mth.clamp(1 + Mth.ceil(glow), 1, 6);
         float safeReactive = Mth.clamp(reactive, 0.75F, 2.0F);
-        float safeVisibility = Mth.clamp(visibility, 0.0F, 1.0F);
+        float safeVisibility = Mth.clamp(visibility, 0.0F, 1.0F) * audibleFade;
         RenderType shellType = RenderType.entityTranslucentEmissive(SHELL_TEXTURE);
         // Convert a quarter-block reference radius to render space. In particular, GUI
         // previews scale models into pixels; translation and rotations must not affect
@@ -301,11 +328,12 @@ public final class ClientModelGlowEngine {
     }
 
     private static void flushBuffers(MultiBufferSource buffers) {
-        if (buffers instanceof MultiBufferSource.BufferSource bufferSource) {
+        MultiBufferSource source = unwrapBufferSource(buffers);
+        if (source instanceof MultiBufferSource.BufferSource bufferSource) {
             bufferSource.endBatch();
             return;
         }
-        if (buffers instanceof OutlineBufferSource outlineBufferSource) {
+        if (source instanceof OutlineBufferSource outlineBufferSource) {
             // OutlineBufferSource owns one private outline batch and delegates normal
             // entity geometry to Minecraft's main BufferSource. Both must be submitted
             // while the intended stencil state is still active.
@@ -315,6 +343,32 @@ public final class ClientModelGlowEngine {
             }
             outlineBufferSource.endOutlineBatch();
         }
+    }
+
+    /**
+     * The buffer source a wrapper passes its geometry on to. While a shader pack is on, Iris hands every entity
+     * renderer a BufferSourceWrapper, a plain MultiBufferSource that only tags each render type with the entity
+     * being drawn. It cannot be flushed itself, so the body of a player or mob was drawn only after its stencil bit
+     * had been switched off again: the block outline then traced every entity under a shader pack. The wrapped
+     * source is read through the wrapper's own getOriginal(), found by reflection so that Iris stays optional.
+     */
+    private static MultiBufferSource unwrapBufferSource(MultiBufferSource buffers) {
+        MultiBufferSource source = buffers;
+        // A wrapper may wrap another one; a handful of steps is plenty and rules out a loop.
+        for (int depth = 0; depth < 4 && source != null
+                && !(source instanceof MultiBufferSource.BufferSource)
+                && !(source instanceof OutlineBufferSource); depth++) {
+            Method original = WRAPPED_BUFFER_SOURCE.get(source.getClass());
+            if (original == null) break;
+            try {
+                Object wrapped = original.invoke(source);
+                if (!(wrapped instanceof MultiBufferSource next) || next == source) break;
+                source = next;
+            } catch (ReflectiveOperationException | RuntimeException | LinkageError exception) {
+                break;
+            }
+        }
+        return source;
     }
 
     public static void prepareStencilTarget() {
@@ -335,10 +389,11 @@ public final class ClientModelGlowEngine {
         textMaskWritten = false;
         playerMaskWritten = false;
         entityMaskWritten = false;
+        panelMaskWritten = false;
         protectedFxStencilMask = 0;
         STENCIL_MODEL_CONTEXTS.get().clear();
         ENTITY_FX_MASK_CONTEXTS.get().clear();
-        int clearMask = STENCIL_MASK | TEXT_STENCIL_MASK | PLAYER_STENCIL_MASK | ENTITY_STENCIL_MASK;
+        int clearMask = STENCIL_MASK | TEXT_STENCIL_MASK | PLAYER_STENCIL_MASK | ENTITY_STENCIL_MASK | PANEL_STENCIL_MASK;
         if (clearMask == 0 || !stencilTargetReady()) return;
         var target = net.minecraft.client.Minecraft.getInstance().getMainRenderTarget();
         int previousFramebuffer = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
@@ -413,12 +468,41 @@ public final class ClientModelGlowEngine {
 
     public static void setFxProtection(boolean preserveModel, boolean preserveText,
                                        boolean preservePlayers, boolean preserveEntities) {
+        setFxProtection(preserveModel, preserveText, preservePlayers, preserveEntities, false);
+    }
+
+    public static void setFxProtection(boolean preserveModel, boolean preserveText,
+                                       boolean preservePlayers, boolean preserveEntities, boolean preservePanels) {
         modelProtectionActive = preserveModel && hasModelHighlightMask();
         protectedFxStencilMask = (modelProtectionActive ? STENCIL_MASK : 0)
                 | (preserveText && hasTextFxMask() ? TEXT_STENCIL_MASK : 0)
                 | (preservePlayers && hasPlayerFxMask() ? PLAYER_STENCIL_MASK : 0)
-                | (preserveEntities && hasEntityFxMask() ? ENTITY_STENCIL_MASK : 0);
+                | (preserveEntities && hasEntityFxMask() ? ENTITY_STENCIL_MASK : 0)
+                | (preservePanels && hasPanelFxMask() ? PANEL_STENCIL_MASK : 0);
         applyProtectedFxStencilState();
+    }
+
+    public static boolean hasPanelFxMask() {
+        return panelMaskWritten && PANEL_STENCIL_MASK != 0 && stencilTargetReady();
+    }
+
+    /**
+     * Marks what is drawn next as a spectator's world panel, on the main target only (a camera's own target keeps its
+     * panels under its effects as it composites them). False when nothing is marked; then {@link #endPanelFxMaskWrite}
+     * is not called.
+     */
+    public static boolean beginPanelFxMaskWrite() {
+        if (PANEL_STENCIL_MASK == 0 || !canWriteMainStencil()) return false;
+        GL11.glEnable(GL11.GL_STENCIL_TEST);
+        GL11.glStencilMask(PANEL_STENCIL_MASK);
+        GL11.glStencilFunc(GL11.GL_ALWAYS, PANEL_STENCIL_MASK, PANEL_STENCIL_MASK);
+        GL11.glStencilOp(GL11.GL_KEEP, GL11.GL_KEEP, GL11.GL_REPLACE);
+        return true;
+    }
+
+    public static void endPanelFxMaskWrite() {
+        panelMaskWritten = true;
+        resetStencilState();
     }
 
     public static boolean hasPlayerFxMask() {

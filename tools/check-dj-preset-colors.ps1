@@ -23,7 +23,7 @@ $dependencyJars = foreach ($group in $groups) {
     }
 }
 $classPath = (@($outputDir, $compiledDir, $mappedJar) + @($dependencyJars)) -join [IO.Path]::PathSeparator
-$javaDir = 'C:\Program Files\Eclipse Adoptium\jdk-21.0.11.10-hotspot\bin'
+$javaDir = & (Join-Path $PSScriptRoot 'find-jdk.ps1')
 $sources = @('src\main\java\ru\gora\musicbattle\client\ClientDjPresetStorage.java',
     'src\main\java\ru\gora\musicbattle\client\TrackEffectEditScreen.java',
     'src\main\java\ru\gora\musicbattle\client\ExactColorButton.java',

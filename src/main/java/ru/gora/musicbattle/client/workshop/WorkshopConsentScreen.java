@@ -9,10 +9,12 @@ import ru.gora.musicbattle.client.ui.Palette;
 import ru.gora.musicbattle.client.ui.UiIcon;
 
 /**
- * The first-run network disclosure (spec 06 section 4, Modrinth rule 1.11): what the Workshop contacts, what it sends,
+ * The first-run network disclosure (Modrinth rule 1.11): what the Workshop contacts, what it sends,
  * links to the Terms and the Privacy policy. Nothing reaches qwu.world or Mojang (beyond vanilla) before "Allow".
- * "Not now" is remembered too, so the Workshop opens offline (installed maps, drops and the inbox still work) and the
- * question comes back only from the Workshop's network toggle.
+ * "Not now" is remembered too, so the Workshop opens offline (drops, the inbox and the player's own beatmaps still
+ * work) and the question comes back only from "Allow network" or the Network access switch on the account page, which
+ * also turns access off again after "Allow". A change to what this screen says raises
+ * {@code WorkshopConfig.NETWORK_CONSENT_VERSION}, so everyone who answered the old text is asked once more.
  */
 public final class WorkshopConsentScreen extends WorkshopDialogScreen {
     public static final String PRIVACY_URL = "https://qwu.world/privacy#blocky-music-workshop";

@@ -15,7 +15,7 @@ import ru.gora.musicbattle.client.workshop.layout.WorkshopStrings;
 import ru.gora.musicbattle.server.MusicBattleTracks;
 
 /**
- * The system file picker for the Workshop (spec 06 sections 6.5 and 8.4): importing a {@code .blockymap}, choosing the
+ * The system file picker for the Workshop: importing a {@code .blockymap}, choosing the
  * audio file of a bring-your-own-audio set, and picking a cover for an upload. Uses LWJGL's tinyfd, which Minecraft
  * already ships.
  *
@@ -43,7 +43,12 @@ public final class WorkshopFiles {
     }
 
     private static final String[] PACKAGE = {"*.blockymap"};
-    private static final String[] AUDIO = {"*.ogg", "*.mp3", "*.flac", "*.wav", "*.m4a"};
+    /**
+     * The song for a beatmap published without one: Ogg as it is, and everything the mod's own converter reads, the same
+     * list as the chart editor's Audio button (InstalledActions converts anything that is not an Ogg the game plays).
+     */
+    private static final String[] AUDIO = {"*.ogg", "*.mp3", "*.mp2", "*.wav", "*.flac", "*.m4a", "*.aac", "*.mp4", "*.mov",
+            "*.3gp", "*.m4r", "*.m4b", "*.opus", "*.oga", "*.webm", "*.weba", "*.mka", "*.mkv", "*.ts", "*.m2ts", "*.mts"};
     private static final String[] IMAGE = {"*.png", "*.jpg", "*.jpeg", "*.webp"};
 
     private WorkshopFiles() {

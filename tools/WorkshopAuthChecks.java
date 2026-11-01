@@ -27,12 +27,14 @@ import ru.gora.musicbattle.workshop.api.DeviceFlow;
 import ru.gora.musicbattle.workshop.api.MinecraftSignIn;
 import ru.gora.musicbattle.workshop.api.RefreshTokenStore;
 import ru.gora.musicbattle.workshop.api.WorkshopApi;
+import ru.gora.musicbattle.workshop.api.WorkshopConfig;
 import ru.gora.musicbattle.workshop.api.WorkshopSession;
 
 /**
- * Workshop sign-in (spec 06 section 12 {@code workshop-auth}): the {@code bmw-join-v1} vectors from the research note,
+ * Workshop sign-in ({@code workshop-auth}): the {@code bmw-join-v1} vectors,
  * the device-flow state machine (pending, slow_down, denied, expiry, "This isn't me"), the Minecraft proof protocol, the
- * link flow that never confirms on its own, the one-automatic-attempt gate and the rule that only
+ * link flow that never confirms on its own, the one-automatic-attempt gate, the automatic sign-in only for a Minecraft
+ * account that signed in on this computer before (and not after it signed out), and the rule that only
  * {@code client/workshop/MinecraftProof.java} reads the game's access token. Fake clock, local fake backend; no Minecraft.
  */
 public final class WorkshopAuthChecks {
@@ -53,6 +55,7 @@ public final class WorkshopAuthChecks {
             minecraftProof(temp.resolve("proof"));
             linkFlow(temp.resolve("link"));
             autoGate();
+            rememberedAutoSignIn(temp.resolve("remembered"));
             accessTokenSingleReader(root);
         } finally {
             deleteTree(temp);
@@ -349,10 +352,29 @@ public final class WorkshopAuthChecks {
             AtomicLong clock = new AtomicLong(9_000_000L);
             WorkshopApi api = api(server);
             WorkshopSession session = new WorkshopSession(api, new RefreshTokenStore(root.resolve("auth.json")), clock::get);
-            MinecraftSignIn signIn = new MinecraftSignIn(api, session, (id, serverId) -> backend.joined.add(serverId), new SecureRandom(), clock::get, "Minecraft");
+            java.util.Set<UUID> remembered = java.util.concurrent.ConcurrentHashMap.newKeySet();
+            MinecraftSignIn.Memory memory = new MinecraftSignIn.Memory() {
+                @Override
+                public boolean remembered(UUID account) {
+                    return remembered.contains(account);
+                }
+
+                @Override
+                public void remember(UUID account) {
+                    remembered.add(account);
+                }
+
+                @Override
+                public void forget(UUID account) {
+                    remembered.remove(account);
+                }
+            };
+            MinecraftSignIn signIn = new MinecraftSignIn(api, session, (id, serverId) -> backend.joined.add(serverId), new SecureRandom(), clock::get,
+                    "Minecraft", memory);
             MinecraftSignIn.Player player = new MinecraftSignIn.Player(JEB, "jeb_");
 
             check(signIn.prove(player, MinecraftSignIn.PURPOSE_SESSION, CancelToken.none()).outcome() == MinecraftSignIn.Outcome.NOT_LINKED, "not linked yet");
+            check(remembered.isEmpty(), "a not_linked answer remembers nothing");
             int challenges = server.requests("POST", "/api/v1/mc/challenges").size();
             check(signIn.startLink(player, CancelToken.none()) == MinecraftSignIn.LinkPhase.WAITING, "link request created");
             check(server.requests("POST", "/api/v1/mc/challenges").size() == challenges, "the fresh proof id is reused (no second join)");
@@ -376,6 +398,8 @@ public final class WorkshopAuthChecks {
             check(server.requests("POST", "/api/v1/mc/link-requests/token").stream().filter(r -> r.bodyText().contains("\"confirm\":true")).count() == 1,
                     "exactly one confirm:true, after the player confirmed");
             check(session.signedIn() && session.state().kind() == WorkshopSession.Kind.MINECRAFT, "linked → signed in");
+            check(remembered.equals(java.util.Set.of(JEB)), "a link that signs in remembers the Minecraft account for the next launch");
+            remembered.clear();
 
             // Cancel in the confirmation: nothing is confirmed.
             session.clearLocal();
@@ -393,6 +417,7 @@ public final class WorkshopAuthChecks {
             check(signIn.confirmLink(CancelToken.none()) == MinecraftSignIn.LinkPhase.CANCELLED && confirms(server) == confirmsBefore,
                     "a cancelled link can never be confirmed");
             check(!session.signedIn(), "cancelled link does not sign in");
+            check(remembered.isEmpty(), "a cancelled link remembers nothing");
         }
     }
 
@@ -412,12 +437,102 @@ public final class WorkshopAuthChecks {
 
     static void autoGate() {
         AutoSignInGate gate = new AutoSignInGate();
-        check(gate.tryStart(false, true, false, false) == AutoSignInGate.Decision.NO_CONSENT && !gate.attempted(), "no consent: not spent");
-        check(gate.tryStart(true, true, true, false) == AutoSignInGate.Decision.LOGIN_IN_PROGRESS && !gate.attempted(), "server login in progress: not spent");
-        check(gate.tryStart(true, false, false, false) == AutoSignInGate.Decision.NOT_MICROSOFT_ACCOUNT, "offline account skipped");
-        check(gate.tryStart(true, true, false, true) == AutoSignInGate.Decision.ALREADY_SIGNED_IN, "already signed in skipped");
-        check(gate.tryStart(true, true, false, false) == AutoSignInGate.Decision.STARTED && gate.attempted(), "first real attempt starts");
-        check(gate.tryStart(true, true, false, false) == AutoSignInGate.Decision.ALREADY_ATTEMPTED, "at most one automatic attempt per launch");
+        check(gate.tryStart(false, true, false, false, true) == AutoSignInGate.Decision.NO_CONSENT && !gate.attempted(), "no consent: not spent");
+        check(gate.tryStart(true, true, true, false, true) == AutoSignInGate.Decision.LOGIN_IN_PROGRESS && !gate.attempted(), "server login in progress: not spent");
+        check(gate.tryStart(true, false, false, false, true) == AutoSignInGate.Decision.NOT_MICROSOFT_ACCOUNT, "offline account skipped");
+        check(gate.tryStart(true, true, false, true, true) == AutoSignInGate.Decision.ALREADY_SIGNED_IN, "already signed in skipped");
+        check(gate.tryStart(true, true, false, false, false) == AutoSignInGate.Decision.NOT_REMEMBERED && !gate.attempted(),
+                "an account that never signed in here: skipped, not spent");
+        check(gate.tryStart(true, true, false, false, true) == AutoSignInGate.Decision.STARTED && gate.attempted(), "first real attempt starts");
+        check(gate.tryStart(true, true, false, false, true) == AutoSignInGate.Decision.ALREADY_ATTEMPTED, "at most one automatic attempt per launch");
+    }
+
+    /**
+     * Owner decision 01.11.2026: the automatic sign-in is only for a Minecraft account that signed in to the Workshop on
+     * this computer before. Played against the fake backend over three launches, each a fresh gate, session and sign-in
+     * reading the same config file: an unknown account sends nothing at all; a manual Minecraft sign-in remembers it,
+     * so the next launch signs in by itself; a sign-out forgets it, so the launch after that sends nothing again.
+     * Turning network access off keeps it.
+     */
+    static void rememberedAutoSignIn(Path root) throws Exception {
+        Path configFile = root.resolve("config").resolve(WorkshopConfig.FILE_NAME);
+        try (FakeWorkshopServer server = new FakeWorkshopServer()) {
+            FakeMojangBackend backend = new FakeMojangBackend(server);
+            AtomicLong clock = new AtomicLong(7_000_000L);
+            WorkshopApi api = api(server);
+            MinecraftSignIn.Player player = new MinecraftSignIn.Player(JEB, "jeb_");
+            AtomicInteger joins = new AtomicInteger();
+            MinecraftSignIn.Joiner joiner = (profileId, serverId) -> {
+                joins.incrementAndGet();
+                backend.joined.add(serverId);
+            };
+
+            // Launch 1: this Minecraft account has never signed in here.
+            WorkshopConfig config = WorkshopConfig.load(configFile);
+            config.setNetworkConsent(true, java.time.Instant.parse("2026-11-01T10:00:00Z"));
+            WorkshopSession session = new WorkshopSession(api, new RefreshTokenStore(root.resolve("auth1.json")), clock::get);
+            MinecraftSignIn signIn = new MinecraftSignIn(api, session, joiner, new SecureRandom(), clock::get, "Minecraft", config);
+            AutoSignInGate gate = new AutoSignInGate();
+            check(!signIn.remembered(JEB), "a fresh computer remembers no Minecraft account");
+            AutoSignInGate.Decision decision = signIn.autoDecision(gate, player, true, true, false);
+            check(decision == AutoSignInGate.Decision.NOT_REMEMBERED, "unknown account: the automatic sign-in does not start (" + decision + ")");
+            check(server.snapshot().isEmpty() && joins.get() == 0, "unknown account: no challenge, no join, nothing sent at all");
+            check(signIn.autoDecision(gate, null, true, true, false) == AutoSignInGate.Decision.NOT_REMEMBERED,
+                    "an account name Mojang would refuse is never remembered");
+            // The player presses "Sign in with Minecraft".
+            check(signIn.prove(player, MinecraftSignIn.PURPOSE_SESSION, CancelToken.none()).outcome() == MinecraftSignIn.Outcome.SIGNED_IN,
+                    "the manual sign-in works");
+            check(signIn.remembered(JEB) && WorkshopConfig.load(configFile).remembered(JEB), "a manual Minecraft sign-in remembers the account on disk");
+            JsonObject saved = JsonParser.parseString(Files.readString(configFile)).getAsJsonObject();
+            check(saved.getAsJsonArray("autoSignIn").size() == 1 && saved.getAsJsonArray("autoSignIn").get(0).getAsString().equals(JEB.toString())
+                    && saved.getAsJsonObject("consent").get("network").getAsBoolean(), "kept by UUID next to the consent");
+
+            // Launch 2: the session is gone (no refresh token kept), the account is remembered.
+            int challengesBefore = server.requests("POST", "/api/v1/mc/challenges").size();
+            config = WorkshopConfig.load(configFile);
+            session = new WorkshopSession(api, new RefreshTokenStore(root.resolve("auth2.json")), clock::get);
+            signIn = new MinecraftSignIn(api, session, joiner, new SecureRandom(), clock::get, "Minecraft", config);
+            gate = new AutoSignInGate();
+            check(signIn.autoDecision(gate, player, true, true, false) == AutoSignInGate.Decision.STARTED, "the next launch starts the automatic sign-in");
+            check(signIn.prove(player, MinecraftSignIn.PURPOSE_SESSION, CancelToken.none()).outcome() == MinecraftSignIn.Outcome.SIGNED_IN
+                    && session.signedIn(), "and signs in by itself");
+            check(server.requests("POST", "/api/v1/mc/challenges").size() == challengesBefore + 1, "with exactly one challenge");
+            check(signIn.autoDecision(gate, player, true, true, false) == AutoSignInGate.Decision.ALREADY_ATTEMPTED, "still once per launch");
+
+            // Turning network access off is not a sign-out.
+            config.setNetworkConsent(false, java.time.Instant.parse("2026-11-01T11:00:00Z"));
+            check(WorkshopConfig.load(configFile).remembered(JEB), "turning network access off keeps the remembered account");
+            check(signIn.autoDecision(new AutoSignInGate(), player, config.networkAllowed(), true, false) == AutoSignInGate.Decision.NO_CONSENT,
+                    "and with it off nothing starts");
+            config.setNetworkConsent(true, java.time.Instant.parse("2026-11-01T11:05:00Z"));
+
+            // The player signs out.
+            signIn.forget(JEB);
+            session.signOut(CancelToken.none());
+            check(!WorkshopConfig.load(configFile).remembered(JEB), "an explicit sign-out forgets the account");
+
+            // Launch 3: nothing is sent again.
+            int before = server.snapshot().size();
+            int joinsBefore = joins.get();
+            config = WorkshopConfig.load(configFile);
+            session = new WorkshopSession(api, new RefreshTokenStore(root.resolve("auth3.json")), clock::get);
+            signIn = new MinecraftSignIn(api, session, joiner, new SecureRandom(), clock::get, "Minecraft", config);
+            check(signIn.autoDecision(new AutoSignInGate(), player, true, true, false) == AutoSignInGate.Decision.NOT_REMEMBERED,
+                    "after a sign-out the next launch does not start it");
+            check(server.snapshot().size() == before && joins.get() == joinsBefore, "after a sign-out: no request at all");
+
+            check(WorkshopConfig.load(configFile).consentAnswered() && WorkshopConfig.load(configFile).networkAllowed(), "consent kept throughout");
+            // A damaged list counts nothing, and the remembered set survives unrelated saves.
+            Files.writeString(configFile, "{\"consent\":{\"network\":true,\"version\":" + WorkshopConfig.NETWORK_CONSENT_VERSION
+                    + "},\"autoSignIn\":[\"not-a-uuid\",7,{\"x\":1}]}");
+            config = WorkshopConfig.load(configFile);
+            check(!config.remembered(JEB), "entries that are not UUIDs do not count");
+            config.remember(JEB);
+            config.setNumber("previewVolume", 0.5);
+            check(WorkshopConfig.load(configFile).remembered(JEB), "the list survives another option being saved");
+            check(!new MinecraftSignIn(api, session, joiner, new SecureRandom(), clock::get, "Minecraft").remembered(JEB),
+                    "without a memory nothing is remembered");
+        }
     }
 
     // ---------------------------------------------------------------- the access token has one reader

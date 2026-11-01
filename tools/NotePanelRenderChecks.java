@@ -100,11 +100,29 @@ public final class NotePanelRenderChecks {
                 ImageIO.write(enlarged.image,"png",new File(args[0],"notes-arrows-vector-4x.png"));
             }
             Raster clipped = Raster.create(426,240);
-            SettingsScreenLayout.Rect viewport = SettingsScreenLayout.create(426,240).preview();
-            SettingsPanelPreview.draw(clipped,FONT,viewport,123F,panel);
+            SettingsScreenLayout.Preview geometry = previewAt(426,240,427,240);
+            SettingsPanelPreview.drawBattle(clipped,FONT,geometry,123F,panel,new SettingsPanelPreview.Stage(70,185));
             for(int yy=0;yy<240;yy++)for(int xx=0;xx<426;xx++)
-                require(viewport.contains(xx,yy)||clipped.image.getRGB(xx,yy)==0,"Preview draws over controls/header/footer");
+                require(geometry.card().contains(xx,yy)||clipped.image.getRGB(xx,yy)==0,"Preview draws outside its picture, over controls/header/footer");
             require(clipped.poses.clear() && clipped.clip==null,"Preview leaks pose/scissor state");
+        }
+        stagePreview(panelConstructor, appearanceConstructor);
+        // The preview keeps room for the panel the battle draws at the width slider's maximum, which the screen measures
+        // with the battle's own layout: no setting of the slider gives a wider one, and that one fits in the picture.
+        for (int canvas : new int[]{320, 427, 480, 569, 640, 854, 1280, 1920}) {
+            BattlePanelRenderer.Layout widest = BattlePanelRenderer.layout(canvas, 360, 1F, SettingsPanelPreview.widestPanel());
+            require(widest.x() == SettingsScreenLayout.PANEL_MARGIN, "The battle no longer puts its panel 20 units in at " + canvas);
+            for (float scale = .45F; scale <= SettingsScreenLayout.MAX_PANEL_WIDTH_SCALE + 1E-4F; scale += .01F) {
+                BattlePanelRenderer.Panel at = (BattlePanelRenderer.Panel) panelConstructor.newInstance(
+                        0,0,true,"Preview",1F,0xFF111111,1F,1F,scale,1F,1F,1F,0,0,new int[4],new int[4],new String[]{"A","S","W","D"},null);
+                require(BattlePanelRenderer.layout(canvas, 360, 1F, at).width() <= widest.width(),
+                        "A panel narrower on the slider is wider than its maximum at " + canvas + " scale " + scale);
+            }
+            for (int[] gui : new int[][]{{320,240},{427,240},{480,270},{640,360},{960,540}}) {
+                SettingsScreenLayout.Preview geometry = previewAt(gui[0], gui[1], canvas, 360);
+                require(canvas < geometry.needed() || geometry.visibleWidth() >= SettingsScreenLayout.PANEL_MARGIN + widest.width(),
+                        "The widest panel is cut off in the preview of a " + canvas + " canvas at " + gui[0] + "x" + gui[1]);
+            }
         }
         require(BattlePanelRenderer.leadTicks(20F) == 3, "20x still stops at the old eight-tick lead floor");
         Class<?> preview;
@@ -125,7 +143,99 @@ public final class NotePanelRenderChecks {
         Object later = frameMethod.invoke(null,130F);
         require(((int[])burstsMethod.invoke(later))[2] == 0,"Preview hit feedback never expires");
         System.out.println("PASS: actual BattlePanelRenderer draws independent lane colors for all three skins; 20x reaches 3 ticks");
+        System.out.println("PASS: the settings preview over a world shows the panel background, the dimming and the bars, in the battle's order");
         System.out.println("NOT COVERED: Minecraft font batching, GPU integration, and live gameplay");
+    }
+
+    /** The settings screen's picture of a battle at a GUI size, for a battle canvas of the given size. */
+    private static SettingsScreenLayout.Preview previewAt(int width, int height, int canvasWidth, int canvasHeight) {
+        SettingsScreenLayout.Nav nav = SettingsScreenLayout.nav(width, height, (text, style) -> text.length() * 6F,
+                List.of("General settings", "Calibration", "Beatmap Editor", "Guide", "Workshop"), 0);
+        int widest = BattlePanelRenderer.layout(canvasWidth, canvasHeight, 1F, SettingsPanelPreview.widestPanel()).width();
+        return SettingsScreenLayout.preview(SettingsScreenLayout.create(width, height, nav).preview(), canvasWidth, canvasHeight,
+                widest, 40F);
+    }
+
+    /**
+     * The settings preview drawn over a world, as the battle draws its panel over one. The panel background slider used
+     * to change nothing there, because the panel's default colour was the very background it was drawn on; over a world
+     * it has to show. The dimming and the bars have to be the battle's own: nothing at all at 0, the old alphas by
+     * default, darker as the setting rises, the bars over the dimming and the panel over both.
+     */
+    private static void stagePreview(Constructor<?> panelConstructor, Constructor<?> appearanceConstructor) throws Exception {
+        int width = 854, height = 480, canvasWidth = 640, canvasHeight = 360;
+        SettingsScreenLayout.Preview geometry = previewAt(width, height, canvasWidth, canvasHeight);
+        SettingsScreenLayout.Rect card = geometry.card();
+        int world = 0xFF6A8FB0;
+        Object style = appearanceConstructor.newInstance(1, List.of(0xFFBE8FFF, 0xFFFFD152, 0xFFBE8FFF, 0xFFFFD152));
+        java.util.function.BiFunction<Float, Integer, BattlePanelRenderer.Panel> panelOf = (opacity, color) -> {
+            try {
+                return (BattlePanelRenderer.Panel) panelConstructor.newInstance(0,0,true,"You",5F,color,opacity,.35555556F,
+                        .64308643F,1.5999999F,2.2F,.7793827F,0,0,new int[4],new int[4],new String[]{"A","S","W","D"},style);
+            } catch (ReflectiveOperationException failure) { throw new IllegalStateException(failure); }
+        };
+        BattlePanelRenderer.Layout at = BattlePanelRenderer.layout(canvasWidth, canvasHeight, 1F, panelOf.apply(0F, 0xFF110F14));
+        int[] empty = {card.right() - 3, card.y() + card.height() / 2};
+        int[] top = {card.right() - 3, card.y() + 2};
+        int[] bottom = {card.right() - 3, card.bottom() - 2};
+        int[] back = {Math.round(card.x() + (at.x() + at.width() / 2F) * geometry.scale()),
+                Math.round(card.y() + (at.y() + at.height() - 4) * geometry.scale())};
+        int[] header = {Math.round(card.x() + (at.x() + 5) * geometry.scale()), Math.round(card.y() + (at.y() + 7) * geometry.scale())};
+        require(geometry.visibleWidth() * geometry.scale() > (at.x() + at.width() + 10) * geometry.scale()
+                && empty[0] > Math.round(card.x() + (at.x() + at.width()) * geometry.scale()), "Sample point is not beside the panel");
+
+        Raster clear = stage(geometry, world, panelOf.apply(0F, 0xFF110F14), 0, 0, width, height);
+        Raster solid = stage(geometry, world, panelOf.apply(1F, 0xFF110F14), 0, 0, width, height);
+        Raster standard = stage(geometry, world, panelOf.apply(0F, 0xFF110F14), 70, 185, width, height);
+        Raster noBars = stage(geometry, world, panelOf.apply(0F, 0xFF110F14), 70, 0, width, height);
+        Raster darkest = stage(geometry, world, panelOf.apply(0F, 0xFF110F14), 230, 0, width, height);
+        Raster redPanel = stage(geometry, world, panelOf.apply(1F, 0xFFFF0000), 230, 185, width, height);
+
+        require(clear.argb(empty) == world && clear.argb(top) == world, "Dimming or bars at 0 still draw over the world");
+        require(clear.argb(back) == world, "A panel background at 0% hides the world");
+        require(luma(solid.argb(back)) + 20 < luma(world), "The panel background slider changes nothing in the preview");
+        int veiled = over(0, 70, world);
+        require(close(noBars.argb(empty), veiled), "The default dimming is not argb(70, 0, 0, 0) over the world: "
+                + Integer.toHexString(noBars.argb(empty)) + " vs " + Integer.toHexString(veiled));
+        require(noBars.argb(top) == noBars.argb(empty), "Bars switched off still draw");
+        require(close(standard.argb(top), over(0, 185, veiled)) && standard.argb(bottom) == standard.argb(top)
+                && luma(standard.argb(top)) < luma(standard.argb(empty)), "The default bars are not alpha 185 over the dimming");
+        require(close(darkest.argb(empty), over(0, 230, world)) && luma(darkest.argb(empty)) < luma(noBars.argb(empty)),
+                "The darkest dimming is not darker than the default");
+        require(((redPanel.argb(header) >> 16) & 0xFF) > 150, "The panel is drawn under the dimming instead of over it");
+    }
+
+    private static Raster stage(SettingsScreenLayout.Preview geometry, int world, BattlePanelRenderer.Panel panel,
+                                int dimming, int bars, int width, int height) throws Exception {
+        Raster raster = Raster.create(width, height);
+        SettingsScreenLayout.Rect card = geometry.card();
+        raster.fill(card.x(), card.y(), card.right(), card.bottom(), world);
+        // At time 300 every demo note still drawn is on its way down, above the hit line, clear of the points sampled below it.
+        SettingsPanelPreview.drawBattle(raster, FONT, geometry, 300F, panel, new SettingsPanelPreview.Stage(dimming, bars));
+        require(raster.poses.clear() && raster.clip == null, "Preview leaks pose/scissor state");
+        return raster;
+    }
+
+    /** {@code colour} at {@code alpha} over an opaque {@code below}, as eight-bit blending does it. */
+    private static int over(int colour, int alpha, int below) {
+        int result = 0xFF000000;
+        for (int shift = 0; shift <= 16; shift += 8) {
+            int top = (colour >> shift) & 0xFF;
+            int bottom = (below >> shift) & 0xFF;
+            result |= Math.round((top * alpha + bottom * (255 - alpha)) / 255F) << shift;
+        }
+        return result;
+    }
+
+    private static boolean close(int a, int b) {
+        for (int shift = 0; shift <= 16; shift += 8) {
+            if (Math.abs(((a >> shift) & 0xFF) - ((b >> shift) & 0xFF)) > 2) return false;
+        }
+        return true;
+    }
+
+    private static int luma(int argb) {
+        return (((argb >> 16) & 0xFF) * 299 + ((argb >> 8) & 0xFF) * 587 + (argb & 0xFF) * 114) / 1000;
     }
 
     static final class Raster extends GuiGraphics {
@@ -152,6 +262,9 @@ public final class NotePanelRenderChecks {
         @Override public void enableScissor(int x,int y,int right,int bottom) { clip=new Rectangle(x,y,right-x,bottom-y); }
         @Override public void disableScissor() { clip=null; }
         int rgb(int x,int y) { return image.getRGB(x,y) & 0xFFFFFF; }
+        int argb(int[] point) { return image.getRGB(point[0],point[1]); }
+        // Everything this raster draws lands at once; the real flush would reach for the GPU.
+        @Override public void flush() { }
         @Override public void fill(int left,int top,int right,int bottom,int color) {
             Vector3f a = pose().last().pose().transformPosition(left,top,0,new Vector3f());
             Vector3f b = pose().last().pose().transformPosition(right,bottom,0,new Vector3f());
@@ -166,6 +279,15 @@ public final class NotePanelRenderChecks {
                 labelY.add(Math.round(pose().last().pose().transformPosition(x,y,0,new Vector3f()).y));
         }
         @Override public void drawCenteredString(Font font,Component text,int x,int y,int color) { }
+        // The renderer may draw a label left-aligned under a pose that centres and scales it; the key labels are
+        // recorded the same way whichever call it uses, and nothing else is drawn as text here.
+        @Override public int drawString(Font font,String text,int x,int y,int color) {
+            drawCenteredString(font,text,x,y,color);
+            return x;
+        }
+        @Override public int drawString(Font font,String text,int x,int y,int color,boolean shadow) {
+            return drawString(font,text,x,y,color);
+        }
     }
     static final class RasterBuffers extends MultiBufferSource.BufferSource {
         final VertexConsumer sink;

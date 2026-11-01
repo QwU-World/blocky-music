@@ -19,20 +19,20 @@ import ru.gora.musicbattle.client.ui.TextStyles;
 import ru.gora.musicbattle.client.ui.UiClip;
 import ru.gora.musicbattle.client.ui.UiIcon;
 import ru.gora.musicbattle.client.ui.UiIcons;
+import ru.gora.musicbattle.client.workshop.layout.DialogLayout;
 
 /**
  * A centred Workshop dialog drawn with the UI toolkit: heading, wrapped paragraphs that scroll when the window is
  * short, link buttons on the left and action buttons on the right (they stack on narrow screens). Enter runs the
- * primary action, Esc the cancel action. Consent, install confirmation and error messages build on it; the M2b
- * screens reuse it for report and confirm dialogs.
+ * primary action, Esc the cancel action. Consent, install confirmation and error messages build on it; the other
+ * Workshop screens reuse it for report and confirm dialogs.
  */
 public abstract class WorkshopDialogScreen extends ru.gora.musicbattle.client.ui.UiLayer implements WorkshopUi,
         ru.gora.musicbattle.client.ParentedScreen {
-    private static final float MAX_PANEL_WIDTH = 380.0F;
-    private static final float CHOICE_HEIGHT = 12.0F;
-    private static final float FIELD_HEIGHT = 34.0F;
-    private static final float PAD = 12.0F;
-    private static final float GAP = 6.0F;
+    private static final float CHOICE_HEIGHT = DialogLayout.CHOICE_HEIGHT;
+    private static final float FIELD_HEIGHT = DialogLayout.FIELD_HEIGHT;
+    private static final float PAD = DialogLayout.PAD;
+    private static final float GAP = DialogLayout.GAP;
 
     protected final Screen parent;
     private final UiIcon headingIcon;
@@ -56,9 +56,13 @@ public abstract class WorkshopDialogScreen extends ru.gora.musicbattle.client.ui
     private float bodyTop;
     private float bodyHeight;
     private float contentHeight;
-    private float choicesTop;
-    private float fieldTop;
     private List<List<FormattedCharSequence>> wrapped = List.of();
+    /** Where the choices and the field sit in the body, and how tall it is; see {@link DialogLayout#body}. */
+    private DialogLayout.Body body;
+    /** The heading, choices, field label, status and buttons as DialogLayout places them; see {@link #layout()}. */
+    private DialogLayout.Result fitted;
+    /** The panel and body heights for this window, and whether the buttons scroll with the body. */
+    private DialogLayout.Frame frame;
 
     @Override
     public Screen musicBattleParent() {
@@ -82,7 +86,7 @@ public abstract class WorkshopDialogScreen extends ru.gora.musicbattle.client.ui
         this.headingColour = headingColour;
     }
 
-    /** One option of a dialog that asks the player to choose (the report reasons, spec 04 section 6.2). */
+    /** One option of a dialog that asks the player to choose (the report reasons). */
     private record Choice(Component label, BooleanSupplier selected, Runnable action) {
     }
 
@@ -137,89 +141,70 @@ public abstract class WorkshopDialogScreen extends ru.gora.musicbattle.client.ui
 
     @Override
     protected void layout() {
-        panelWidth = Math.min(MAX_PANEL_WIDTH, this.width - 24.0F);
-        float textWidth = panelWidth - PAD * 2;
+        List<String> choiceLabels = new ArrayList<>();
+        for (Choice choice : choices) {
+            choiceLabels.add(choice.label().getString());
+        }
+        fitted = DialogLayout.compute(this.width, ru.gora.musicbattle.client.ui.TextStyles.measurer(), WorkshopTr.INSTANCE,
+                new DialogLayout.State(this.title.getString(), headingIcon != null, choiceLabels, field != null,
+                        fieldLabel.getString(), status.getString(), buttons(links), buttons(actions)));
+        panelWidth = fitted.panelWidth();
+        float textWidth = fitted.textWidth();
         List<List<FormattedCharSequence>> lines = new ArrayList<>();
-        float content = 0.0F;
+        List<Integer> lineCounts = new ArrayList<>();
         for (Component paragraph : paragraphs) {
             List<FormattedCharSequence> split = TextStyles.wrap(TextStyles.styled(paragraph, TextStyle.BODY), textWidth);
             lines.add(split);
-            content += split.size() * TextStyle.BODY.lineHeight() + GAP;
+            lineCounts.add(split.size());
         }
         wrapped = lines;
-        choicesTop = content;
-        content += choices.size() * (CHOICE_HEIGHT + 2.0F);
-        if (field != null) {
-            fieldTop = content + GAP;
-            content = fieldTop + TextStyle.CAPTION.lineHeight() + FIELD_HEIGHT + GAP;
-        }
-        contentHeight = Math.max(0.0F, content - GAP);
-
-        float headingHeight = 30.0F;
-        float statusHeight = status.getString().isEmpty() ? 0.0F : TextStyle.CAPTION.lineHeight() + 4.0F;
-        float buttonsHeight = layoutButtons(textWidth, 0.0F, true);
-        float maxBody = Math.max(24.0F, this.height - 24.0F - headingHeight - buttonsHeight - statusHeight - PAD * 3);
-        bodyHeight = Math.min(contentHeight, maxBody);
-        panelHeight = headingHeight + bodyHeight + statusHeight + buttonsHeight + PAD * 3;
+        body = DialogLayout.body(lineCounts, fitted, field != null);
+        frame = DialogLayout.frame(this.height, body.contentHeight(), fitted);
+        contentHeight = frame.contentHeight();
+        bodyHeight = frame.bodyHeight();
+        panelHeight = frame.panelHeight();
         panelX = (this.width - panelWidth) * 0.5F;
-        panelY = Math.max(12.0F, (this.height - panelHeight) * 0.5F);
-        bodyTop = panelY + headingHeight + PAD;
-        layoutButtons(textWidth, panelY + panelHeight - PAD - buttonsHeight, false);
+        panelY = Math.max(DialogLayout.WINDOW_MARGIN, (this.height - panelHeight) * 0.5F);
+        bodyTop = panelY + fitted.headingHeight() + PAD;
         scroll.setExtent(Math.max(0.0F, contentHeight - bodyHeight));
+        placeButtons(scroll.snapped(guiScale()));
     }
 
-    /** Lays buttons out from {@code top}; returns the height they need. */
-    private float layoutButtons(float innerWidth, float top, boolean measureOnly) {
-        float left = panelX + PAD;
-        float actionsWidth = 0.0F;
-        for (WorkshopButton button : actions) {
-            actionsWidth += Math.max(64.0F, button.preferredWidth()) + GAP;
+    /**
+     * Puts the buttons where DialogLayout placed them: pinned at the panel's foot, or in the body at the current scroll
+     * when the window is too short for them to be pinned.
+     */
+    private void placeButtons(float offset) {
+        float top = frame.buttonsScroll() ? bodyTop - offset + frame.buttonsTop() : panelY + panelHeight - PAD - fitted.buttonsHeight();
+        place(links, fitted.links(), top);
+        place(actions, fitted.actions(), top);
+    }
+
+    /** Whether a point is inside the body's visible part, where buttons that scroll with it can be seen and pressed. */
+    private boolean insideBody(double mouseX, double mouseY) {
+        return mouseX >= panelX + PAD && mouseX < panelX + panelWidth - PAD && mouseY >= bodyTop && mouseY < bodyTop + bodyHeight;
+    }
+
+    /** The words and icons of buttons, as DialogLayout measures them. */
+    private static List<DialogLayout.Button> buttons(List<WorkshopButton> buttons) {
+        List<DialogLayout.Button> out = new ArrayList<>();
+        for (WorkshopButton button : buttons) {
+            out.add(new DialogLayout.Button(button.label().getString(), button.hasIcon()));
         }
-        float linksWidth = 0.0F;
-        for (WorkshopButton button : links) {
-            linksWidth += button.preferredWidth() + GAP;
+        return out;
+    }
+
+    /** Puts buttons where DialogLayout placed them, under the body. */
+    private void place(List<WorkshopButton> buttons, List<ru.gora.musicbattle.client.workshop.layout.Rect> rects, float top) {
+        for (int i = 0; i < buttons.size() && i < rects.size(); i++) {
+            ru.gora.musicbattle.client.workshop.layout.Rect rect = rects.get(i);
+            buttons.get(i).setBounds(panelX + PAD + rect.x(), top + rect.y(), rect.w(), rect.h());
         }
-        boolean oneRow = actionsWidth + linksWidth <= innerWidth + GAP;
-        boolean stackActions = actionsWidth > innerWidth + GAP;
-        float height;
-        if (oneRow) {
-            height = WorkshopButton.HEIGHT;
-        } else if (!stackActions) {
-            height = WorkshopButton.HEIGHT * 2 + GAP;
-        } else {
-            height = WorkshopButton.HEIGHT * (actions.size() + (links.isEmpty() ? 0 : 1)) + GAP * (actions.size() - (links.isEmpty() ? 1 : 0));
-        }
-        if (measureOnly) {
-            return height;
-        }
-        float y = top;
-        float x = left;
-        if (!links.isEmpty()) {
-            float each = oneRow ? 0.0F : (innerWidth - GAP * (links.size() - 1)) / links.size();
-            for (WorkshopButton button : links) {
-                float w = oneRow ? button.preferredWidth() : each;
-                button.setBounds(x, y, w, WorkshopButton.HEIGHT);
-                x += w + GAP;
-            }
-            if (!oneRow) {
-                y += WorkshopButton.HEIGHT + GAP;
-            }
-        }
-        if (stackActions) {
-            for (WorkshopButton button : actions) {
-                button.setBounds(left, y, innerWidth, WorkshopButton.HEIGHT);
-                y += WorkshopButton.HEIGHT + GAP;
-            }
-        } else {
-            float right = left + innerWidth;
-            for (int i = actions.size() - 1; i >= 0; i--) {
-                WorkshopButton button = actions.get(i);
-                float w = Math.max(64.0F, button.preferredWidth());
-                button.setBounds(right - w, y, w, WorkshopButton.HEIGHT);
-                right -= w + GAP;
-            }
-        }
-        return height;
+    }
+
+    /** The y of a choice's row in the body, before scrolling. */
+    private float choiceTop(int index) {
+        return body.choiceTops().get(index);
     }
 
     /** Re-runs layout after the text or buttons changed. */
@@ -242,24 +227,27 @@ public abstract class WorkshopDialogScreen extends ru.gora.musicbattle.client.ui
         float headingX = panelX + PAD;
         if (headingIcon != null) {
             UiIcons.draw(g, headingIcon, headingX, panelY + PAD + 1.0F, 12.0F, headingColour);
-            headingX += 17.0F;
+            headingX += DialogLayout.HEADING_ICON;
         }
-        TextStyles.queue(g, TextStyles.ellipsize(TextStyles.styled(this.title, TextStyle.TITLE), panelX + panelWidth - PAD - headingX),
-                headingX, panelY + PAD + 2.0F, Palette.TEXT_1);
-        RoundedRect.fill(g, panelX + PAD, panelY + 30.0F, panelWidth - PAD * 2, 1.0F, 0, Palette.LINE);
+        for (int i = 0; i < fitted.heading().size(); i++) {
+            TextStyles.queue(g, TextStyles.text(fitted.heading().get(i), TextStyle.TITLE).getVisualOrderText(), headingX,
+                    panelY + DialogLayout.HEADING_TOP + i * TextStyle.TITLE.lineHeight(), Palette.TEXT_1);
+        }
+        RoundedRect.fill(g, panelX + PAD, panelY + fitted.headingHeight(), panelWidth - PAD * 2, 1.0F, 0, Palette.LINE);
 
-        UiClip.push(g, panelX + PAD, bodyTop, panelX + panelWidth - PAD, bodyTop + bodyHeight);
+        // The clip starts above the first line's cap line by as much as a glyph's ink can rise over it.
+        UiClip.push(g, panelX + PAD, bodyTop - DialogLayout.INK_ABOVE_CAP, panelX + panelWidth - PAD, bodyTop + bodyHeight);
         float y = bodyTop - offset;
         for (List<FormattedCharSequence> lines : wrapped) {
             y += TextStyles.queueLines(g, lines, panelX + PAD, y, TextStyle.BODY.lineHeight(), Palette.TEXT_2) + GAP;
         }
-        float choiceY = bodyTop - offset + choicesTop;
         for (int i = 0; i < choices.size(); i++) {
             Choice choice = choices.get(i);
-            float rowY = choiceY + i * (CHOICE_HEIGHT + 2.0F);
+            float rowY = bodyTop - offset + choiceTop(i);
+            float rowHeight = fitted.choiceHeights().get(i);
             boolean selected = choice.selected().getAsBoolean();
             boolean hovered = mouseX >= panelX + PAD && mouseX < panelX + panelWidth - PAD && mouseY >= rowY
-                    && mouseY < rowY + CHOICE_HEIGHT && mouseY >= bodyTop && mouseY < bodyTop + bodyHeight;
+                    && mouseY < rowY + rowHeight && mouseY >= bodyTop && mouseY < bodyTop + bodyHeight;
             if (hovered) {
                 ru.gora.musicbattle.client.ui.HandCursor.request(ru.gora.musicbattle.client.ui.HandCursor.Kind.HAND);
             }
@@ -270,16 +258,36 @@ public abstract class WorkshopDialogScreen extends ru.gora.musicbattle.client.ui
             if (selected) {
                 RoundedRect.circle(g, panelX + PAD + box * 0.5F, rowY + CHOICE_HEIGHT * 0.5F, box * 0.27F, Palette.ACCENT);
             }
-            TextStyles.queue(g, TextStyles.ellipsize(TextStyles.styled(choice.label(), TextStyle.BODY),
-                            panelWidth - PAD * 2 - box - 5.0F), panelX + PAD + box + 5.0F,
-                    TextStyles.centeredCapY(TextStyle.BODY, rowY, CHOICE_HEIGHT), selected || hovered ? Palette.TEXT_1 : Palette.TEXT_2);
+            // Every line of the choice, the box beside its first: the rules' acceptance is two long sentences.
+            List<String> lines = fitted.choices().get(i);
+            for (int line = 0; line < lines.size(); line++) {
+                TextStyles.queue(g, TextStyles.text(lines.get(line), TextStyle.BODY).getVisualOrderText(),
+                        panelX + PAD + box + DialogLayout.CHOICE_TEXT_GAP, DialogLayout.choiceLineY(rowY, line),
+                        selected || hovered ? Palette.TEXT_1 : Palette.TEXT_2);
+            }
         }
         if (field != null) {
-            float labelY = bodyTop - offset + fieldTop;
-            TextStyles.queue(g, TextStyles.ellipsize(TextStyles.styled(fieldLabel, TextStyle.CAPTION), panelWidth - PAD * 2),
-                    panelX + PAD, labelY, Palette.TEXT_MUTE);
-            field.setBounds(panelX + PAD, labelY + TextStyle.CAPTION.lineHeight(), panelWidth - PAD * 2, FIELD_HEIGHT);
+            float labelY = bodyTop - offset + body.fieldTop();
+            List<String> label = fitted.fieldLabel();
+            for (int line = 0; line < label.size(); line++) {
+                TextStyles.queue(g, TextStyles.text(label.get(line), TextStyle.CAPTION).getVisualOrderText(), panelX + PAD,
+                        labelY + line * TextStyle.CAPTION.lineHeight(), Palette.TEXT_MUTE);
+            }
+            field.setBounds(panelX + PAD, labelY + label.size() * TextStyle.CAPTION.lineHeight(), panelWidth - PAD * 2,
+                    FIELD_HEIGHT);
             field.render(g, mouseX, mouseY);
+        }
+        placeButtons(offset);
+        if (frame.buttonsScroll()) {
+            // Drawn in the body's clip; the pointer counts only where the body shows them.
+            double buttonX = insideBody(mouseX, mouseY) ? mouseX : -1.0D;
+            double buttonY = insideBody(mouseX, mouseY) ? mouseY : -1.0D;
+            for (WorkshopButton button : links) {
+                button.render(g, buttonX, buttonY);
+            }
+            for (WorkshopButton button : actions) {
+                button.render(g, buttonX, buttonY);
+            }
         }
         UiClip.pop(g);
         if (scroll.extent() > 0.5) {
@@ -289,16 +297,20 @@ public abstract class WorkshopDialogScreen extends ru.gora.musicbattle.client.ui
             RoundedRect.pill(g, panelX + panelWidth - PAD * 0.5F - 1.5F, thumbY, 3.0F, thumb, Palette.withAlpha(Palette.TEXT_3, 0.5F));
         }
 
-        if (!status.getString().isEmpty()) {
+        if (!fitted.status().isEmpty()) {
             float statusY = bodyTop + bodyHeight + PAD * 0.5F;
-            TextStyles.queue(g, TextStyles.ellipsize(TextStyles.styled(status, TextStyle.CAPTION), panelWidth - PAD * 2),
-                    panelX + PAD, statusY, statusColour);
+            for (int line = 0; line < fitted.status().size(); line++) {
+                TextStyles.queue(g, TextStyles.text(fitted.status().get(line), TextStyle.CAPTION).getVisualOrderText(),
+                        panelX + PAD, statusY + line * TextStyle.CAPTION.lineHeight(), statusColour);
+            }
         }
-        for (WorkshopButton button : links) {
-            button.render(g, mouseX, mouseY);
-        }
-        for (WorkshopButton button : actions) {
-            button.render(g, mouseX, mouseY);
+        if (!frame.buttonsScroll()) {
+            for (WorkshopButton button : links) {
+                button.render(g, mouseX, mouseY);
+            }
+            for (WorkshopButton button : actions) {
+                button.render(g, mouseX, mouseY);
+            }
         }
     }
 
@@ -313,23 +325,25 @@ public abstract class WorkshopDialogScreen extends ru.gora.musicbattle.client.ui
                 return true;
             }
             float offset = scroll.snapped(guiScale());
-            float choiceY = bodyTop - offset + choicesTop;
             for (int i = 0; i < choices.size(); i++) {
-                float rowY = choiceY + i * (CHOICE_HEIGHT + 2.0F);
-                if (mouseX >= panelX + PAD && mouseX < panelX + panelWidth - PAD && mouseY >= rowY && mouseY < rowY + CHOICE_HEIGHT
-                        && mouseY >= bodyTop && mouseY < bodyTop + bodyHeight) {
+                float rowY = bodyTop - offset + choiceTop(i);
+                if (mouseX >= panelX + PAD && mouseX < panelX + panelWidth - PAD && mouseY >= rowY
+                        && mouseY < rowY + fitted.choiceHeights().get(i) && mouseY >= bodyTop && mouseY < bodyTop + bodyHeight) {
                     choices.get(i).action().run();
                     relayout();
                     return true;
                 }
             }
+            // Buttons that scroll with the body are pressed only where the body shows them.
+            placeButtons(offset);
+            boolean reachable = !frame.buttonsScroll() || insideBody(mouseX, mouseY);
             for (WorkshopButton b : actions) {
-                if (b.click(mouseX, mouseY)) {
+                if (reachable && b.click(mouseX, mouseY)) {
                     return true;
                 }
             }
             for (WorkshopButton b : links) {
-                if (b.click(mouseX, mouseY)) {
+                if (reachable && b.click(mouseX, mouseY)) {
                     return true;
                 }
             }

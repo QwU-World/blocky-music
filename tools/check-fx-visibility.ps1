@@ -8,7 +8,7 @@ $jars = foreach ($group in $groups) {
     if (Test-Path -LiteralPath $dir) { Get-ChildItem -LiteralPath $dir -Recurse -Filter '*.jar' | Where-Object Name -notmatch '(-sources|-javadoc|-natives-)' | Select-Object -ExpandProperty FullName }
 }
 $cp = (@($out, "$root/build/classes/java/main", "$root/build/moddev/artifacts/neoforge-21.1.230-merged.jar", "$root/build/moddev/artifacts/neoforge-21.1.230-client-extra-aka-minecraft-resources.jar") + @($jars)) -join [IO.Path]::PathSeparator
-$jdk = 'C:/Program Files/Eclipse Adoptium/jdk-21.0.11.10-hotspot/bin'
+$jdk = & (Join-Path $PSScriptRoot 'find-jdk.ps1')
 $sources = @("$root/tools/FxVisibilityChecks.java", "$root/tools/FxHudRenderChecks.java", "$root/tools/FxHudEditorChecks.java", "$root/src/main/java/ru/gora/musicbattle/client/TrackGameplayPreviewScreen.java", "$root/src/main/java/ru/gora/musicbattle/client/TrackEffectEditScreen.java")
 foreach ($name in @('data/TrackEffectSettings','data/TrackEffect','client/ClientTrackEffects','client/ClientDjPresetStorage','client/SceneVisibilityCache','client/ClientBattleController','client/ClientGameEvents')) {
     $sources += "$root/src/main/java/ru/gora/musicbattle/$name.java"

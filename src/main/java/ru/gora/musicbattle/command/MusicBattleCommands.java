@@ -31,7 +31,7 @@ import ru.gora.musicbattle.server.workshop.ServerWorkshop;
 import ru.gora.musicbattle.server.workshop.WorkshopPermissions;
 
 /**
- * {@code /musicbattle}. Wave M3 added the Workshop side (spec 06 section 9.1): {@code workshop},
+ * {@code /musicbattle}. The Workshop side: {@code workshop},
  * {@code access} (which replaces {@code publishaccess}, kept as an alias), {@code published} for the admin removal
  * gap and {@code comments} for the server's own comments.
  *
@@ -60,6 +60,9 @@ public final class MusicBattleCommands {
                                 ))))
                 .then(Commands.literal("decline")
                         .executes(context -> BattleManager.decline(context.getSource())))
+                .then(Commands.literal("beatmaps")
+                        .executes(context -> tracks(context.getSource())))
+                // The name from before beatmaps were called beatmaps; it still works, so nobody's scripts break.
                 .then(Commands.literal("tracks")
                         .executes(context -> tracks(context.getSource())))
                 .then(Commands.literal("reload")
@@ -67,7 +70,7 @@ public final class MusicBattleCommands {
                         .executes(context -> reload(context.getSource())))
                 .then(workshop())
                 .then(access("access"))
-                // The pre-M3 name still works, so nobody's server scripts break.
+                // The command's earlier name still works, so nobody's server scripts break.
                 .then(access("publishaccess"))
                 .then(published())
                 .then(comments()));
@@ -179,7 +182,7 @@ public final class MusicBattleCommands {
         return 1;
     }
 
-    /** Only a server with {@code workshop.allowServerDownloads} may fetch a set itself (spec 06 section 9.1). */
+    /** Only a server with {@code workshop.allowServerDownloads} may fetch a set itself. */
     private static int addBeatmap(CommandSourceStack source, long setId) {
         if (!MusicBattleServerConfig.allowServerDownloads()) {
             source.sendFailure(Component.translatable("music_battle.l10n.server.server_downloads_disabled"));

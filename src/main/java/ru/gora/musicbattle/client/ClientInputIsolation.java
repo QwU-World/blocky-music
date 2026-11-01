@@ -1,6 +1,8 @@
 package ru.gora.musicbattle.client;
 
 import com.mojang.blaze3d.platform.InputConstants;
+import java.util.HashSet;
+import java.util.Set;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.Screen;
@@ -8,41 +10,84 @@ import org.lwjgl.glfw.GLFW;
 
 /** Keeps editor and participant input from leaking into ordinary mod key mappings. */
 public final class ClientInputIsolation {
+    /**
+     * Every key and mouse button that is down, from the window's own events, with or without a screen open. A screen
+     * takes the key events and lets go of every key mapping as it opens (KeyMapping.releaseAll), and on macOS closing
+     * it does not read them back, so after the pause menu only this still knows which lane keys were held through it
+     * (ClientBattleController#resumeLanesAfterGamePause).
+     */
+    private static final Set<InputConstants.Key> HELD = new HashSet<>();
+
     private ClientInputIsolation() {
     }
 
     public static boolean handleBattleKey(int keyCode, int scanCode, int action) {
         Minecraft minecraft = Minecraft.getInstance();
+        InputConstants.Key pressedKey = InputConstants.getKey(keyCode, scanCode);
+        boolean down = action != GLFW.GLFW_RELEASE;
+        noteHeld(pressedKey, down);
         if (!ClientBattleController.blocksParticipantInput() || minecraft.screen != null || isAllowedSystemKey(keyCode)) {
             return false;
         }
 
-        InputConstants.Key pressedKey = InputConstants.getKey(keyCode, scanCode);
-        boolean down = action != GLFW.GLFW_RELEASE;
         if (!isShiftKey(keyCode)) {
-            for (KeyMapping lane : MusicBattleKeys.lanes()) {
-                if (lane.getKey().equals(pressedKey)) {
-                    lane.setDown(down);
-                }
-            }
+            laneKeyEvent(pressedKey, action);
         }
         return true;
     }
 
+    /**
+     * A key event while the battle has the keys. A repeat - the system sending a held key again and again - is never
+     * a press and changes nothing: it used to set the lane down like a press, which was harmless while the lane was
+     * already down, but a key that went down in the pause menu and is still held after it is up by design
+     * (ClientBattleController#resumeLanesAfterGamePause), and its first repeat then pressed the lane by itself.
+     */
+    static void laneKeyEvent(InputConstants.Key key, int action) {
+        if (action == GLFW.GLFW_REPEAT) {
+            return;
+        }
+        setLanes(key, action != GLFW.GLFW_RELEASE);
+    }
+
     public static boolean handleBattleMouseButton(int button, int action) {
         Minecraft minecraft = Minecraft.getInstance();
+        InputConstants.Key pressedButton = InputConstants.Type.MOUSE.getOrCreate(button);
+        boolean down = action != GLFW.GLFW_RELEASE;
+        noteHeld(pressedButton, down);
         if (!ClientBattleController.blocksParticipantInput() || minecraft.screen != null) {
             return false;
         }
 
-        InputConstants.Key pressedKey = InputConstants.Type.MOUSE.getOrCreate(button);
-        boolean down = action != GLFW.GLFW_RELEASE;
-        for (KeyMapping lane : MusicBattleKeys.lanes()) {
-            if (lane.getKey().equals(pressedKey)) {
-                lane.setDown(down);
+        setLanes(pressedButton, down);
+        return true;
+    }
+
+    /** Whether this key or mouse button is down now, by the window's events (see {@link #HELD}). */
+    public static boolean isHeld(InputConstants.Key key) {
+        return key != null && HELD.contains(key);
+    }
+
+    private static void noteHeld(InputConstants.Key key, boolean down) {
+        if (down) {
+            HELD.add(key);
+        } else {
+            HELD.remove(key);
+        }
+    }
+
+    /**
+     * Sets the lanes bound to this key, and counts a key going down as a press the moment it happens. The battle
+     * reads the lanes only once per client tick, and a tap shorter than a tick would otherwise never be read at all.
+     * A held key's repeat events never come here (laneKeyEvent).
+     */
+    private static void setLanes(InputConstants.Key key, boolean down) {
+        KeyMapping[] lanes = MusicBattleKeys.lanes();
+        for (int lane = 0; lane < lanes.length; lane++) {
+            if (lanes[lane].getKey().equals(key)) {
+                BattleLaneLatch.LANES.keyChanged(lane, lanes[lane].isDown(), down);
+                lanes[lane].setDown(down);
             }
         }
-        return true;
     }
 
     public static boolean blockBattleMouseWheel() {

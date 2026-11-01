@@ -12,7 +12,7 @@ import ru.gora.musicbattle.workshop.api.WorkshopDtos.Me;
 import ru.gora.musicbattle.workshop.api.WorkshopDtos.MinecraftRef;
 
 /**
- * The mod's workshop sign-in (spec 06 section 7, 02 section 4). The access token lives in memory only; a refresh
+ * The mod's workshop sign-in. The access token lives in memory only; a refresh
  * token (device sign-in with "remember me") goes to {@link RefreshTokenStore}. Refresh tokens rotate on every use:
  * the new one is written to disk before the call returns, and {@code invalid_grant} deletes the file.
  *

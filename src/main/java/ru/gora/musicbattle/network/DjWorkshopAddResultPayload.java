@@ -9,7 +9,7 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import ru.gora.musicbattle.MusicBattleMod;
 
 /**
- * The server's answer to {@link DjWorkshopAddPayload}: {@link #ADDED} when the chart is in the playlist now,
+ * The server's answer to {@link DjWorkshopAddPayload}: {@link #ADDED} when the chart is on the booth's list now,
  * {@link #UPLOAD} when the DJ may bring the set and the client should start "Add to server", {@link #SEND_INSTALLED}
  * when the server will ask for the DJ's installed copy to cache it, as for a battle vote, {@link #REFUSED} with the
  * reason. The message is a component so each client reads it in its own language.

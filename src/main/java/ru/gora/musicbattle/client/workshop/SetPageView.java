@@ -36,7 +36,7 @@ import ru.gora.musicbattle.workshop.api.WorkshopDownloader;
 import ru.gora.musicbattle.workshop.api.WorkshopDtos;
 
 /**
- * The set page (spec 06 section 6.2): header over the cover with the chart tiles, title, artist, mapper card,
+ * The set page: header over the cover with the chart tiles, title, artist, mapper card,
  * availability banner and the buttons (♥, Install, Open in browser, ⋯), the right column with the status pill,
  * preview bar, basic stats, attribute bars and the user-rating box, the info section, the charts table and the
  * comments. It slides over the listing and the listing keeps its state.
@@ -57,6 +57,8 @@ public final class SetPageView implements WorkshopScreen.Overlay {
      * ({@code ws_<setId>} or {@code track_<trackId>}), or null for an ordinary Workshop page.
      */
     private final String serverKey;
+    /** What the server's list says about one of its own beatmaps; null on every other page. */
+    private final ru.gora.musicbattle.client.workshop.layout.BattleTracks.Track serverRow;
     /** The picture the server keeps for this map, for a page whose map the Workshop has no cover of; may be null. */
     private final Supplier<ResourceLocation> serverPicture;
     private final Motion.SmoothScroll scroll = new Motion.SmoothScroll();
@@ -81,6 +83,8 @@ public final class SetPageView implements WorkshopScreen.Overlay {
     private final Queue<Runnable> pending = new ConcurrentLinkedQueue<>();
     /** When the clip was asked for, so one that never arrives says so instead of leaving the bar as it was. */
     private long previewRequestedMs;
+    /** This page pressed Play and has not heard back that the clip failed or that the press was taken back. */
+    private boolean previewAsked;
     /** Why there is nothing to hear, once that is known: the bar carries this line in place of the play button. */
     private String previewProblem;
     /** The press that asked for the network, kept until the consent dialog answers; see {@link #askNetwork}. */
@@ -97,6 +101,14 @@ public final class SetPageView implements WorkshopScreen.Overlay {
      */
     public SetPageView(WorkshopScreen screen, WorkshopClient client, long setId, CardModel model, String serverKey,
                        Supplier<ResourceLocation> serverPicture) {
+        this(screen, client, setId, model, serverKey, serverPicture, null);
+    }
+
+    /** A server beatmap's page, built from its row of the server's list; see {@link SetPageLayout#serverTrack}. */
+    public SetPageView(WorkshopScreen screen, WorkshopClient client, long setId, CardModel model, String serverKey,
+                       Supplier<ResourceLocation> serverPicture,
+                       ru.gora.musicbattle.client.workshop.layout.BattleTracks.Track serverRow) {
+        this.serverRow = serverRow;
         this.screen = screen;
         this.client = client;
         this.setId = setId;
@@ -270,6 +282,13 @@ public final class SetPageView implements WorkshopScreen.Overlay {
 
     private SetPageLayout.State state() {
         WorkshopTr tr = WorkshopTr.INSTANCE;
+        if (serverTrack() && serverRow != null) {
+            // Everything the Workshop would say about a set is missing for a server beatmap, and the page used to draw
+            // it all anyway from a stand-in card: BPM 0, length 0:00, a COMMUNITY pill and "0 downloads".
+            return SetPageLayout.serverTrack(tr, serverRow.title(), serverRow.kind().name().toLowerCase(Locale.ROOT),
+                    ListingView.kindLabel(tr, serverRow.kind()), ListingView.byline(tr, serverRow), serverRow.bpm(),
+                    serverRow.durationTicks() * 50L, serverRow.description(), tr.get(WorkshopStrings.KEY + "set.server_track"));
+        }
         String title = detail != null ? detail.title() : card != null ? card.title : "…";
         String artist = detail != null ? detail.artist() : card != null ? card.artist : "";
         List<SetPageLayout.Badge> badges = new ArrayList<>();
@@ -613,7 +632,9 @@ public final class SetPageView implements WorkshopScreen.Overlay {
         Rect avatar = shift(layout.rect("set.avatar"), offset);
         String avatarUrl = detail != null && detail.mapper() != null ? detail.mapper().avatarUrl() : null;
         var avatarTexture = client.networkAllowed() && avatarUrl != null ? CoverCache.get(avatarUrl) : null;
-        if (avatarTexture != null) {
+        if (avatar.empty()) {
+            // A server beatmap's page has no mapper card.
+        } else if (avatarTexture != null) {
             RoundedImage.draw(g, avatarTexture, avatar.x(), avatar.y(), avatar.w(), avatar.h(), avatar.w() * 0.5F, 0F, 1F);
         } else {
             WorkshopDraw.panel(g, avatar, avatar.w() * 0.5F, Palette.BG_3);
@@ -634,9 +655,11 @@ public final class SetPageView implements WorkshopScreen.Overlay {
         Rect favourite = shift(layout.rect("set.favourite"), offset);
         boolean favourited = frameState.favourited();
         int heartColour = favourited ? Palette.DANGER : Palette.TEXT_2;
-        WorkshopDraw.icon(g, favourite.inset(favourite.w() * 0.28F, favourite.h() * 0.28F),
-                favourited ? UiIcon.HEART_FILLED : UiIcon.HEART,
-                canFavourite ? heartColour : Palette.fade(heartColour, 0.45F));
+        if (!favourite.empty()) {
+            WorkshopDraw.icon(g, favourite.inset(favourite.w() * 0.28F, favourite.h() * 0.28F),
+                    favourited ? UiIcon.HEART_FILLED : UiIcon.HEART,
+                    canFavourite ? heartColour : Palette.fade(heartColour, 0.45F));
+        }
         boolean canInstall = frameState.canInstall();
         drawButton(g, "set.install", offset, mouseX, mouseY, WorkshopDraw.ButtonStyle.PRIMARY, canInstall);
         int installColour = canInstall ? Palette.TEXT_1 : Palette.fade(Palette.TEXT_1, 0.55F);
@@ -648,39 +671,48 @@ public final class SetPageView implements WorkshopScreen.Overlay {
         }
         drawButton(g, "set.browser", offset, mouseX, mouseY, WorkshopDraw.ButtonStyle.SECONDARY);
         Rect browser = shift(layout.rect("set.browser"), offset);
-        WorkshopDraw.icon(g, browser.inset(browser.w() * 0.28F, browser.h() * 0.28F), UiIcon.EXTERNAL_LINK, Palette.TEXT_2);
+        if (!browser.empty()) {
+            WorkshopDraw.icon(g, browser.inset(browser.w() * 0.28F, browser.h() * 0.28F), UiIcon.EXTERNAL_LINK, Palette.TEXT_2);
+        }
         drawButton(g, "set.more", offset, mouseX, mouseY, WorkshopDraw.ButtonStyle.SECONDARY);
         Rect more = shift(layout.rect("set.more"), offset);
-        WorkshopDraw.icon(g, more.inset(more.w() * 0.28F, more.h() * 0.28F), UiIcon.SETTINGS, Palette.TEXT_2);
+        if (!more.empty()) {
+            WorkshopDraw.icon(g, more.inset(more.w() * 0.28F, more.h() * 0.28F), UiIcon.SETTINGS, Palette.TEXT_2);
+        }
 
         // Right column.
         Rect right = shift(layout.rect(SetPageLayout.RIGHT), offset);
         WorkshopDraw.panel(g, right, Palette.RADIUS_MD, Palette.withAlpha(Palette.BG_1, 0.8F));
         Rect statusPill = shift(layout.rect("set.status"), offset);
-        WorkshopDraw.pill(g, statusPill, WorkshopDraw.statusColour(detail != null ? detail.status() : card != null ? card.status : ""));
+        if (!statusPill.empty()) {
+            WorkshopDraw.pill(g, statusPill, WorkshopDraw.statusColour(detail != null ? detail.status() : card != null ? card.status : ""));
+        }
         drawText(g, "set.status.text", offset, Palette.ON_PILL);
         Rect preview = shift(layout.rect("set.preview"), offset);
-        boolean previewHovered = WorkshopDraw.hot(preview, mouseX, mouseY);
-        WorkshopDraw.panel(g, preview, Palette.RADIUS_SM, previewHovered ? Palette.BG_3 : Palette.withAlpha(Palette.BG_0, 0.5F));
-        String previewKey = CardRenderer.previewKey(setId);
-        boolean playing = PreviewPlayer.isPlaying(previewKey);
-        if (previewWaiting(previewKey)) {
-            // Fetching the clip, or decoding it: both used to draw the idle play button, so pressing it looked like it
-            // had done nothing at all for as long as the download took.
-            WorkshopDraw.spinner(g, preview.centerX(), preview.centerY(), 5F, Palette.ACCENT);
-        } else if (playing) {
-            WorkshopDraw.stopSquare(g, preview.centerX(), preview.centerY(), 6F, Palette.ACCENT);
-            WorkshopDraw.bar(g, shift(layout.rect("set.preview.bar"), offset), PreviewPlayer.progress(previewKey),
-                    Palette.BG_0, Palette.ACCENT);
-        } else if (previewProblem != null) {
-            // The clip is not coming. A play button that answers nothing is the control lying about what it has, so
-            // the bar carries the reason instead; pressing it again still tries.
-            TextStyles.queueCentered(g, TextStyles.ellipsize(TextStyles.text(previewProblem, TextStyle.CAPTION),
-                            preview.w() - 8), preview.centerX(),
-                    TextStyles.centeredCapY(TextStyle.CAPTION, preview.y(), preview.h()), Palette.TEXT_MUTE);
-        } else {
-            WorkshopDraw.icon(g, new Rect(preview.centerX() - 4, preview.centerY() - 4, 8, 8), UiIcon.PLAY,
-                    previewHovered ? Palette.ACCENT : Palette.TEXT_2);
+        // A server beatmap's page has no preview bar; drawn from its empty box, the play icon would sit in a corner.
+        if (!preview.empty()) {
+            boolean previewHovered = WorkshopDraw.hot(preview, mouseX, mouseY);
+            WorkshopDraw.panel(g, preview, Palette.RADIUS_SM, previewHovered ? Palette.BG_3 : Palette.withAlpha(Palette.BG_0, 0.5F));
+            String previewKey = CardRenderer.previewKey(setId);
+            boolean playing = PreviewPlayer.isPlaying(previewKey);
+            if (previewWaiting(previewKey)) {
+                // Fetching the clip, or decoding it: both used to draw the idle play button, so pressing it looked like it
+                // had done nothing at all for as long as the download took.
+                WorkshopDraw.spinner(g, preview.centerX(), preview.centerY(), 5F, Palette.ACCENT);
+            } else if (playing) {
+                WorkshopDraw.stopSquare(g, preview.centerX(), preview.centerY(), 6F, Palette.ACCENT);
+                WorkshopDraw.bar(g, shift(layout.rect("set.preview.bar"), offset), PreviewPlayer.progress(previewKey),
+                        Palette.BG_0, Palette.ACCENT);
+            } else if (previewProblem != null) {
+                // The clip is not coming. A play button that answers nothing is the control lying about what it has, so
+                // the bar carries the reason instead; pressing it again still tries.
+                TextStyles.queueCentered(g, TextStyles.ellipsize(TextStyles.text(previewProblem, TextStyle.CAPTION),
+                                preview.w() - 8), preview.centerX(),
+                        TextStyles.centeredCapY(TextStyle.CAPTION, preview.y(), preview.h()), Palette.TEXT_MUTE);
+            } else {
+                WorkshopDraw.icon(g, new Rect(preview.centerX() - 4, preview.centerY() - 4, 8, 8), UiIcon.PLAY,
+                        previewHovered ? Palette.ACCENT : Palette.TEXT_2);
+            }
         }
         for (int i = 0; i < 8; i++) {
             drawText(g, "set.basic." + i + ".label", offset, Palette.TEXT_MUTE);
@@ -695,7 +727,9 @@ public final class SetPageView implements WorkshopScreen.Overlay {
             drawText(g, "set.attr." + i + ".value", offset, Palette.TEXT_2);
         }
         Rect ratingBox = shift(layout.rect("set.rating"), offset);
-        WorkshopDraw.panel(g, ratingBox, Palette.RADIUS_SM, Palette.withAlpha(Palette.BG_0, 0.5F));
+        if (!ratingBox.empty()) {
+            WorkshopDraw.panel(g, ratingBox, Palette.RADIUS_SM, Palette.withAlpha(Palette.BG_0, 0.5F));
+        }
         drawText(g, "set.rating.title", offset, Palette.TEXT_2);
         List<Integer> histogram = frameState.ratingHistogram();
         long total = 0;
@@ -707,7 +741,9 @@ public final class SetPageView implements WorkshopScreen.Overlay {
             }
         }
         Rect ratingBar = shift(layout.rect("set.rating.bar"), offset);
-        WorkshopDraw.bar(g, ratingBar, total == 0 ? 0F : (float) negative / total, Palette.ACCENT, Palette.RATING_NEG);
+        if (!ratingBar.empty()) {
+            WorkshopDraw.bar(g, ratingBar, total == 0 ? 0F : (float) negative / total, Palette.ACCENT, Palette.RATING_NEG);
+        }
         drawText(g, "set.rating.negative", offset, Palette.RATING_NEG);
         drawText(g, "set.rating.positive", offset, Palette.ACCENT);
         drawText(g, "set.rating.spread", offset, Palette.TEXT_MUTE);
@@ -945,12 +981,18 @@ public final class SetPageView implements WorkshopScreen.Overlay {
 
     private void togglePreview() {
         String key = CardRenderer.previewKey(setId);
-        if (PreviewPlayer.isPlaying(key)) {
-            PreviewPlayer.stop();
+        if (PreviewPlayer.isPlaying(key) || screen.previewFetching(setId)) {
+            // Stop also cancels a clip still on its way, so pressing the spinner does what it shows.
+            screen.stopPreview();
             previewRequestedMs = 0L;
+            previewAsked = false;
             return;
         }
         previewProblem = null;
+        // A failure left over from an earlier press belongs to that press.
+        screen.takePreviewFailure(setId);
+        PreviewPlayer.takeFailure(key);
+        previewAsked = true;
         if (card != null && CardModel.fileExists(card.localPreview)) {
             previewRequestedMs = 0L;
             PreviewPlayer.play(key, card.localPreview, card.previewDurationMs > 0 ? card.previewDurationMs
@@ -980,8 +1022,9 @@ public final class SetPageView implements WorkshopScreen.Overlay {
 
     /**
      * Whether the clip is on its way: the fetch this page asked for has not reached the player yet, or it has and the
-     * decoder has not started the channel. The fetch itself reports nothing back ({@code WorkshopScreen} caches the
-     * bytes and plays them), so the wait is measured here and a clip that never arrives becomes a reason on the bar.
+     * decoder has not started the channel. A failed download ({@code WorkshopScreen.takePreviewFailure}) or a clip the
+     * player could not play ({@code PreviewPlayer.takeFailure}) becomes a reason on the bar on the frame it is known;
+     * the 20-second wait is left only for a request that never answers at all.
      */
     private boolean previewWaiting(String key) {
         if (PreviewPlayer.isPlaying(key)) {
@@ -990,6 +1033,18 @@ public final class SetPageView implements WorkshopScreen.Overlay {
             previewRequestedMs = 0L;
             previewProblem = null;
             return PreviewPlayer.isLoading(key);
+        }
+        // The download failed, or the clip came and could not be played: say so now rather than spin out the wait.
+        // Both answers are read every frame, so either one ends the spinner on the frame it arrives.
+        boolean fetchFailed = previewAsked && screen.takePreviewFailure(setId);
+        boolean playFailed = previewAsked && PreviewPlayer.takeFailure(key);
+        if (fetchFailed || playFailed) {
+            previewAsked = false;
+            previewRequestedMs = 0L;
+            // A clip that came and would not play did arrive: it is told apart from one that never came.
+            previewProblem = WorkshopTr.INSTANCE.get(WorkshopStrings.KEY
+                    + (fetchFailed ? "set.preview_failed" : "set.preview_unplayable"));
+            return false;
         }
         if (previewRequestedMs == 0L) {
             return false;

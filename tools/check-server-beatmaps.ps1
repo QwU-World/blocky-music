@@ -9,7 +9,7 @@ $jars = foreach ($group in $groups) {
 }
 $jars = @($jars | Where-Object { [IO.Path]::GetFileName($_) -ne 'fastutil-8.3.1.jar' })
 $cp = (@($out, "$root/build/classes/java/main", "$root/build/moddev/artifacts/neoforge-21.1.230-merged.jar") + @($jars)) -join [IO.Path]::PathSeparator
-$jdk = 'C:/Program Files/Eclipse Adoptium/jdk-21.0.11.10-hotspot/bin'
+$jdk = & (Join-Path $PSScriptRoot 'find-jdk.ps1')
 & "$jdk/javac.exe" -proc:none -encoding UTF-8 -cp $cp -d $out "$root/tools/ServerBeatmapsChecks.java"
 if ($LASTEXITCODE) { throw 'Server beatmaps test compilation failed' }
 & "$jdk/java.exe" -cp $cp ru.gora.musicbattle.server.workshop.ServerBeatmapsChecks $root

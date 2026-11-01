@@ -25,6 +25,10 @@ public final class ClientPayloadBridge {
         invokeClient("closeCameraEditor", new Class<?>[]{CameraEditorClosedPayload.class}, payload);
     }
 
+    public static void acceptCameraFollowState(CameraFollowStatePayload payload) {
+        invokeClient("acceptCameraFollowState", new Class<?>[]{CameraFollowStatePayload.class}, payload);
+    }
+
     public static void openSpeakerConfig(OpenSpeakerConfigPayload payload) {
         invokeClient("openSpeakerConfig", new Class<?>[]{OpenSpeakerConfigPayload.class}, payload);
     }
@@ -119,6 +123,10 @@ public final class ClientPayloadBridge {
         invokeClient("updatePauseSkipStatus", new Class<?>[]{PauseSkipStatusPayload.class}, payload);
     }
 
+    public static void acceptPauseSkipJump(PauseSkipJumpPayload payload) {
+        invokeClient("acceptPauseSkipJump", new Class<?>[]{PauseSkipJumpPayload.class}, payload);
+    }
+
     public static void openChallengeSide(OpenChallengeSidePayload payload) {
         invokeClient("openChallengeSide", new Class<?>[]{OpenChallengeSidePayload.class}, payload);
     }
@@ -166,7 +174,7 @@ public final class ClientPayloadBridge {
         }
     }
 
-    // ---------------------------------------------------------------- workshop (wave M3, spec 06 section 10)
+    // ---------------------------------------------------------------- workshop
 
     public static void workshopServerInfo(WorkshopServerInfoPayload payload) {
         invokeWorkshop("acceptServerInfo", new Class<?>[]{WorkshopServerInfoPayload.class}, payload);
@@ -201,7 +209,7 @@ public final class ClientPayloadBridge {
     }
 
     /**
-     * Answers a battle asset offer from the client's hash index only (review of 06 section 9.4): no file is hashed
+     * Answers a battle asset offer from the client's hash index only: no file is hashed
      * and no cache lookup that could touch the disk runs on this thread.
      */
     public static void answerTrackAssetOffer(TrackAssetOfferPayload payload) {

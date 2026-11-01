@@ -8,7 +8,7 @@ import ru.gora.musicbattle.client.ui.UiIcon;
 import ru.gora.musicbattle.client.workshop.layout.WorkshopStrings;
 
 /**
- * The ⋯ menu of the set page (spec 06 section 6.2): Report, Copy link, and for an installed set Open folder, Copy to
+ * The ⋯ menu of the set page: Report, Copy link, and for an installed set Open folder, Copy to
  * my tracks, Choose audio file and Delete local copy.
  */
 public final class WorkshopMoreScreen extends WorkshopDialogScreen {
@@ -51,7 +51,7 @@ public final class WorkshopMoreScreen extends WorkshopDialogScreen {
                             InstalledActions.chooseAudio(screen, client, setId);
                         });
             }
-            // Spec 06 section 9.1: only with the server's permission, and only for a signed, still-available set.
+            // Only with the server's permission, and only for a signed, still-available set.
             if (WorkshopServerHooks.serverBeatmapsAvailable() && ServerWorkshopClient.canManage()) {
                 addAction(Component.translatable(WorkshopStrings.KEY + "more.add_to_server"), WorkshopButton.Kind.PRIMARY,
                         UiIcon.UPLOAD, () -> {

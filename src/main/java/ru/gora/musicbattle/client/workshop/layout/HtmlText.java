@@ -7,8 +7,8 @@ import java.util.Locale;
 import java.util.Map;
 
 /**
- * Plain text out of the sanitised markdown HTML the workshop returns for descriptions and comments (spec 06 section
- * 6.2 and 6.3: "plain text rendering with links"). Block tags become line breaks, list items get a bullet, entities
+ * Plain text out of the sanitised markdown HTML the workshop returns for descriptions and comments, as plain
+ * text with links. Block tags become line breaks, list items get a bullet, entities
  * are decoded and every {@code <a href>} is collected so the screen can offer it through the confirm-link dialog.
  *
  * <p>Deliberately not an HTML parser: the server already sanitises, and anything unknown is simply dropped.

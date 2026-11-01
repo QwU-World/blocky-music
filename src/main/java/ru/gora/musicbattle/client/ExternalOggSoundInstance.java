@@ -39,6 +39,8 @@ public class ExternalOggSoundInstance extends AbstractSoundInstance implements T
     private final String description;
     private final int skipTicks;
     private final int audioOffsetMs;
+    /** Seconds of the decoded song skipped before the first sample is heard; only interface previews set it. */
+    private final double startSeconds;
     private final Consumer<String> errorCallback;
     private final ThreeBandEqualizer equalizer = new ThreeBandEqualizer();
     private final LiveDjAudioEffects djEffects = new LiveDjAudioEffects();
@@ -64,6 +66,7 @@ public class ExternalOggSoundInstance extends AbstractSoundInstance implements T
         this.description = String.valueOf(file);
         this.skipTicks = Math.max(0, skipTicks);
         this.audioOffsetMs = ClientBattleSettings.audioOffsetMs();
+        this.startSeconds = 0.0D;
         this.errorCallback = errorCallback;
         this.volume = volume;
         this.pitch = Math.max(0.1F, pitch);
@@ -83,11 +86,21 @@ public class ExternalOggSoundInstance extends AbstractSoundInstance implements T
      */
     protected ExternalOggSoundInstance(ResourceLocation id, SoundSource source, AudioSource audio, String description,
                                        float volume, Consumer<String> errorCallback) {
+        this(id, source, audio, description, volume, 0L, errorCallback);
+    }
+
+    /**
+     * The same interface stream, heard from {@code startMs} into the song: the decoded frames before it are skipped
+     * (frame-exact, as a battle's start skip is), so the first sample played is the one at {@code startMs}.
+     */
+    protected ExternalOggSoundInstance(ResourceLocation id, SoundSource source, AudioSource audio, String description,
+                                       float volume, long startMs, Consumer<String> errorCallback) {
         super(id, source, SoundInstance.createUnseededRandom());
         this.audio = audio;
         this.description = description;
         this.skipTicks = 0;
         this.audioOffsetMs = 0;
+        this.startSeconds = Math.max(0L, startMs) / 1000.0D;
         this.errorCallback = errorCallback;
         this.volume = volume;
         this.pitch = 1.0F;
@@ -192,7 +205,12 @@ public class ExternalOggSoundInstance extends AbstractSoundInstance implements T
                 }
                 throwIfStopRequested();
                 stream = new CalibratedAudioStream(stream,
-                        CalibrationTiming.sourceAudioSeconds(skipTicks, pitch, audioOffsetMs), () -> stopRequested);
+                        CalibrationTiming.sourceAudioSeconds(skipTicks, pitch, audioOffsetMs) + startSeconds, () -> stopRequested);
+                if (startSeconds > 0.0D) {
+                    MusicBattleMod.LOGGER.debug("Blocky Music preview '{}' starts at {} ms: {} decoded frames skipped at {} Hz.",
+                            this.description, Math.round(startSeconds * 1000.0D),
+                            Math.round(startSeconds * stream.getFormat().getFrameRate()), stream.getFormat().getFrameRate());
+                }
                 throwIfStopRequested();
                 AudioStream ready = this instanceof SpectatorOggSoundInstance
                         ? new LowLatencyAudioStream(stream)

@@ -12,6 +12,8 @@
     "client.MouseHandlerMixin",
     "client.SoundOptionsScreenMixin",
     "client.ChannelMixin",
+    "client.SoundManagerAccessor",
+    "client.SoundEngineAccessor",
     "client.MinecraftRenderTargetMixin",
     "client.MinecraftConnectionAccessor",
     "client.CameraMixin",

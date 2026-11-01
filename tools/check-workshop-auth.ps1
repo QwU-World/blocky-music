@@ -9,7 +9,7 @@ $jars = foreach ($group in $groups) {
     if (Test-Path -LiteralPath $dir) { Get-ChildItem -LiteralPath $dir -Recurse -Filter '*.jar' | Where-Object Name -notmatch '(-sources|-javadoc|-natives-)' | Select-Object -ExpandProperty FullName }
 }
 $cp = (@($out) + @($jars)) -join [IO.Path]::PathSeparator
-$jdk = 'C:/Program Files/Eclipse Adoptium/jdk-21.0.11.10-hotspot/bin'
+$jdk = & (Join-Path $PSScriptRoot 'find-jdk.ps1')
 $sources = @()
 foreach ($name in @('package-info','WorkshopLayout','WorkshopSignature','BeatmapPackageException','BeatmapManifest','BeatmapPackage','WorkshopCatalog','ServerIdHash')) { $sources += "$root/src/main/java/ru/gora/musicbattle/workshop/$name.java" }
 foreach ($api in @('package-info','AtomicFiles','AutoSignInGate','CancelToken','ClientLabels','DeviceFlow','InstalledCheck','MinecraftSignIn','RefreshTokenStore','WorkshopApi','WorkshopApiException','WorkshopConfig','WorkshopDownloader','WorkshopDtos','WorkshopInbox','WorkshopRequest','WorkshopSession')) { $sources += "$root/src/main/java/ru/gora/musicbattle/workshop/api/$api.java" }

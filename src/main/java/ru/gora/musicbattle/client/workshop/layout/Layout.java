@@ -44,8 +44,18 @@ public final class Layout {
     public record Box(String id, String parent, Kind kind, Rect rect, String text, TextStyle style, boolean floating) {
     }
 
+    /**
+     * A string this layout could not show whole: cut short with an ellipsis, wrapped past its line cap, or broken
+     * between two letters because one of its words is wider than the line ({@code width} in {@code style}). The screen
+     * draws what was laid out either way; the {@code workshop-text} check reads these to prove that only the players'
+     * own words (titles, names, comments) and identifiers (links, hashes) are ever cut, and the interface's words never.
+     */
+    public record Cut(String id, String text, String shown, float width, TextStyle style) {
+    }
+
     private final List<Box> boxes = new ArrayList<>();
     private final Map<String, Box> byId = new LinkedHashMap<>();
+    private final List<Cut> cuts = new ArrayList<>();
     private final TextMeasurer measurer;
     private final Tr tr;
     private float contentHeight;
@@ -67,6 +77,20 @@ public final class Layout {
         return boxes;
     }
 
+    /** The strings this layout had to cut, in layout order; see {@link Cut}. */
+    public List<Cut> cuts() {
+        return cuts;
+    }
+
+    /** {@code text} cut to {@code maxWidth}, noting the cut when there was one. */
+    private String fit(String id, String text, TextStyle style, float maxWidth) {
+        String fitted = TextFit.ellipsize(measurer, text, style, maxWidth);
+        if (text != null && !fitted.equals(text)) {
+            cuts.add(new Cut(id, text, fitted, maxWidth, style));
+        }
+        return fitted;
+    }
+
     /** Total height of the scrollable content of this view (0 when it does not scroll). */
     public float contentHeight() {
         return contentHeight;
@@ -86,31 +110,31 @@ public final class Layout {
 
     /** A text box holding {@code text} cut to {@code rect.w}; returns the box with the fitted string. */
     public Box text(String id, String parent, Rect rect, String text, TextStyle style) {
-        String fitted = TextFit.ellipsize(measurer, text, style, rect.w());
+        String fitted = fit(id, text, style, rect.w());
         return put(new Box(id, parent, Kind.TEXT, rect, fitted, style, false));
     }
 
     /** A text box that is allowed to overlap its siblings (labels drawn over a cover or a bar). */
     public Box floatingText(String id, String parent, Rect rect, String text, TextStyle style) {
-        String fitted = TextFit.ellipsize(measurer, text, style, rect.w());
+        String fitted = fit(id, text, style, rect.w());
         return put(new Box(id, parent, Kind.TEXT, rect, fitted, style, true));
     }
 
     /** A text box sized to its content, cut to {@code maxWidth}; the box starts at (x, y) on the cap line. */
     public Box label(String id, String parent, float x, float y, float maxWidth, String text, TextStyle style) {
-        String fitted = TextFit.ellipsize(measurer, text, style, maxWidth);
+        String fitted = fit(id, text, style, maxWidth);
         float width = TextFit.width(measurer, fitted, style);
         return put(new Box(id, parent, Kind.TEXT, new Rect(x, y, width, TextFit.boxHeight(style)), fitted, style, false));
     }
 
     public Box labelRight(String id, String parent, float right, float y, float maxWidth, String text, TextStyle style) {
-        String fitted = TextFit.ellipsize(measurer, text, style, maxWidth);
+        String fitted = fit(id, text, style, maxWidth);
         float width = TextFit.width(measurer, fitted, style);
         return put(new Box(id, parent, Kind.TEXT, new Rect(right - width, y, width, TextFit.boxHeight(style)), fitted, style, false));
     }
 
     public Box labelCentered(String id, String parent, float centerX, float y, float maxWidth, String text, TextStyle style) {
-        String fitted = TextFit.ellipsize(measurer, text, style, maxWidth);
+        String fitted = fit(id, text, style, maxWidth);
         float width = TextFit.width(measurer, fitted, style);
         return put(new Box(id, parent, Kind.TEXT, new Rect(centerX - width * 0.5F, y, width, TextFit.boxHeight(style)), fitted, style, false));
     }
@@ -118,7 +142,11 @@ public final class Layout {
     /** Wrapped text; returns the block height. Lines are named {@code id + ".0"}, {@code id + ".1"}, … */
     public float paragraph(String id, String parent, float x, float y, float maxWidth, String text, TextStyle style, float lineHeight,
                            int maxLines) {
-        List<String> lines = TextFit.wrap(measurer, text, style, maxWidth, maxLines);
+        List<String> all = TextFit.wrap(measurer, text, style, maxWidth);
+        List<String> lines = TextFit.cap(measurer, all, style, maxWidth, maxLines);
+        if (lines.size() < all.size() || TextFit.breaksWord(measurer, text, style, maxWidth)) {
+            cuts.add(new Cut(id, text, String.join("\n", lines), maxWidth, style));
+        }
         for (int i = 0; i < lines.size(); i++) {
             float lineY = y + i * lineHeight;
             String line = lines.get(i);

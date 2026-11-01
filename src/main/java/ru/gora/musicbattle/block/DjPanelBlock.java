@@ -104,6 +104,9 @@ public final class DjPanelBlock extends HorizontalDirectionalBlock implements En
     private static void openPanel(Level level, BlockPos pos, Player player) {
         if (!level.isClientSide && player instanceof ServerPlayer serverPlayer) {
             DjPlaybackManager.openPanel(serverPlayer, pos);
+        } else if (level.isClientSide) {
+            // Only the answer to this click may open the panel (DjPanelOpenRequests).
+            DjPanelOpenRequests.requested(pos);
         }
     }
 

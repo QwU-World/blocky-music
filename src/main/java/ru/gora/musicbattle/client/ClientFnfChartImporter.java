@@ -27,12 +27,12 @@ public final class ClientFnfChartImporter {
     public static ImportedChart importChart(String rawPath) throws IOException {
         String cleaned = ClientTrackExporter.cleanPathInput(rawPath);
         if (cleaned.isEmpty()) {
-            throw new IOException("FNF JSON path is empty");
+            throw new ClientTrackExporter.Problem("music_battle.l10n.editor.chart_path_empty");
         }
 
         Path path = ClientTrackExporter.requirePath(cleaned).toAbsolutePath().normalize();
         if (!Files.isRegularFile(path)) {
-            throw new IOException("FNF JSON not found: " + MusicBattleTracks.displayPath(path));
+            throw new ClientTrackExporter.Problem("music_battle.l10n.editor.chart_not_found", MusicBattleTracks.displayPath(path));
         }
         return parse(Files.readString(path), path.getFileName().toString());
     }
@@ -58,8 +58,8 @@ public final class ClientFnfChartImporter {
         int bpm = clamp(number(song, "bpm", 120.0D), 20, 400);
         String title = string(song, "song", stripExtension(fileName));
         String id = safeId(title);
-        List<BattleNote> notes = parseNotes(song, bpm);
-        return new ImportedChart(id, title, "Imported from FNF chart: " + fileName, bpm, notes);
+        List<BattleNote> notes = parseNotes(song, bpm, fileName);
+        return new ImportedChart(id, title, ClientTrackExporter.importedDescription("FNF", fileName), bpm, notes);
     }
 
     /**
@@ -76,9 +76,9 @@ public final class ClientFnfChartImporter {
         return end >= 0 ? value.substring(0, end + 1) : value;
     }
 
-    private static List<BattleNote> parseNotes(JsonObject song, int bpm) throws IOException {
+    private static List<BattleNote> parseNotes(JsonObject song, int bpm, String fileName) throws IOException {
         if (!song.has("notes") || !song.get("notes").isJsonArray()) {
-            throw new IOException("FNF chart has no song.notes array");
+            throw new ClientTrackExporter.Problem("music_battle.l10n.editor.fnf_no_notes", fileName);
         }
 
         List<BattleNote> notes = new ArrayList<>();

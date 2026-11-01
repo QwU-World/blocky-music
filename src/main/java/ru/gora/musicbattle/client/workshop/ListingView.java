@@ -45,7 +45,7 @@ import ru.gora.musicbattle.workshop.api.WorkshopDownloader;
 import ru.gora.musicbattle.workshop.api.WorkshopDtos;
 
 /**
- * The Browse and Installed tabs (spec 06 section 6.1): the search panel with the website's filter rows, the sort bar,
+ * The Browse and Installed tabs: the search panel with the website's filter rows, the sort bar,
  * a virtualised {@link CardGrid} of cards with previews and install states, infinite scrolling by cursor and the
  * loading, empty, offline and consent states.
  *
@@ -72,7 +72,7 @@ public final class ListingView {
     private final WorkshopScreen screen;
     private final WorkshopClient client;
     private final boolean installed;
-    /** The Server beatmaps tab (spec 06 section 9.1): the cards come from the Minecraft server, not the website. */
+    /** The Server beatmaps tab: the cards come from the Minecraft server, not the website. */
     private final boolean serverTab;
     private final TextField search = TextField.singleLine();
     private final Motion.SmoothScroll scroll = new Motion.SmoothScroll();
@@ -197,6 +197,26 @@ public final class ListingView {
 
     public void onHide() {
         stopPreview();
+    }
+
+    /**
+     * The player turned the Workshop's network access off (the Network access switch). Browse drops what it found and
+     * shows its offline state with "Allow network"; an answer still on its way is ignored. Installed and Server read the
+     * disk and the Minecraft server, so they stay as they are.
+     */
+    public void networkOff() {
+        if (installed || serverTab) {
+            return;
+        }
+        generation.incrementAndGet();
+        stopPreview();
+        loading = false;
+        cards = List.of();
+        cursor = null;
+        hasMore = false;
+        status = "consent";
+        statusDetail = "";
+        relayout();
     }
 
     // ---------------------------------------------------------------- layout
@@ -433,10 +453,13 @@ public final class ListingView {
                 continue;
             }
             WorkshopDownloader.Status downloadStatus = client.downloader().status(model.setId);
-            boolean playing = PreviewPlayer.isPlaying(CardRenderer.previewKey(model.setId));
+            // A clip still downloading counts as playing and loading, so the card shows its spinner from the press on
+            // instead of the idle play button for as long as the download takes.
+            boolean fetching = screen.previewFetching(model.setId);
+            boolean playing = fetching || PreviewPlayer.isPlaying(CardRenderer.previewKey(model.setId));
             CardRenderer.Context context = new CardRenderer.Context(extraCards, hovered, expandedSetId == model.setId, installed,
                     System.currentTimeMillis(), downloadStatus, playing,
-                    playing && PreviewPlayer.isLoading(CardRenderer.previewKey(model.setId)), state.hover.value(),
+                    fetching || playing && PreviewPlayer.isLoading(CardRenderer.previewKey(model.setId)), state.hover.value(),
                     rightBadge(model, downloadStatus));
             Layout cardLayout = CardRenderer.layout(rect, model, context, WorkshopTr.INSTANCE);
             if (picker != null) {
@@ -515,21 +538,35 @@ public final class ListingView {
         card.add(CHOOSE, "card.strip", Layout.Kind.BUTTON, install);
     }
 
+    /** The pill of a track card, and the one badge of its server page. */
+    static String kindLabel(WorkshopTr tr, BattleTracks.Kind kind) {
+        return WorkshopStrings.upper(tr.get(switch (kind) {
+            case WORKSHOP -> WorkshopStrings.KEY + "card.kind.workshop";
+            case SERVER -> "screen.music_battle.vote.chip.server";
+            case PLAYERS -> "screen.music_battle.vote.chip.players";
+        }));
+    }
+
+    /**
+     * One byline for every kind, in the words and the type the Workshop's own cards use for their mapper: the cards used
+     * to say "Published by: X", "mapped by x" or nothing at all depending on where a track came from.
+     */
+    static String byline(WorkshopTr tr, BattleTracks.Track row) {
+        String maker = row.maker();
+        return maker.isBlank() ? "" : tr.get(WorkshopStrings.KEY + "card.mapped_by", maker);
+    }
+
     /** What a track card says: the quiet badge of its kind, who published it, its tempo and length, its description. */
     private TrackCardLayout.State trackState(BattleTracks.Entry entry, boolean hovered) {
         WorkshopTr tr = WorkshopTr.INSTANCE;
         BattleTracks.Track row = entry.first();
-        String badge = WorkshopStrings.upper(tr.get(switch (entry.kind()) {
-            case WORKSHOP -> "screen.music_battle.vote.chip.workshop";
-            case SERVER -> "screen.music_battle.vote.chip.server";
-            case PLAYERS -> "screen.music_battle.vote.chip.players";
-        }));
-        // One byline for every kind, in the words and the type the Workshop's own cards use for their mapper: the
-        // cards used to say "Published by: X", "mapped by x" or nothing at all depending on where a track came from.
-        String maker = entry.kind() == BattleTracks.Kind.PLAYERS || row.mapper().isBlank() ? row.publishedBy() : row.mapper();
-        String byline = maker.isBlank() ? "" : tr.get(WorkshopStrings.KEY + "card.mapped_by", maker);
+        // A card's pill says its kind in one word: the vote screen's "From the Workshop" does not fit the pill of the
+        // narrowest card and came out "FROM THE WOR…".
+        String badge = kindLabel(tr, entry.kind());
+        String byline = byline(tr, row);
         String length = WorkshopStrings.duration(row.durationTicks() * 50L);
-        String detail = row.bpm() > 0 ? tr.get(WorkshopStrings.KEY + "set.bpm") + " " + row.bpm() + "  ·  " + length : length;
+        String detail = row.bpm() > 0
+                ? tr.get(WorkshopStrings.KEY + "set.bpm") + " " + row.bpm() + TrackCardLayout.DETAIL_SEPARATOR + length : length;
         String description = entry.kind() != BattleTracks.Kind.WORKSHOP ? row.description()
                 : entry.rows().size() > 1 ? tr.get(WorkshopStrings.KEY + "card.charts", String.valueOf(entry.rows().size()))
                 : "";
@@ -660,23 +697,26 @@ public final class ListingView {
                 && state.layout.rect("card.dropdown").contains(mouseX, mouseY);
     }
 
+    /**
+     * The badge on a card's title line, as its key ({@code badge.<key>} or {@code card.kind.workshop}); the card turns it
+     * into its words and its colour. It used to be the upper-case words themselves, and the colour was looked up from
+     * them, so in Russian "ОБНОВЛЕНИЕ" never matched "update" and the badge lost its warning colour.
+     */
     private String rightBadge(CardModel model, WorkshopDownloader.Status status) {
         if (!installed) {
             // A battle's Server tab mixes the server's Workshop sets with its own tracks, and those say their kind on
             // their card; a Workshop set says it the same way rather than being the one card without a word.
-            return serverTab && screen.picking() && model.setId > 0
-                    ? WorkshopStrings.upper(WorkshopTr.INSTANCE.get("screen.music_battle.vote.chip.workshop")) : null;
+            return serverTab && screen.picking() && model.setId > 0 ? CardRenderer.KIND_WORKSHOP : null;
         }
         var entry = client.installedCheck().entry(model.setId).orElse(null);
         if (entry != null && entry.withdrawn()) {
-            return WorkshopStrings.upper(WorkshopTr.INSTANCE.get(WorkshopStrings.KEY
-                    + ("audio_removed".equals(entry.state()) ? "badge.audio_removed" : "badge.withdrawn")));
+            return "audio_removed".equals(entry.state()) ? "audio_removed" : "withdrawn";
         }
         if (model.needsAudio()) {
-            return WorkshopStrings.upper(WorkshopTr.INSTANCE.get(WorkshopStrings.KEY + "badge.needs_audio"));
+            return "needs_audio";
         }
         if (status != null && status.state() == WorkshopDownloader.State.UPDATE_AVAILABLE) {
-            return WorkshopStrings.upper(WorkshopTr.INSTANCE.get(WorkshopStrings.KEY + "badge.update"));
+            return "update";
         }
         return null;
     }
@@ -992,7 +1032,7 @@ public final class ListingView {
         BattleTracks.Entry entry = tracks.entry(model.setId);
         if (entry != null && entry.kind() != BattleTracks.Kind.WORKSHOP) {
             BattleTracks.Track row = entry.first();
-            screen.openServerPage(model.setId, model, "track_" + row.id(), () -> ServerWorkshopClient.trackPicture(row));
+            screen.openServerTrackPage(model.setId, model, row, () -> ServerWorkshopClient.trackPicture(row));
             return;
         }
         long setId = entry != null ? entry.setId() : model.setId;
@@ -1004,8 +1044,9 @@ public final class ListingView {
 
     private void togglePreview(CardModel model) {
         String key = CardRenderer.previewKey(model.setId);
-        if (PreviewPlayer.isPlaying(key)) {
-            PreviewPlayer.stop();
+        if (PreviewPlayer.isPlaying(key) || screen.previewFetching(model.setId)) {
+            // A second press on the spinner cancels the clip still on its way, as it stops one that plays.
+            screen.stopPreview();
             return;
         }
         PreviewPlayer.stop();
@@ -1129,7 +1170,7 @@ public final class ListingView {
     }
 
     /**
-     * The Server beatmaps tab (spec 06 section 9.1): one page from the Minecraft server through
+     * The Server beatmaps tab: one page from the Minecraft server through
      * {@link WorkshopServerHooks}, with the same cards as Browse. Nothing here touches the website.
      */
     public void reloadServer() {
@@ -1340,7 +1381,7 @@ public final class ListingView {
         scheduleSearch(0);
     }
 
-    /** A set link or {@code #42} opens the set; a bare number only offers a row (review of 06 section 6.1). */
+    /** A set link or {@code #42} opens the set; a bare number only offers a row. */
     public Long parseSetReference(String value) {
         if (value == null || value.isEmpty()) {
             return null;
@@ -1528,7 +1569,7 @@ public final class ListingView {
             comparator = comparator.reversed();
         }
         if ("difficulty".equals(installedSort)) {
-            // Sets without the offline card sidecar have no stars at all (spec 08 A5.5); they sort after the rated
+            // Sets without the offline card sidecar have no stars at all; they sort after the rated
             // ones in both directions instead of passing themselves off as the easiest maps in the list.
             comparator = Comparator.comparingInt((CardModel model) -> model.topStars() > 0 ? 0 : 1).thenComparing(comparator);
         }

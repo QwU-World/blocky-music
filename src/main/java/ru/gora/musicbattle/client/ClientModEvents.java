@@ -29,6 +29,12 @@ public final class ClientModEvents {
     @SubscribeEvent
     public static void setupClient(FMLClientSetupEvent event) {
         ClientPlayerAnimatorBridge.register(event);
+        // What a killed game left in the mod's temporary folder (a picture for "Publish to server", a song being
+        // converted): nothing in it outlives the launch that made it.
+        int leftovers = ru.gora.musicbattle.server.MusicBattleTracks.clearTemporaryDirectory();
+        if (leftovers > 0) {
+            MusicBattleMod.LOGGER.info("Blocky Music removed {} leftover temporary file(s).", leftovers);
+        }
     }
 
     @SubscribeEvent

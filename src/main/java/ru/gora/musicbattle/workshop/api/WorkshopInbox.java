@@ -18,7 +18,7 @@ import ru.gora.musicbattle.workshop.WorkshopLayout;
 
 /**
  * {@code music_battle_tracks/workshop_inbox/}: packages a player saved there, or the QwU installer copied there after a
- * double click (spec 06 section 5, docs/WORKSHOP.md owner decision of 17.09.2026). A scan is a cheap directory listing;
+ * double click (docs/WORKSHOP.md owner decision of 17.09.2026). A scan is a cheap directory listing;
  * a file is offered for install only once its size and modification time have stayed the same for one scan and it is
  * at least {@value #SETTLE_MS} ms old, so a copy in progress is never read. Invalid packages move to
  * {@code rejected/} with a {@code .txt} reason next to them.
@@ -114,7 +114,7 @@ public final class WorkshopInbox {
     }
 
     /**
-     * Request files waiting in the inbox, oldest first (spec 07 section 8). No settle wait: the helper writes them
+     * Request files waiting in the inbox, oldest first. No settle wait: the helper writes them
      * atomically, so one is complete as soon as it is there, and a click on the site should not wait two scans.
      * Blocking directory listing.
      */

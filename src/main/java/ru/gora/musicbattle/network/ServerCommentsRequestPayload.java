@@ -6,7 +6,7 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import ru.gora.musicbattle.MusicBattleMod;
 
 /**
- * One page of the server's own comments (spec 06 section 9.2). {@code key} is {@code ws_<setId>} or
+ * One page of the server's own comments. {@code key} is {@code ws_<setId>} or
  * {@code track_<trackId>}; the server checks its grammar and existence before it ever becomes a path.
  */
 public record ServerCommentsRequestPayload(String key, long beforeId, int limit) implements CustomPacketPayload {

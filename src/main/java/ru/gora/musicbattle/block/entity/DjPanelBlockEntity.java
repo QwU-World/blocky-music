@@ -3,7 +3,9 @@ package ru.gora.musicbattle.block.entity;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Predicate;
@@ -11,6 +13,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
+import net.minecraft.nbt.StringTag;
 import net.minecraft.nbt.Tag;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.game.ClientGamePacketListener;
@@ -23,12 +26,15 @@ import ru.gora.musicbattle.registry.ModBlockEntities;
 import ru.gora.musicbattle.data.DjVisualEffectConfig;
 import ru.gora.musicbattle.data.DjVisualEffects;
 import ru.gora.musicbattle.data.DjPlaylistEntry;
+import ru.gora.musicbattle.data.DjWorkshopSource;
 import ru.gora.musicbattle.server.DjPlaybackManager;
 
 /** Persistent DJ installation state. Playback and audience authority stay server-side. */
 public final class DjPanelBlockEntity extends BlockEntity {
     public static final int MAX_LINKED_SPEAKERS = 64;
     public static final int MAX_LINKED_CAMERAS = 16;
+    /** How many beatmaps the booth's own list may hold. */
+    public static final int MAX_LIBRARY_TRACKS = 128;
 
     private final LinkedHashSet<BlockPos> linkedSpeakers = new LinkedHashSet<>();
     private final LinkedHashSet<BlockPos> linkedCameras = new LinkedHashSet<>();
@@ -71,6 +77,21 @@ public final class DjPanelBlockEntity extends BlockEntity {
     private boolean playlistAutoAdvance = true;
     private PlaylistRepeat playlistRepeat = PlaylistRepeat.OFF;
     private long playlistRevision;
+    /**
+     * The beatmaps the DJ put on this booth with "+", in the order they came: the list the panel shows.
+     *
+     * It used to show every map the server had, which on a server with a busy Workshop meant scrolling past
+     * everyone's downloads to find the three songs of the evening. It only says which maps the DJ wants at hand;
+     * nothing here reaches the playlist, which the DJ fills from this list with the playlist's own Add button.
+     */
+    private final List<String> library = new ArrayList<>();
+    /**
+     * For each Workshop beatmap this booth uses that the server holds only in its {@code workshop_cache}, the set and
+     * content hash it was read from. Without them the booth's row stopped resolving after a restart, because the
+     * cached charts were known only in memory, and the cache clean-up could delete a set the booth still listed.
+     * Kept for exactly the ids the booth still uses ({@link #workshopReferencesChanged}).
+     */
+    private final Map<String, DjWorkshopSource> workshopSources = new LinkedHashMap<>();
 
     public DjPanelBlockEntity(BlockPos pos, BlockState state) {
         super(ModBlockEntities.DJ_PANEL.get(), pos, state);
@@ -118,6 +139,71 @@ public final class DjPanelBlockEntity extends BlockEntity {
 
     public long getPlaylistRevision() {
         return playlistRevision;
+    }
+
+    /** The booth's own beatmap list, oldest first. */
+    public List<String> getLibrary() {
+        return List.copyOf(library);
+    }
+
+    /** The cached Workshop sets behind this booth's {@code ws_} ids, by track id (see {@link DjWorkshopSource}). */
+    public Map<String, DjWorkshopSource> getWorkshopSources() {
+        return java.util.Collections.unmodifiableMap(new LinkedHashMap<>(workshopSources));
+    }
+
+    public boolean isInLibrary(String trackId) {
+        return trackId != null && library.contains(trackId);
+    }
+
+    /**
+     * Puts a beatmap at the end of the booth's list. False when it is already there, the list is full or the id
+     * could never name a track. Clients learn about it from the next panel refresh, so this does not sync.
+     */
+    public boolean addToLibrary(String trackId) {
+        if (!usableTrackId(trackId) || library.contains(trackId) || library.size() >= MAX_LIBRARY_TRACKS) {
+            return false;
+        }
+        library.add(trackId);
+        workshopReferencesChanged();
+        setChanged();
+        return true;
+    }
+
+    /** Takes a beatmap off the booth's list. Its rows in the playlist, and the song playing, stay as they are. */
+    public boolean removeFromLibrary(String trackId) {
+        boolean removed = trackId != null && library.remove(trackId);
+        if (removed) {
+            workshopReferencesChanged();
+            setChanged();
+        }
+        return removed;
+    }
+
+    /**
+     * Keeps {@link #workshopSources} to the ids this booth still uses and adds the cached set behind any new one,
+     * then hands the result to the server's world-wide list, which reads the charts back after a restart and keeps
+     * the cache clean-up away from them. Every change to the list, the playlist, the deck or the selection comes
+     * through here, so no path can put a cached map on the booth without its source, and a booth from before the
+     * sources existed gets them when it loads. Without a server level (a client copy, a check) it only prunes.
+     */
+    private void workshopReferencesChanged() {
+        Set<String> referenced = DjWorkshopSource.referenced(library,
+                playlist.stream().map(DjPlaylistEntry::trackId).toList(), activeTrackId, selectedTrackId);
+        boolean changed = workshopSources.keySet().retainAll(referenced);
+        if (level instanceof ServerLevel serverLevel) {
+            // The set this run read each new id from; for a booth saved by 0.1.0-beta.1, which kept ids only, the
+            // set is looked up in the cache folders once, unless the catalogue lists the id.
+            changed |= ru.gora.musicbattle.server.DjWorkshopCache.adoptSources(workshopSources, referenced,
+                    trackId -> ru.gora.musicbattle.server.MusicBattleTracks.byId(trackId).isPresent());
+            ru.gora.musicbattle.server.DjWorkshopCache.boothReferences(serverLevel, worldPosition, workshopSources);
+        }
+        if (changed) {
+            setChanged();
+        }
+    }
+
+    private static boolean usableTrackId(String trackId) {
+        return trackId != null && !trackId.isBlank() && trackId.length() <= DjPlaylistEntry.MAX_TRACK_ID_LENGTH;
     }
 
     public DjPlaylistEntry findPlaylistEntry(UUID entryId) {
@@ -421,15 +507,14 @@ public final class DjPanelBlockEntity extends BlockEntity {
     }
 
     /**
-     * Puts the rack's own sound and light back to how it ships: no reverb, no echo, no low pass, and no DJ effects.
+     * Puts the rack's own sound back to how it ships: no reverb, no echo, no low pass.
      *
-     * The reset button used to touch the speakers only, which surprised anyone who had been building up a stack on
-     * the rack and pressed it expecting a clean slate. The track's own effects are left switched on, because those
-     * belong to the beatmap rather than to whoever was at the rack.
+     * The visual effects are not touched. For a while this reset cleared the DJ effect stack as well, and pressing
+     * "Reset speakers" wiped a Visual FX tab the DJ had spent an evening building; the owner asked for the speakers'
+     * button to stay with sound. The Visual FX tab has its own controls for clearing what it holds.
      */
-    public void resetSoundAndEffects(int activationTick) {
+    public void resetSound() {
         setDspSettings(true, false, 0.30F, 0.65F, 0.45F, false, 0.25F, 280.0F, 0.35F, false, 12_000.0F);
-        setVisualEffects(true, false, List.of(), activationTick);
     }
 
     /**
@@ -536,6 +621,7 @@ public final class DjPanelBlockEntity extends BlockEntity {
         String safe = trackId == null ? "" : trackId;
         if (!safe.equals(selectedTrackId)) {
             selectedTrackId = safe;
+            workshopReferencesChanged();
             sync();
         }
     }
@@ -620,6 +706,9 @@ public final class DjPanelBlockEntity extends BlockEntity {
                 detachedPlaylistSuccessorId = null;
                 advancePlaylistRevision();
             }
+        }
+        if (!sameManualTrack) {
+            workshopReferencesChanged();
         }
         sync();
     }
@@ -736,6 +825,7 @@ public final class DjPanelBlockEntity extends BlockEntity {
 
     private void playlistChanged() {
         advancePlaylistRevision();
+        workshopReferencesChanged();
         sync();
     }
 
@@ -797,6 +887,14 @@ public final class DjPanelBlockEntity extends BlockEntity {
         tag.putBoolean("PlaylistAutoAdvance", playlistAutoAdvance);
         tag.putString("PlaylistRepeat", playlistRepeat.name());
         tag.putLong("PlaylistRevision", Math.max(0L, playlistRevision));
+        ListTag libraryTag = new ListTag();
+        for (String trackId : library) {
+            libraryTag.add(StringTag.valueOf(trackId));
+        }
+        tag.put("DjLibrary", libraryTag);
+        if (!workshopSources.isEmpty()) {
+            tag.put(DjWorkshopSource.TAG, DjWorkshopSource.write(workshopSources));
+        }
     }
 
     @Override
@@ -890,6 +988,35 @@ public final class DjPanelBlockEntity extends BlockEntity {
         // An absent or unknown name keeps the pre-repeat behaviour of older panels.
         playlistRepeat = PlaylistRepeat.byName(tag.getString("PlaylistRepeat"));
         playlistRevision = Math.max(0L, tag.getLong("PlaylistRevision"));
+        library.clear();
+        if (tag.contains("DjLibrary", Tag.TAG_LIST)) {
+            ListTag libraryTag = tag.getList("DjLibrary", Tag.TAG_STRING);
+            for (int index = 0; index < libraryTag.size() && library.size() < MAX_LIBRARY_TRACKS; index++) {
+                String trackId = libraryTag.getString(index);
+                if (usableTrackId(trackId) && !library.contains(trackId)) {
+                    library.add(trackId);
+                }
+            }
+        } else if (tag.contains("DjPlaylist", Tag.TAG_LIST)) {
+            // A booth saved before it had a list of its own. Its queue, its deck and the card it had selected are maps
+            // already chosen for it, so they start the list rather than leaving the panel empty above a playlist that
+            // still plays, or with Play aimed at a song the list does not show. The client's copy is loaded from the
+            // update tag, which has no playlist, and so stays empty.
+            List<String> seeds = new ArrayList<>();
+            playlist.forEach(entry -> seeds.add(entry.trackId()));
+            seeds.add(activeTrackId);
+            seeds.add(selectedTrackId);
+            for (String trackId : seeds) {
+                if (usableTrackId(trackId) && !library.contains(trackId) && library.size() < MAX_LIBRARY_TRACKS) {
+                    library.add(trackId);
+                }
+            }
+        }
+        workshopSources.clear();
+        workshopSources.putAll(DjWorkshopSource.read(tag, DjWorkshopSource.TAG, DjPlaylistEntry.MAX_TRACK_ID_LENGTH));
+        Set<String> referenced = DjWorkshopSource.referenced(library,
+                playlist.stream().map(DjPlaylistEntry::trackId).toList(), activeTrackId, selectedTrackId);
+        workshopSources.keySet().retainAll(referenced);
     }
 
     @Override
@@ -933,6 +1060,9 @@ public final class DjPanelBlockEntity extends BlockEntity {
         if (level instanceof ServerLevel serverLevel) {
             restorePlaybackIdentity();
             DjPlaybackManager.register(serverLevel, worldPosition);
+            // Reads this booth's cached Workshop sets back if this run has not yet, and puts the booth on the world's
+            // list, which also covers a booth saved before the list existed.
+            workshopReferencesChanged();
         }
     }
 

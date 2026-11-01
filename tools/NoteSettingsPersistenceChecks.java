@@ -31,8 +31,50 @@ public final class NoteSettingsPersistenceChecks {
         check(ClientBattleSettings.panelColor() == 0xFF6789AB, "background remains independent after reload");
         ClientBattleSettings.setNoteSkin(NoteAppearance.CIRCLES);
         check(ClientBattleSettings.appearance().color(2) == 0xFFABCDEF, "switching shape preserves lane palette");
+        backdrop(config, loaded);
         System.out.println("Note settings persistence PASS: " + checks);
         System.out.println("Isolated test config retained: " + config);
     }
+    /**
+     * How dark a battle is behind its panels: a file from before these settings keeps the battle's old look and is not
+     * rewritten, choices survive a reload, the bars keep their opacity while switched off, and values a player typed
+     * into the file are clamped to what the sliders offer or fall back to the default instead of drawing nothing or
+     * everything.
+     */
+    static void backdrop(Path config, Field loaded) throws Exception {
+        float dimmingDefault = 70 / 255F, barDefault = 185 / 255F, dimmingMax = .9F;
+        String old = "{\"noteSpeed\":5.0,\"panelOpacity\":0.25}";
+        Files.writeString(config, old);
+        loaded.setBoolean(null, false);
+        check(Float.compare(ClientBattleSettings.worldDimming(), dimmingDefault) == 0 && ClientBattleSettings.worldDimmingAlpha() == 70,
+                "a file without the dimming does not get the old argb(70, 0, 0, 0)");
+        check(ClientBattleSettings.stageBars() && Float.compare(ClientBattleSettings.stageBarOpacity(), barDefault) == 0
+                && ClientBattleSettings.stageBarAlpha() == 185, "a file without the bars does not get the old bars at alpha 185");
+        check(Files.readString(config).equals(old), "reading a file from before the backdrop settings rewrote it");
+        ClientBattleSettings.setWorldDimming(0F);
+        ClientBattleSettings.setStageBarOpacity(.2F);
+        ClientBattleSettings.setStageBars(false);
+        JsonObject saved = JsonParser.parseString(Files.readString(config)).getAsJsonObject();
+        check(saved.get("worldDimming").getAsFloat() == 0F && !saved.get("stageBars").getAsBoolean()
+                && saved.get("stageBarOpacity").getAsFloat() == .2F, "the backdrop settings are not saved");
+        loaded.setBoolean(null, false);
+        check(ClientBattleSettings.worldDimming() == 0F && ClientBattleSettings.worldDimmingAlpha() == 0,
+                "a dimming of 0% does not survive a reload as no veil at all");
+        check(!ClientBattleSettings.stageBars() && ClientBattleSettings.stageBarAlpha() == 0
+                && ClientBattleSettings.stageBarOpacity() == .2F, "bars switched off lose their opacity or still draw after a reload");
+        ClientBattleSettings.setStageBars(true);
+        check(ClientBattleSettings.stageBarAlpha() == Math.round(.2F * 255F), "bars switched back on do not come back as they were");
+        Files.writeString(config, "{\"worldDimming\":5,\"stageBars\":\"yes\",\"stageBarOpacity\":-3}");
+        loaded.setBoolean(null, false);
+        check(ClientBattleSettings.worldDimming() == dimmingMax && ClientBattleSettings.stageBars()
+                && ClientBattleSettings.stageBarOpacity() == 0F && ClientBattleSettings.stageBarAlpha() == 0,
+                "out-of-range backdrop values are not clamped to the sliders' ends");
+        Files.writeString(config, "{\"worldDimming\":NaN,\"stageBars\":1,\"stageBarOpacity\":\"half\"}");
+        loaded.setBoolean(null, false);
+        check(Float.compare(ClientBattleSettings.worldDimming(), dimmingDefault) == 0 && ClientBattleSettings.stageBars()
+                && Float.compare(ClientBattleSettings.stageBarOpacity(), barDefault) == 0,
+                "a value that is not a number does not fall back to the default");
+    }
+
     static void check(boolean ok, String message) { checks++; if (!ok) throw new AssertionError(message); }
 }

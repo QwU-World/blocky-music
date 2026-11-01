@@ -4,7 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * A small form model: the account view (spec 06 section 6.4) and the upload wizard (section 6.5) are vertical stacks
+ * A small form model: the account view and the upload wizard are vertical stacks
  * of headings, paragraphs, fields, toggles, choices, rows, buttons and stage rows. Pure data, so the layout check
  * walks exactly what the screen draws, and one renderer handles every item kind.
  */

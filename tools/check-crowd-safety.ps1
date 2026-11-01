@@ -4,7 +4,7 @@ $ErrorActionPreference = 'Stop'
 $projectDir = Split-Path -Parent $PSScriptRoot
 $outputDir = Join-Path $projectDir 'build/crowd-safety-checks'
 New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
-$javaDir = 'C:/Program Files/Eclipse Adoptium/jdk-21.0.11.10-hotspot/bin'
+$javaDir = & (Join-Path $PSScriptRoot 'find-jdk.ps1')
 $sources = @((Join-Path $projectDir 'src/main/java/ru/gora/musicbattle/data/BattlePlacementMath.java'), (Join-Path $PSScriptRoot 'CrowdSafetyChecks.java'))
 $policy = Join-Path $projectDir 'src/main/java/ru/gora/musicbattle/data/CrowdSafetyMath.java'
 if (Test-Path -LiteralPath $policy) { $sources += $policy }

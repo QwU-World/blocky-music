@@ -20,6 +20,8 @@ import net.neoforged.neoforge.event.server.ServerStoppingEvent;
 import net.neoforged.neoforge.network.PacketDistributor;
 import ru.gora.musicbattle.block.entity.BattleCameraBlockEntity;
 import ru.gora.musicbattle.block.entity.DjPanelBlockEntity;
+import ru.gora.musicbattle.network.CameraFollowModePayload;
+import ru.gora.musicbattle.network.CameraFollowStatePayload;
 import ru.gora.musicbattle.network.CloseCameraEditorPayload;
 import ru.gora.musicbattle.network.CameraEditorClosedPayload;
 import ru.gora.musicbattle.network.OpenCameraEditorPayload;
@@ -96,6 +98,7 @@ public final class CameraEditorManager {
         SESSIONS.put(player.getUUID(), session);
         player.setCamera(camera);
         sendEditorState(session, blockEntity, false);
+        PacketDistributor.sendToPlayer(player, new CameraFollowStatePayload(session.blockPos, blockEntity.isFollowPlayers()));
     }
 
     private static void sendEditorState(Session session, BattleCameraBlockEntity blockEntity, boolean resetResponse) {
@@ -180,12 +183,50 @@ public final class CameraEditorManager {
         }
         cameraBlock.setCameraSettings(position, yaw, pitch, fov);
         session.camera.absMoveTo(position.x, position.y, position.z, yaw, pitch);
-        BattleManager.onBattleCameraBlockUpdated(serverPlayer.serverLevel(), session.blockPos, position, yaw, pitch, fov);
+        BattleManager.onBattleCameraBlockUpdated(serverPlayer.serverLevel(), session.blockPos, position, yaw, pitch, fov,
+                cameraBlock.isFollowPlayers());
         if (payload.resetToPlacement()) {
             // The camera block may be outside the client's loaded chunks.
             // Return the authoritative defaults without replacing its editor session.
             sendEditorState(session, cameraBlock, true);
         }
+    }
+
+    /**
+     * Switches the camera's follow mode from its open editor. Held to the same session as a move: the player who
+     * opened the editor, on the camera they opened it on, still near it or its panel, and no more often than moves.
+     */
+    public static void setFollowMode(Player player, CameraFollowModePayload payload) {
+        if (!(player instanceof ServerPlayer serverPlayer)) {
+            return;
+        }
+        Session session = SESSIONS.get(serverPlayer.getUUID());
+        if (session == null
+                || session.player != serverPlayer
+                || !session.blockPos.equals(payload.blockPos())
+                || serverPlayer.level() != session.camera.level()
+                || !sessionControlStillValid(session)) {
+            return;
+        }
+        if (!(serverPlayer.level().getBlockEntity(session.blockPos) instanceof BattleCameraBlockEntity cameraBlock)) {
+            finish(serverPlayer, true);
+            return;
+        }
+        long gameTime = serverPlayer.level().getGameTime();
+        if (gameTime != session.lastAcceptedGameTime) {
+            session.lastAcceptedGameTime = gameTime;
+            session.acceptedUpdatesThisTick = 0;
+        }
+        if (session.acceptedUpdatesThisTick < MAX_UPDATES_PER_TICK) {
+            session.acceptedUpdatesThisTick++;
+            cameraBlock.setFollowPlayers(payload.followPlayers());
+            BattleManager.onBattleCameraBlockUpdated(serverPlayer.serverLevel(), session.blockPos,
+                    cameraBlock.getCameraPosition(), cameraBlock.getCameraYaw(), cameraBlock.getCameraPitch(),
+                    cameraBlock.getCameraFov(), cameraBlock.isFollowPlayers());
+        }
+        // Answered either way, so a refused switch shows the mode the block really kept.
+        PacketDistributor.sendToPlayer(serverPlayer,
+                new CameraFollowStatePayload(session.blockPos, cameraBlock.isFollowPlayers()));
     }
 
     public static void close(Player player, CloseCameraEditorPayload payload) {

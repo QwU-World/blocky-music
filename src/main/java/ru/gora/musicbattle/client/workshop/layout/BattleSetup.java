@@ -91,7 +91,7 @@ public final class BattleSetup {
         NONE, SETTING, OPEN_PICKER, CONFIRM, CANCEL
     }
 
-    /** What the Workshop last said about handing the player's own copy to a server (spec 08 A5.1). */
+    /** What the Workshop last said about handing the player's own copy to a server. */
     public enum Verdict {
         ALLOWED, CHECK_FIRST, WITHDRAWN, AUDIO_REMOVED
     }

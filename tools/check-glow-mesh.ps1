@@ -4,7 +4,7 @@ $ErrorActionPreference = 'Stop'
 $projectDir = Split-Path -Parent $PSScriptRoot
 $outputDir = Join-Path $projectDir 'build/glow-mesh-checks'
 New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
-$javaDir = 'C:/Program Files/Eclipse Adoptium/jdk-21.0.11.10-hotspot/bin'
+$javaDir = & (Join-Path $PSScriptRoot 'find-jdk.ps1')
 $sources = @((Join-Path $PSScriptRoot 'GlowMeshChecks.java'))
 $helper = Join-Path $projectDir 'src/main/java/ru/gora/musicbattle/client/GlowMeshExpansion.java'
 if (Test-Path -LiteralPath $helper) { $sources += $helper }

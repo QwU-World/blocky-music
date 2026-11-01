@@ -4,6 +4,7 @@ import net.neoforged.bus.api.EventPriority;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
+import net.neoforged.neoforge.client.event.ClientPauseChangeEvent;
 import net.neoforged.neoforge.client.event.ClientTickEvent;
 import net.neoforged.neoforge.client.event.ClientPlayerNetworkEvent;
 import net.neoforged.neoforge.client.event.InputEvent;
@@ -47,6 +48,35 @@ public final class ClientGameEvents {
         ClientBattleController.tick();
         ClientTrackPublisher.tick();
         CameraEditorClient.tick();
+    }
+
+    /**
+     * At the end of the frame in which the game paused or resumed, the frame Minecraft paused or resumed every sound
+     * in: the battle clock stops and starts with the music here, not up to a tick later in the client tick.
+     */
+    @SubscribeEvent
+    public static void onClientPauseChanged(ClientPauseChangeEvent.Post event) {
+        ClientBattleController.onGamePauseChanged(event.isPaused());
+    }
+
+    /**
+     * Sooner still, where Minecraft really stops and starts the sounds: right after the pause menu is set up, and right
+     * after a menu closes onto the game. Last of every listener, nearest those instants; see
+     * ClientBattleController#onScreenShown and #onScreenClosing.
+     */
+    @SubscribeEvent(priority = EventPriority.LOWEST)
+    public static void onScreenShown(ScreenEvent.Init.Post event) {
+        ClientBattleController.onScreenShown(event.getScreen());
+    }
+
+    @SubscribeEvent(priority = EventPriority.LOWEST)
+    public static void onScreenOpeningLast(ScreenEvent.Opening event) {
+        ClientBattleController.onScreenOpening(event.getNewScreen());
+    }
+
+    @SubscribeEvent(priority = EventPriority.LOWEST)
+    public static void onScreenClosing(ScreenEvent.Closing event) {
+        ClientBattleController.onScreenClosing(event.getScreen());
     }
 
     @SubscribeEvent

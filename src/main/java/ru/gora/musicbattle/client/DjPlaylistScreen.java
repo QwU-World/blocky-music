@@ -2,6 +2,14 @@ package ru.gora.musicbattle.client;
 
 import java.util.ArrayList;
 import ru.gora.musicbattle.client.ui.Palette;
+import ru.gora.musicbattle.client.ui.RoundedRect;
+import ru.gora.musicbattle.client.ui.TextStyle;
+import ru.gora.musicbattle.client.ui.TextStyles;
+import ru.gora.musicbattle.client.ui.UiIcon;
+import ru.gora.musicbattle.client.workshop.WorkshopDraw;
+import ru.gora.musicbattle.client.workshop.layout.Metrics;
+import ru.gora.musicbattle.client.workshop.layout.Rect;
+import ru.gora.musicbattle.client.workshop.layout.TextFit;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
@@ -22,31 +30,22 @@ import ru.gora.musicbattle.network.ConfigureDjPlaylistPayload;
 /** Server-backed playlist editor. Duplicate tracks are identified by stable entry UUIDs. */
 final class DjPlaylistScreen extends Screen implements DjPanelOwnedScreen {
     private static final int ROW_HEIGHT = 22;
-    /** How long a line about a Workshop pick stays under the title. */
-    private static final long STATUS_MS = 12_000L;
-    /**
-     * The latest word about a Workshop pick. It is kept here rather than on one screen because the answer may arrive
-     * while the picker or another DJ screen is on top, and the playlist should still say it when the DJ comes back.
-     */
-    private static Component workshopStatus;
-    private static boolean workshopStatusProblem;
-    private static long workshopStatusUntilMs;
-    /** The Workshop pick on its way to the server or last refused, and the panel it was picked for. */
-    private static ru.gora.musicbattle.client.workshop.layout.BattleSetup.Pick workshopPick;
-    private static net.minecraft.core.BlockPos workshopPickPanel;
-    /**
-     * Whether the line is a refusal of {@link #workshopPick}. Such a line stays until the DJ retries or removes it: a
-     * refusal that faded on its own left the DJ unsure whether the map was still coming.
-     */
-    private static boolean workshopRetryable;
 
     private final DjPanelScreen parent;
     private final List<DjPlaylistEntry> entries = new ArrayList<>();
+    /** Every map the panel knows, for the titles and lengths of the rows. */
     private final List<TrackSummary> tracks = new ArrayList<>();
+    /**
+     * The booth's own list, which is where the playlist's Add takes maps from. Maps reach that list through "+" on the
+     * panel; this screen never puts one there, and "+" never puts one here.
+     */
+    private final List<TrackSummary> library = new ArrayList<>();
     private int selectedIndex = -1;
     private int trackIndex;
     private int scroll;
     private long seenRevision = Long.MIN_VALUE;
+    /** The panel's {@code libraryRevision} when {@link #library} was last copied from it. */
+    private int seenLibraryRevision = Integer.MIN_VALUE;
     private boolean autoAdvance;
     private int repeatMode;
     private int cueSourceTicks;
@@ -54,12 +53,9 @@ final class DjPlaylistScreen extends Screen implements DjPanelOwnedScreen {
     private boolean clearArmed;
     private boolean selectLastAfterSync;
     private int refreshCooldown;
-    /** Where the refusal line's Retry and Remove were drawn last frame; empty when they were not. */
-    private int retryLeft, retryRight, removeLeft, removeRight, linksTop = Integer.MIN_VALUE;
 
     private Button trackButton;
     private Button addButton;
-    private Button workshopButton;
     private Button removeButton;
     private Button upButton;
     private Button downButton;
@@ -84,17 +80,15 @@ final class DjPlaylistScreen extends Screen implements DjPanelOwnedScreen {
         int contentWidth = panelWidth() - 24;
         int top = panelTop() + 34;
         int buttonHeight = 20;
-        int addWidth = Math.min(92, Math.max(62, contentWidth / 5));
-        int workshopWidth = Math.min(110, Math.max(70, contentWidth / 4));
-        int trackWidth = contentWidth - addWidth - workshopWidth - 10;
+        // The map to queue, chosen from the booth's list, and the playlist's own Add. A Workshop button used to sit
+        // here too; Workshop maps now join the list through "+" on the panel, and only Add puts one in the queue.
+        int addWidth = Math.min(110, Math.max(70, contentWidth / 4));
+        int trackWidth = contentWidth - addWidth - 5;
         trackButton = addRenderableWidget(FancyButton.create(trackLabel(), ignored -> openTrackPicker(),
                 left + 12, top, trackWidth, buttonHeight));
         addButton = addRenderableWidget(FancyButton.create(
                 Component.translatable("screen.music_battle.dj_playlist.add"), ignored -> addEntry(),
-                left + 12 + trackWidth + 5, top, addWidth, buttonHeight));
-        workshopButton = addRenderableWidget(FancyButton.create(
-                Component.translatable("screen.music_battle.dj_playlist.workshop"), ignored -> openWorkshop(),
-                left + 12 + trackWidth + addWidth + 10, top, workshopWidth, buttonHeight));
+                left + 12 + trackWidth + 5, top, addWidth, buttonHeight)).primary();
 
         int cueY = listBottom() + 8;
         int secondsWidth = Math.min(72, Math.max(54, contentWidth / 7));
@@ -168,6 +162,9 @@ final class DjPlaylistScreen extends Screen implements DjPanelOwnedScreen {
         super.tick();
         if (seenRevision != parent.playlistRevision()) {
             syncFromParent(false);
+        } else if (seenLibraryRevision != parent.libraryRevision()) {
+            // The booth's list moves on its own clock: a "+" pick can land while this screen is open.
+            syncLibraryFromParent();
         }
         if (--refreshCooldown <= 0) {
             send(ConfigureDjPlaylistPayload.Action.REFRESH, null, "", 0, -1, autoAdvance);
@@ -179,62 +176,25 @@ final class DjPlaylistScreen extends Screen implements DjPanelOwnedScreen {
     public void renderBackground(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
     }
 
+    /**
+     * The toolkit's card, like the panel's library and the chooser this screen opens: a rounded panel with its title
+     * beside the music icon, and the queue as rounded rows. It was a square box with a pink bar and the bitmap font,
+     * the last of the DJ screens to look like that.
+     */
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
         graphics.fill(0, 0, width, height, Palette.withAlpha(Palette.BG_0, 0.95F));
         int left = panelLeft();
         int top = panelTop();
-        graphics.fill(left, top, left + panelWidth(), top + panelHeight(), Palette.BG_1);
-        graphics.fill(left, top, left + panelWidth(), top + 3, Palette.ACCENT);
-        graphics.drawCenteredString(font, title, left + panelWidth() / 2, top + 11, Palette.TEXT_1);
-        linksTop = Integer.MIN_VALUE;
-        if (workshopStatus != null && workshopRetryable) {
-            drawRefusalLine(graphics, mouseX, mouseY, left, top + 22);
-        } else if (workshopStatus != null && System.currentTimeMillis() < workshopStatusUntilMs) {
-            graphics.drawCenteredString(font, fit(workshopStatus.getString(), panelWidth() - 24),
-                    left + panelWidth() / 2, top + 22, workshopStatusProblem ? Palette.DANGER : Palette.OK);
-        }
+        RoundedRect.fill(graphics, left, top, panelWidth(), panelHeight(), Palette.RADIUS_MD, Palette.BG_1);
+        RoundedRect.stroke(graphics, left, top, panelWidth(), panelHeight(), Palette.RADIUS_MD, 1.0F,
+                Palette.withAlpha(Palette.LINE, 0.6F));
+        Rect icon = new Rect(left + 14, top + 11, Metrics.ICON, Metrics.ICON);
+        WorkshopDraw.icon(graphics, icon, UiIcon.MUSIC, Palette.ACCENT);
+        line(graphics, title.getString(), TextStyle.TITLE, icon.right() + Metrics.GAP_SM + 2,
+                TextStyles.centeredCapY(TextStyle.TITLE, icon.y(), icon.h()), panelWidth() - 40, Palette.TEXT_1);
         drawEntries(graphics, mouseX, mouseY);
         super.render(graphics, mouseX, mouseY, partialTick);
-    }
-
-    /** The refusal on the left, then Retry and Remove as text links at the right edge, where the line has room. */
-    private void drawRefusalLine(GuiGraphics graphics, int mouseX, int mouseY, int left, int y) {
-        Component retry = Component.translatable("screen.music_battle.dj_playlist.workshop.retry");
-        Component remove = Component.translatable("screen.music_battle.dj_playlist.workshop.remove");
-        removeRight = left + panelWidth() - 12;
-        removeLeft = removeRight - font.width(remove);
-        retryRight = removeLeft - 10;
-        retryLeft = retryRight - font.width(retry);
-        linksTop = y;
-        graphics.drawString(font, fit(workshopStatus.getString(), retryLeft - 10 - (left + 12)), left + 12, y,
-                Palette.DANGER, false);
-        boolean overRetry = overLink(mouseX, mouseY, retryLeft, retryRight);
-        boolean overRemove = overLink(mouseX, mouseY, removeLeft, removeRight);
-        graphics.drawString(font, overRetry ? retry.copy().withStyle(net.minecraft.ChatFormatting.UNDERLINE) : retry,
-                retryLeft, y, overRetry ? Palette.TEXT_1 : Palette.LINK, false);
-        graphics.drawString(font, overRemove ? remove.copy().withStyle(net.minecraft.ChatFormatting.UNDERLINE) : remove,
-                removeLeft, y, overRemove ? Palette.TEXT_1 : Palette.TEXT_3, false);
-    }
-
-    private boolean overLink(double mouseX, double mouseY, int linkLeft, int linkRight) {
-        return linksTop != Integer.MIN_VALUE && mouseX >= linkLeft - 2 && mouseX < linkRight + 2
-                && mouseY >= linksTop - 2 && mouseY < linksTop + font.lineHeight + 1;
-    }
-
-    /** Sends the refused pick again by the same door, or drops the line when the DJ would rather not. */
-    private void retryWorkshopPick() {
-        ru.gora.musicbattle.client.workshop.layout.BattleSetup.Pick pick = workshopPick;
-        workshopRetryable = false;
-        workshopStatus = null;
-        if (pick == null || !parent.playlistPanelPos().equals(workshopPickPanel)) return;
-        chooseFromWorkshop(pick);
-    }
-
-    private static void removeWorkshopLine() {
-        workshopRetryable = false;
-        workshopStatus = null;
-        workshopPick = null;
     }
 
     private void drawEntries(GuiGraphics graphics, int mouseX, int mouseY) {
@@ -242,42 +202,84 @@ final class DjPlaylistScreen extends Screen implements DjPanelOwnedScreen {
         int right = panelLeft() + panelWidth() - 12;
         int top = listTop();
         int bottom = listBottom();
-        graphics.fill(left - 2, top - 2, right + 2, bottom + 2, Palette.BG_0);
+        RoundedRect.fill(graphics, left - 2, top - 2, right - left + 4, bottom - top + 4, Palette.RADIUS_SM,
+                Palette.BG_0);
         int rows = visibleRows();
         scroll = Mth.clamp(scroll, 0, Math.max(0, entries.size() - rows));
+        boolean scrolls = entries.size() > rows;
+        // A scrolling queue keeps its rows clear of the scrollbar on the right.
+        int rowRight = scrolls ? right - 6 : right;
         UUID activeId = parent.activePlaylistEntryId();
         for (int row = 0; row < rows; row++) {
             int index = scroll + row;
             if (index >= entries.size()) break;
             DjPlaylistEntry entry = entries.get(index);
             int y = top + row * ROW_HEIGHT;
-            boolean hovered = mouseX >= left && mouseX < right && mouseY >= y && mouseY < y + ROW_HEIGHT - 2;
+            float rowHeight = ROW_HEIGHT - 2;
+            boolean hovered = mouseX >= left && mouseX < rowRight && mouseY >= y && mouseY < y + rowHeight;
             boolean active = entry.entryId().equals(activeId);
-            int color = index == selectedIndex ? Palette.withAlpha(Palette.ACCENT_DEEP, 0.8F) : hovered ? Palette.withAlpha(Palette.BG_4, 0.67F) : Palette.withAlpha(Palette.BG_3, 0.6F);
-            graphics.fill(left, y, right, y + ROW_HEIGHT - 2, color);
-            graphics.fill(left, y, left + 3, y + ROW_HEIGHT - 2,
-                    active ? Palette.OK : index == selectedIndex ? Palette.ACCENT : Palette.ACCENT_STRONG);
-            String title = track(entry.trackId()) == null ? entry.trackId() : track(entry.trackId()).title();
-            String line = (index + 1) + ". " + title + "  @ " + formatTicks(entry.startSourceTicks());
-            if (active) line = "▶ " + line;
-            graphics.drawString(font, fit(line, right - left - 14), left + 8, y + 6, Palette.TEXT_1, false);
+            boolean selected = index == selectedIndex;
+            int fill = selected ? Palette.mix(Palette.BG_3, Palette.ACCENT_DEEP, 0.85F)
+                    : hovered ? Palette.BG_3 : Palette.BG_2;
+            RoundedRect.fill(graphics, left, y, rowRight - left, rowHeight, Palette.RADIUS_SM, fill);
+            if (selected) {
+                RoundedRect.stroke(graphics, left, y, rowRight - left, rowHeight, Palette.RADIUS_SM, 1.0F,
+                        Palette.ACCENT);
+            }
+            RoundedRect.pill(graphics, left + 1.5F, y + 4, 2.5F, rowHeight - 8, active ? Palette.OK
+                    : selected ? Palette.ACCENT : hovered ? Palette.mix(Palette.LINE, Palette.ACCENT, 0.6F) : Palette.LINE);
+            float textX = left + 10;
+            if (active) {
+                // The row on the deck carries the play mark in the colour of the rail beside it.
+                WorkshopDraw.icon(graphics, new Rect(textX, y + (rowHeight - Metrics.ICON) / 2.0F, Metrics.ICON,
+                        Metrics.ICON), UiIcon.PLAY, Palette.OK);
+                textX += Metrics.ICON + 4;
+            }
+            String cue = formatTicks(entry.startSourceTicks());
+            float cueWidth = TextStyles.measurer().width(cue, TextStyle.CAPTION);
+            float cueY = TextStyles.centeredCapY(TextStyle.CAPTION, y, rowHeight);
+            TextStyles.queueRight(graphics, TextStyles.text(cue, TextStyle.CAPTION).getVisualOrderText(),
+                    rowRight - 8, cueY, Palette.TEXT_MUTE);
+            TrackSummary track = track(entry.trackId());
+            String name = (index + 1) + ".  " + (track == null ? entry.trackId() : track.title());
+            line(graphics, name, TextStyle.BODY, textX, TextStyles.centeredCapY(TextStyle.BODY, y, rowHeight),
+                    rowRight - 8 - cueWidth - 10 - textX, track == null ? Palette.TEXT_MUTE : Palette.TEXT_1);
+        }
+        if (scrolls) {
+            WorkshopDraw.scrollbar(graphics, new Rect(left, top, right - left, bottom - top), scroll * ROW_HEIGHT,
+                    entries.size() * ROW_HEIGHT, false);
         }
         if (entries.isEmpty()) {
-            graphics.drawCenteredString(font, Component.translatable("screen.music_battle.dj_playlist.empty"),
-                    (left + right) / 2, top + Math.max(5, (bottom - top - font.lineHeight) / 2), Palette.TEXT_3);
+            float centerX = (left + right) / 2.0F;
+            // With nothing on the booth's list there is nothing Add could queue, so the empty queue says where maps
+            // come from instead of telling the DJ to add some.
+            String key = library.isEmpty() ? "screen.music_battle.dj_playlist.picker_empty"
+                    : "screen.music_battle.dj_playlist.empty";
+            List<String> lines = TextFit.wrap(TextStyles.measurer(), Component.translatable(key).getString(),
+                    TextStyle.BODY, right - left - 24.0F, 2);
+            float blockHeight = 20 + lines.size() * Metrics.lineHeight(TextStyle.BODY);
+            float iconY = top + Math.max(4.0F, (bottom - top - blockHeight) / 2.0F);
+            WorkshopDraw.icon(graphics, new Rect(centerX - 7, iconY, 14, 14), UiIcon.MUSIC,
+                    Palette.withAlpha(Palette.TEXT_MUTE, 0.8F));
+            float textY = iconY + 20;
+            for (String messageLine : lines) {
+                TextStyles.queueCentered(graphics, TextStyles.text(messageLine, TextStyle.BODY).getVisualOrderText(),
+                        centerX, textY, Palette.TEXT_2);
+                textY += Metrics.lineHeight(TextStyle.BODY);
+            }
+        }
+    }
+
+    private static void line(GuiGraphics graphics, String value, TextStyle style, float x, float y, float maxWidth,
+                             int colour) {
+        String fitted = TextFit.ellipsize(TextStyles.measurer(), value == null ? "" : value, style, maxWidth);
+        if (!fitted.isEmpty()) {
+            TextStyles.queue(graphics, TextStyles.text(fitted, style).getVisualOrderText(), x, y, colour);
         }
     }
 
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
-        if (button == 0 && workshopRetryable && overLink(mouseX, mouseY, retryLeft, retryRight)) {
-            retryWorkshopPick();
-            return true;
-        }
-        if (button == 0 && workshopRetryable && overLink(mouseX, mouseY, removeLeft, removeRight)) {
-            removeWorkshopLine();
-            return true;
-        }
         if (button == 0 && mouseX >= panelLeft() + 12 && mouseX < panelLeft() + panelWidth() - 12
                 && mouseY >= listTop() && mouseY < listBottom()) {
             int index = scroll + (int) ((mouseY - listTop()) / ROW_HEIGHT);
@@ -309,6 +311,10 @@ final class DjPlaylistScreen extends Screen implements DjPanelOwnedScreen {
         entries.addAll(parent.playlistEntries());
         tracks.clear();
         tracks.addAll(parent.playlistTracks());
+        String chosenId = chosenTrackId();
+        library.clear();
+        library.addAll(parent.libraryTracks());
+        seenLibraryRevision = parent.libraryRevision();
         autoAdvance = parent.playlistAutoAdvance();
         repeatMode = Mth.clamp(parent.playlistRepeat(), 0, 2);
         seenRevision = parent.playlistRevision();
@@ -321,151 +327,59 @@ final class DjPlaylistScreen extends Screen implements DjPanelOwnedScreen {
             selectedIndex = 0;
         }
         selectedIndex = entries.isEmpty() ? -1 : Mth.clamp(selectedIndex, 0, entries.size() - 1);
-        if (initial && !tracks.isEmpty()) {
-            String selectedTrackId = parent.playlistSelectedTrackId();
-            for (int index = 0; index < tracks.size(); index++) {
-                if (tracks.get(index).id().equals(selectedTrackId)) {
-                    trackIndex = index;
-                    break;
-                }
-            }
-        }
-        trackIndex = tracks.isEmpty() ? 0 : Mth.clamp(trackIndex, 0, tracks.size() - 1);
-        if (trackButton != null) trackButton.setMessage(trackLabel());
+        // On opening, the panel's own selection is the natural first choice.
+        chooseLibraryTrack(initial ? parent.playlistSelectedTrackId() : chosenId);
         if (autoButton != null) autoButton.setMessage(autoLabel());
         if (repeatButton != null) repeatButton.setMessage(repeatLabel());
         loadCueWidgets();
         refreshButtons();
     }
 
+    /**
+     * Re-reads the booth's list alone. The queue is as it was, so the cue being typed for the selected row stays where
+     * it is: a full sync reloads the cue widgets from the row, and a map landing mid-edit would have undone the typing.
+     */
+    private void syncLibraryFromParent() {
+        String chosenId = chosenTrackId();
+        // The rows' titles come from the same refresh, so a map the server just gained is named in the queue too.
+        tracks.clear();
+        tracks.addAll(parent.playlistTracks());
+        library.clear();
+        library.addAll(parent.libraryTracks());
+        seenLibraryRevision = parent.libraryRevision();
+        chooseLibraryTrack(chosenId);
+        refreshButtons();
+    }
+
+    /** The map Add would queue now, or empty when the booth's list is. */
+    private String chosenTrackId() {
+        return trackIndex >= 0 && trackIndex < library.size() ? library.get(trackIndex).id() : "";
+    }
+
+    /**
+     * Points Add at {@code trackId} when the booth's list holds it. Otherwise the choice keeps its place in the list,
+     * so a map that left the list hands the choice to its neighbour rather than to the top of the list.
+     */
+    private void chooseLibraryTrack(String trackId) {
+        for (int index = 0; index < library.size(); index++) {
+            if (library.get(index).id().equals(trackId)) {
+                trackIndex = index;
+                break;
+            }
+        }
+        trackIndex = library.isEmpty() ? 0 : Mth.clamp(trackIndex, 0, library.size() - 1);
+        if (trackButton != null) trackButton.setMessage(trackLabel());
+    }
+
     private void openTrackPicker() {
         if (minecraft == null) return;
-        minecraft.setScreen(new DjPlaylistTrackPickerScreen(this, parent, chosen -> {
-            for (int i=0;i<tracks.size();i++) if(tracks.get(i).id().equals(chosen.id())) { trackIndex=i; break; }
+        minecraft.setScreen(new DjPlaylistTrackPickerScreen(this, parent, chosenTrackId(), chosen -> {
+            // The chooser lists the panel's current list, which may be newer than this screen's copy.
+            if (seenLibraryRevision != parent.libraryRevision()) {
+                syncLibraryFromParent();
+            }
+            chooseLibraryTrack(chosen.id());
         }));
-    }
-
-    /**
-     * The Workshop as this playlist's picker: Browse, Installed and the Server tab with every track this panel lists.
-     * A choice lands in the playlist like the Add button's, so from there it is an ordinary row with FX, mixer, speed
-     * and the audience preload of any server track.
-     */
-    private void openWorkshop() {
-        if (minecraft == null) return;
-        ru.gora.musicbattle.client.workshop.WorkshopScreen.openDjPicker(this,
-                new ru.gora.musicbattle.client.workshop.WorkshopScreen.Picker(pickerTracks(tracks),
-                        this::chooseFromWorkshop, null, this::pickerPreview));
-    }
-
-    /**
-     * A map the server already plays is queued by its id at once. Anything else has to reach the server first, which
-     * is the Workshop's business; this screen only hears how it goes.
-     */
-    /**
-     * The Workshop picker opened from the panel's own track library. Backing out returns to the panel; a pick opens
-     * the playlist, because that is where the song is added and where its download or refusal is reported.
-     */
-    static void openWorkshopFromPanel(DjPanelScreen panel) {
-        DjPlaylistScreen playlist = new DjPlaylistScreen(panel);
-        ru.gora.musicbattle.client.workshop.WorkshopScreen.openDjPicker(panel,
-                new ru.gora.musicbattle.client.workshop.WorkshopScreen.Picker(pickerTracks(playlist.tracks), pick -> {
-                    // The picker may stay open long enough for the server to change the playlist underneath it.
-                    playlist.syncFromParent(false);
-                    net.minecraft.client.Minecraft.getInstance().setScreen(playlist);
-                    playlist.chooseFromWorkshop(pick);
-                }, null, playlist::pickerPreview));
-    }
-
-    private void chooseFromWorkshop(ru.gora.musicbattle.client.workshop.layout.BattleSetup.Pick pick) {
-        if (pick == null) return;
-        // A new pick replaces any refusal still on the line, so its Retry never resends an older map.
-        workshopPick = null;
-        workshopRetryable = false;
-        if (entries.size() >= DjPlaylistEntry.MAX_ENTRIES) {
-            workshopStatus(Component.translatable("screen.music_battle.dj_playlist.workshop.full"), true, null);
-            return;
-        }
-        if (pick.serverTrack()) {
-            queueTrack(pick.trackId());
-            return;
-        }
-        if (pick.setId() <= 0 || pick.chartKey().isEmpty()) return;
-        String chartId = ru.gora.musicbattle.workshop.WorkshopLayout.chartId(pick.setId(), pick.chartKey());
-        if (track(chartId) != null) {
-            queueTrack(chartId);
-            return;
-        }
-        workshopPick = pick;
-        workshopPickPanel = parent.playlistPanelPos();
-        ru.gora.musicbattle.client.workshop.WorkshopScreen.bringToDj(parent.playlistPanelPos(), pick,
-                (status, problem) -> workshopStatus(status, problem, null));
-    }
-
-    private void queueTrack(String trackId) {
-        selectLastAfterSync = true;
-        send(ConfigureDjPlaylistPayload.Action.ADD, null, trackId, 0, -1, autoAdvance);
-    }
-
-    /**
-     * Shows a line about a Workshop pick under the title. {@code addedTo} names the panel whose playlist just gained
-     * the chart, so an open playlist for it selects the new last row and asks for the fresh list now instead of
-     * on its next one-second refresh.
-     */
-    static void workshopStatus(Component message, boolean problem, net.minecraft.core.BlockPos addedTo) {
-        workshopStatus = message;
-        workshopStatusProblem = problem;
-        workshopStatusUntilMs = System.currentTimeMillis() + STATUS_MS;
-        // A failed download of the current pick can be retried like a refusal; news of success ends the pick.
-        workshopRetryable = problem && workshopPick != null;
-        if (!problem && addedTo != null) workshopPick = null;
-        if (addedTo != null && net.minecraft.client.Minecraft.getInstance().screen instanceof DjPlaylistScreen open
-                && addedTo.equals(open.parent.playlistPanelPos())) {
-            open.selectLastAfterSync = true;
-            open.refreshCooldown = 0;
-        }
-    }
-
-    /** The server will ask for the DJ's installed copy of the pick: the line says it is on its way. */
-    static void workshopSending(long setId) {
-        ru.gora.musicbattle.client.workshop.layout.BattleSetup.Pick pick = workshopPick;
-        if (pick == null || pick.setId() != setId) return;
-        workshopStatus(Component.translatable("screen.music_battle.dj_playlist.workshop.sending", pick.title()),
-                false, null);
-    }
-
-    /**
-     * The server refused a Workshop pick, possibly long after it said the map could come. A refusal of the current
-     * pick offers Retry and Remove; one about another set is only shown.
-     */
-    static void workshopRefused(Component message, long setId) {
-        if (workshopPick != null && workshopPick.setId() != setId) workshopPick = null;
-        workshopStatus(message, true, null);
-    }
-
-    /** The panel's tracks as the picker's Server tab lists them, the way a battle's vote list is read. */
-    private static ru.gora.musicbattle.client.workshop.layout.BattleTracks pickerTracks(List<TrackSummary> tracks) {
-        List<ru.gora.musicbattle.client.workshop.layout.BattleTracks.Track> rows = new ArrayList<>(tracks.size());
-        for (TrackSummary track : tracks) {
-            ru.gora.musicbattle.client.workshop.layout.BattleTracks.Kind kind = switch (track.source()) {
-                case WORKSHOP -> ru.gora.musicbattle.client.workshop.layout.BattleTracks.Kind.WORKSHOP;
-                case USER -> ru.gora.musicbattle.client.workshop.layout.BattleTracks.Kind.PLAYERS;
-                case SERVER -> ru.gora.musicbattle.client.workshop.layout.BattleTracks.Kind.SERVER;
-                case INSTALLED -> null;
-            };
-            if (kind == null) continue;
-            String chartKey = kind == ru.gora.musicbattle.client.workshop.layout.BattleTracks.Kind.WORKSHOP
-                    ? ru.gora.musicbattle.client.workshop.layout.BattleTracks.chartKeyOf(track.id(), track.setId()) : "";
-            rows.add(new ru.gora.musicbattle.client.workshop.layout.BattleTracks.Track(track.id(), kind, track.setId(),
-                    chartKey, track.title(), track.description(), track.publishedBy(), track.mapper(),
-                    track.contentSha256(), track.bpm(), track.durationTicks(), track.previewFile()));
-        }
-        return new ru.gora.musicbattle.client.workshop.layout.BattleTracks(rows, false);
-    }
-
-    private net.minecraft.resources.ResourceLocation pickerPreview(
-            ru.gora.musicbattle.client.workshop.layout.BattleTracks.Track row) {
-        TrackSummary summary = row == null ? null : track(row.id());
-        return summary == null ? null : parent.previewTexture(summary);
     }
 
     private void chooseFxMode(int mode) {
@@ -478,8 +392,8 @@ final class DjPlaylistScreen extends Screen implements DjPanelOwnedScreen {
     }
 
     private void addEntry() {
-        if (tracks.isEmpty() || entries.size() >= DjPlaylistEntry.MAX_ENTRIES) return;
-        TrackSummary track = tracks.get(trackIndex);
+        if (library.isEmpty() || entries.size() >= DjPlaylistEntry.MAX_ENTRIES) return;
+        TrackSummary track = library.get(Mth.clamp(trackIndex, 0, library.size() - 1));
         selectLastAfterSync = true;
         // Cue controls edit the selected queue row. A newly chosen track must not silently
         // inherit that row's timestamp; add at zero, select it, then edit its exact cue.
@@ -582,8 +496,8 @@ final class DjPlaylistScreen extends Screen implements DjPanelOwnedScreen {
             button.setMessage(Component.literal(on ? "✓ " : "").append(Component.translatable(
                     "screen.music_battle.dj_playlist.fx_"+new String[]{"track","dj","none"}[i])));
         }
-        if (addButton != null) addButton.active = !tracks.isEmpty() && entries.size() < DjPlaylistEntry.MAX_ENTRIES;
-        if (workshopButton != null) workshopButton.active = entries.size() < DjPlaylistEntry.MAX_ENTRIES;
+        // The chooser stays pressable with an empty list: its empty page says where maps come from.
+        if (addButton != null) addButton.active = !library.isEmpty() && entries.size() < DjPlaylistEntry.MAX_ENTRIES;
         if (removeButton != null) removeButton.active = selected;
         if (upButton != null) upButton.active = selected && selectedIndex > 0;
         if (downButton != null) downButton.active = selected && selectedIndex + 1 < entries.size();
@@ -613,8 +527,8 @@ final class DjPlaylistScreen extends Screen implements DjPanelOwnedScreen {
     }
 
     private Component trackLabel() {
-        if (tracks.isEmpty()) return Component.translatable("screen.music_battle.dj_playlist.no_tracks");
-        TrackSummary track = tracks.get(Mth.clamp(trackIndex, 0, tracks.size() - 1));
+        if (library.isEmpty()) return Component.translatable("screen.music_battle.dj_playlist.no_tracks");
+        TrackSummary track = library.get(Mth.clamp(trackIndex, 0, library.size() - 1));
         return Component.literal(track.title());
     }
 
@@ -626,11 +540,6 @@ final class DjPlaylistScreen extends Screen implements DjPanelOwnedScreen {
     private Component repeatLabel() {
         return Component.translatable("screen.music_battle.dj_playlist.repeat_"
                 + new String[]{"off", "one", "all"}[Mth.clamp(repeatMode, 0, 2)]);
-    }
-
-    private String fit(String text, int maximumWidth) {
-        if (font.width(text) <= maximumWidth) return text;
-        return font.plainSubstrByWidth(text, Math.max(8, maximumWidth - font.width("…"))) + "…";
     }
 
     /**

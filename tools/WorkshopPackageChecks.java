@@ -157,7 +157,7 @@ public final class WorkshopPackageChecks {
     }
 
     /**
-     * The repack of the review of 06 section 9.1: an installed set goes back into a package with its manifest, its
+     * The repack: an installed set goes back into a package with its manifest, its
      * declared files re-hashed, and the signature when it has one. Installing the result must give the identical
      * folder, and a file whose bytes changed must stop the repack instead of shipping altered content.
      */
@@ -218,7 +218,7 @@ public final class WorkshopPackageChecks {
         signed.extraEntries.put(WorkshopLayout.SIGNATURE_FILE_NAME, new byte[64]);
         BeatmapPackage.InstallResult result = BeatmapPackage.install(signed.write(temp.resolve("signed.blockymap")), root);
         check("package with an undeclared beatmap.sig installs", result.outcome() == BeatmapPackage.Outcome.INSTALLED);
-        // Wave M3 (spec 08 A5.3): the signature travels into the installed folder, so a repack can still prove
+        // The signature travels into the installed folder, so a repack can still prove
         // where the copy came from. It is not a chart, audio or cover name, so nothing else ever reads it.
         check("beatmap.sig is installed next to the set",
                 Files.exists(result.directory().resolve(WorkshopLayout.SIGNATURE_FILE_NAME))

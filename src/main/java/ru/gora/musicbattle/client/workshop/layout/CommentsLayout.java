@@ -5,7 +5,7 @@ import ru.gora.musicbattle.client.ui.TextMeasurer;
 import ru.gora.musicbattle.client.ui.TextStyle;
 
 /**
- * The comments section (spec 06 section 6.3, osu-web layout in research section 4): the counter header with the
+ * The comments section (osu-web's layout): the counter header with the
  * Workshop / Server comments buttons, the composer, the sort bar, the rows with their vote pill in the left gutter,
  * avatar, author line with badges, body, footer actions and replies, and the "Show more" footer.
  *
@@ -18,6 +18,13 @@ public final class CommentsLayout {
     public static final String SORT = "comments.sort";
     public static final String LIST = "comments.list";
     public static final List<String> SORTS = List.of("new", "old", "top");
+    /**
+     * The least a commenter's name keeps beside its badges: about eight letters, enough to tell one name from another,
+     * and never fewer than six ({@link #nameMin}). Badges that do not fit beside a name this short go on the line under it.
+     */
+    public static final float NAME_MIN = 48F;
+    /** Between one badge and the next. */
+    public static final float BADGE_GAP = 2F;
 
     /**
      * One comment as the screen wants it drawn. {@code repliesShown} is how many of its replies are rows of their own
@@ -50,7 +57,14 @@ public final class CommentsLayout {
     public record State(long total, String sort, boolean canPost, String cannotPostReason, boolean signedIn, List<Row> rows,
                         boolean hasMore, long remaining, boolean loading, boolean serverComments, boolean serverActive,
                         String composerHint, float composerHeight, boolean rulesPending, String note, String replyingTo,
-                        int bodyLength, int bodyLimit) {
+                        int bodyLength, int bodyLimit, boolean workshopTab) {
+        public State(long total, String sort, boolean canPost, String cannotPostReason, boolean signedIn, List<Row> rows,
+                     boolean hasMore, long remaining, boolean loading, boolean serverComments, boolean serverActive,
+                     String composerHint, float composerHeight, boolean rulesPending, String note, String replyingTo,
+                     int bodyLength, int bodyLimit) {
+            this(total, sort, canPost, cannotPostReason, signedIn, rows, hasMore, remaining, loading, serverComments,
+                    serverActive, composerHint, composerHeight, rulesPending, note, replyingTo, bodyLength, bodyLimit, true);
+        }
     }
 
     private CommentsLayout() {
@@ -76,16 +90,23 @@ public final class CommentsLayout {
                 ? tr.get(WorkshopStrings.KEY + "comments.server_count", WorkshopStrings.count(state.total()))
                 : tr.get(WorkshopStrings.KEY + "comments.server");
         float tabsRoom = Math.max(0F, width - pad * 2 - Metrics.GAP_SM);
-        float workshopWidth = Math.min(tabsRoom * 0.55F, TextFit.width(measurer, workshopLabel, TextStyle.BODY) + 14);
-        Rect workshopTab = new Rect(pad, y + 3, workshopWidth, buttonH);
-        layout.add("comments.tab.workshop", HEADER, Layout.Kind.BUTTON, workshopTab);
-        layout.labelCentered("comments.tab.workshop.text", "comments.tab.workshop", workshopTab.centerX(),
-                ShellLayout.capY(TextStyle.BODY, workshopTab.y(), buttonH), workshopWidth - 6, workshopLabel, TextStyle.BODY);
+        float serverX = pad;
+        float workshopWidth = 0F;
+        if (state.workshopTab()) {
+            workshopWidth = Math.min(tabsRoom * 0.55F, TextFit.width(measurer, workshopLabel, TextStyle.BODY) + 14);
+            Rect workshopTab = new Rect(pad, y + 3, workshopWidth, buttonH);
+            layout.add("comments.tab.workshop", HEADER, Layout.Kind.BUTTON, workshopTab);
+            layout.labelCentered("comments.tab.workshop.text", "comments.tab.workshop", workshopTab.centerX(),
+                    ShellLayout.capY(TextStyle.BODY, workshopTab.y(), buttonH), workshopWidth - 6, workshopLabel,
+                    TextStyle.BODY);
+            serverX = workshopTab.right() + Metrics.GAP_SM;
+        }
         // Whatever the first tab did not take: with a count on it the second label grew, and a share of the width
-        // that ignored the first tab could push it off the panel.
+        // that ignored the first tab could push it off the panel. A server beatmap's thread has no Workshop tab at all:
+        // the Workshop never heard of it, and the tab stood there greyed out with nothing behind it.
         float serverWidth = Math.min(Math.max(0F, tabsRoom - workshopWidth),
                 TextFit.width(measurer, serverLabel, TextStyle.CAPTION) + 14);
-        Rect serverTab = new Rect(workshopTab.right() + Metrics.GAP_SM, y + 3, serverWidth, buttonH);
+        Rect serverTab = new Rect(serverX, y + 3, serverWidth, buttonH);
         layout.add("comments.tab.server", HEADER, Layout.Kind.BUTTON, serverTab);
         layout.labelCentered("comments.tab.server.text", "comments.tab.server", serverTab.centerX(),
                 ShellLayout.capY(TextStyle.CAPTION, serverTab.y(), buttonH), serverWidth - 6, serverLabel, TextStyle.CAPTION);
@@ -205,8 +226,14 @@ public final class CommentsLayout {
                     tr.get(WorkshopStrings.KEY + (state.loading() ? "comments.loading" : "comments.empty")), TextStyle.CAPTION);
             y += TextFit.boxHeight(TextStyle.CAPTION) + 8;
         }
+        // The vote pills share one width, the widest count's, so every avatar of a list still lines up; a fixed 16
+        // or 20 units showed "+12" as "+…" in a compact window and "+1234" as "+1…" in a wide one.
+        float voteWidth = Math.min(compact ? 16F : Metrics.COMMENT_GUTTER, 20F);
+        for (Row row : state.rows()) {
+            voteWidth = Math.max(voteWidth, (float) Math.ceil(TextFit.width(measurer, voteLabel(row), TextStyle.CAPTION) + 6));
+        }
         for (int i = 0; i < state.rows().size(); i++) {
-            y = row(layout, measurer, tr, state.rows().get(i), i, pad, width, y, compact);
+            y = row(layout, measurer, tr, state.rows().get(i), i, pad, width, y, compact, voteWidth);
         }
         layout.resize(LIST, new Rect(0, listTop, width, Math.max(0F, y - listTop)));
 
@@ -223,19 +250,35 @@ public final class CommentsLayout {
         return layout;
     }
 
+    /**
+     * The room a name keeps however many badges follow it: {@link #NAME_MIN}, or its first six letters and the ellipsis
+     * when those are wider. 48 units hold eight letters of most names but not of wide ones: at GUI scale 1 "someone_else"
+     * gave way to "someo…" beside four badges. A name that fits this room whole is not cut at all.
+     */
+    public static float nameMin(TextMeasurer measurer, String name) {
+        if (name == null || name.isEmpty()) {
+            return NAME_MIN;
+        }
+        String six = name.substring(0, name.offsetByCodePoints(0, Math.min(6, name.codePointCount(0, name.length()))));
+        return Math.max(NAME_MIN, TextFit.width(measurer, six, TextStyle.STRONG) + TextFit.width(measurer, TextFit.ELLIPSIS, TextStyle.STRONG));
+    }
+
+    /** What a row's vote pill says: its count, "+12", in the short form counts take past 9 999 ("+12K"). */
+    private static String voteLabel(Row row) {
+        return "+" + WorkshopStrings.count(row.votes());
+    }
+
     private static float row(Layout layout, TextMeasurer measurer, Tr tr, Row row, int index, float pad, float width, float y,
-                             boolean compact) {
+                             boolean compact, float voteWidth) {
         String id = "comments.row." + index;
         float indent = pad + Math.min(row.depth(), 2) * Metrics.COMMENT_INDENT;
-        float gutter = compact ? 16F : Metrics.COMMENT_GUTTER;
         float avatar = compact ? Metrics.AVATAR_SM : Metrics.AVATAR;
         float rowTop = y;
         layout.add(id, "", Layout.Kind.PANEL, new Rect(indent, rowTop, width - indent - pad, Metrics.OPTION_H));
 
-        float voteWidth = Math.min(gutter, 20F);
         layout.add(id + ".vote", id, Layout.Kind.BUTTON, new Rect(indent, rowTop + 2, voteWidth, Metrics.OPTION_H));
         layout.labelCentered(id + ".vote.text", id + ".vote", indent + voteWidth * 0.5F,
-                ShellLayout.capY(TextStyle.CAPTION, rowTop + 2, Metrics.OPTION_H), voteWidth - 2, "+" + row.votes(),
+                ShellLayout.capY(TextStyle.CAPTION, rowTop + 2, Metrics.OPTION_H), voteWidth - 2, voteLabel(row),
                 TextStyle.CAPTION);
         float avatarX = indent + voteWidth + 3;
         layout.add(id + ".avatar", id, Layout.Kind.IMAGE, new Rect(avatarX, rowTop + 2, avatar, avatar));
@@ -243,22 +286,40 @@ public final class CommentsLayout {
         float textRoom = Math.max(30F, width - pad - textX);
         float ty = rowTop + 2;
 
-        float authorRoom = textRoom;
-        layout.label(id + ".author", id, textX, ty, authorRoom * 0.6F, row.author(), TextStyle.STRONG);
+        // The name gives way to its badges, down to nameMin: each badge says what the commenter is here (the
+        // beatmap's mapper, an admin, a moderator, a curator), and a name is still recognised by its first letters.
+        // Badges that do not fit beside the name even then go on the line under it. The name used to take three fifths
+        // of the line whatever followed it, and a badge that did not fit was dropped, so at 320x240 a long name with
+        // three roles lost «КУРАТОР» without a sign.
+        float badgesWidth = 0F;
+        for (String badge : row.badges()) {
+            badgesWidth += BADGE_GAP + TextFit.width(measurer, badge, TextStyle.PILL) + 6;
+        }
+        float authorRoom = Math.min(textRoom * 0.6F, Math.max(nameMin(measurer, row.author()), textRoom - badgesWidth - 3 + BADGE_GAP));
+        layout.label(id + ".author", id, textX, ty, authorRoom, row.author(), TextStyle.STRONG);
         float bx = layout.rect(id + ".author").right() + 3;
         for (int b = 0; b < row.badges().size(); b++) {
             String badge = row.badges().get(b);
-            float badgeWidth = TextFit.width(measurer, badge, TextStyle.PILL) + 6;
-            if (bx + badgeWidth > textX + textRoom) {
-                break;
+            float badgeWidth = Math.min(textRoom, TextFit.width(measurer, badge, TextStyle.PILL) + 6);
+            if (bx + badgeWidth > textX + textRoom + TextFit.FIT_EPSILON && bx > textX) {
+                bx = textX;
+                ty += TextStyle.STRONG.capHeight() + 4;
             }
             Rect box = new Rect(bx, ty - 1, badgeWidth, Metrics.BADGE_H);
             layout.add(id + ".badge." + b, id, Layout.Kind.PILL, box);
             layout.labelCentered(id + ".badge." + b + ".text", id + ".badge." + b, box.centerX(),
                     ShellLayout.capY(TextStyle.PILL, box.y(), Metrics.BADGE_H), badgeWidth - 3, badge, TextStyle.PILL);
-            bx = box.right() + 2;
+            bx = box.right() + BADGE_GAP;
         }
-        if (row.parent() != null && !row.parent().isEmpty() && bx + 20 < textX + textRoom) {
+        // A reply's "↩ name" follows the last badge when it fits there whole. Otherwise it starts the next line, as a
+        // badge that does not fit does, and has the whole column there, so only a name longer than that is cut. It
+        // used to be left out whenever fewer than 20 units were left after the badges: once the name gave way to every
+        // badge, a staff member's reply at 320x240 no longer said whom it answered.
+        if (row.parent() != null && !row.parent().isEmpty()) {
+            if (!TextFit.fits(measurer, row.parent(), TextStyle.CAPTION, textX + textRoom - bx) && bx > textX) {
+                bx = textX;
+                ty += TextStyle.STRONG.capHeight() + 4;
+            }
             layout.label(id + ".parent", id, bx, ty, textX + textRoom - bx, row.parent(), TextStyle.CAPTION);
         }
         ty += TextStyle.STRONG.capHeight() + 4;
@@ -275,17 +336,30 @@ public final class CommentsLayout {
         float ax = textX;
         layout.label(id + ".time", id, ax, ty, textRoom * 0.5F, row.time(), TextStyle.CAPTION);
         ax = layout.rect(id + ".time").right() + Metrics.OPTION_GAP;
+        // An action that does not fit after the ones before it starts the next line. A row used to drop it, so in a
+        // narrow window a reply three levels deep had no "Continue in browser" to press, and a long name no Report.
+        List<String[]> actions = new java.util.ArrayList<>();
         if (row.canReply()) {
-            ax = action(layout, measurer, id, ".reply", tr.get(WorkshopStrings.KEY + "comments.reply"), ax, ty, textX + textRoom);
+            actions.add(new String[] {".reply", "comments.reply"});
         }
         if (row.canReport()) {
-            ax = action(layout, measurer, id, ".report", tr.get(WorkshopStrings.KEY + "comments.report"), ax, ty, textX + textRoom);
+            actions.add(new String[] {".report", "comments.report"});
         }
         if (row.canDelete()) {
-            ax = action(layout, measurer, id, ".delete", tr.get(WorkshopStrings.KEY + "comments.delete"), ax, ty, textX + textRoom);
+            actions.add(new String[] {".delete", "comments.delete"});
         }
         if (row.deeper()) {
-            action(layout, measurer, id, ".continue", tr.get(WorkshopStrings.KEY + "comments.continue"), ax, ty, textX + textRoom);
+            actions.add(new String[] {".continue", "comments.continue"});
+        }
+        for (String[] action : actions) {
+            String label = tr.get(WorkshopStrings.KEY + action[1]);
+            float actionWidth = Math.min(textRoom, TextFit.width(measurer, label, TextStyle.LABEL));
+            if (ax + actionWidth > textX + textRoom + TextFit.FIT_EPSILON && ax > textX) {
+                ax = textX;
+                ty += TextFit.boxHeight(TextStyle.LABEL) + 2;
+            }
+            layout.label(id + action[0], id, ax, ty, actionWidth, label, TextStyle.LABEL);
+            ax += actionWidth + Metrics.OPTION_GAP;
         }
         ty += TextFit.boxHeight(TextStyle.LABEL) + 3;
 
@@ -303,15 +377,5 @@ public final class CommentsLayout {
         float bottom = ty + 3;
         layout.resize(id, new Rect(indent, rowTop, width - indent - pad, bottom - rowTop));
         return bottom;
-    }
-
-    private static float action(Layout layout, TextMeasurer measurer, String id, String suffix, String label, float x, float y,
-                                float right) {
-        float width = TextFit.width(measurer, label, TextStyle.LABEL);
-        if (x + width > right) {
-            return x;
-        }
-        layout.label(id + suffix, id, x, y, width, label, TextStyle.LABEL);
-        return x + width + Metrics.OPTION_GAP;
     }
 }

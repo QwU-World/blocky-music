@@ -2,7 +2,6 @@ package ru.gora.musicbattle.client.ui;
 
 import java.net.URI;
 import java.net.URISyntaxException;
-import java.util.Locale;
 import java.util.Optional;
 import net.minecraft.Util;
 import net.minecraft.client.Minecraft;
@@ -10,7 +9,7 @@ import net.minecraft.client.gui.screens.ConfirmLinkScreen;
 import net.minecraft.client.gui.screens.Screen;
 
 /**
- * Opening links and copying text from Workshop screens (research section 12). Every URL is parsed and limited
+ * Opening links and copying text from Workshop screens. Every URL is parsed and limited
  * to http(s) before the vanilla confirmation dialog, because {@code ConfirmLinkScreen.confirmLinkNow(Screen,
  * String)} and {@code Util.OS.openUri(String)} do not check the scheme.
  *
@@ -21,7 +20,7 @@ import net.minecraft.client.gui.screens.Screen;
  */
 public final class LinkActions {
     public static final int MAX_URL_LENGTH = 2048;
-    public static final String FIRST_PARTY_DOMAIN = "qwu.world";
+    public static final String FIRST_PARTY_DOMAIN = ru.gora.musicbattle.workshop.api.MediaUrl.FIRST_PARTY_DOMAIN;
 
     private LinkActions() {
     }
@@ -45,13 +44,12 @@ public final class LinkActions {
         }
     }
 
-    /** https on qwu.world or a subdomain, with no user info (which could disguise the real host). */
+    /**
+     * https on qwu.world or a subdomain, with no user info (which could disguise the real host). The same rule decides
+     * which account pictures the Workshop fetches ({@code MediaUrl}).
+     */
     public static boolean isFirstParty(URI uri) {
-        if (uri == null || !"https".equalsIgnoreCase(uri.getScheme()) || uri.getRawUserInfo() != null) {
-            return false;
-        }
-        String host = uri.getHost() == null ? "" : uri.getHost().toLowerCase(Locale.ROOT);
-        return host.equals(FIRST_PARTY_DOMAIN) || host.endsWith("." + FIRST_PARTY_DOMAIN);
+        return ru.gora.musicbattle.workshop.api.MediaUrl.isFirstParty(uri);
     }
 
     /**

@@ -71,11 +71,13 @@ public final class BattleFeelChecks {
             int oldClient = BattleClock.ticksSince(clientEpoch, clientNow + TICK);
             check(oldClient < target, "reproduced: the client fell back into the rest at " + roundTrip + " ms");
 
-            long clientEpochAfter = BattleSkipClock.clientEpochAfterSkip(clientNow, target, oneWay);
+            // The client moves its epoch by the ticks the server jumped, however late the news arrives; the sub-tick
+            // arithmetic of the old rebuild is in tools/BattleSkipSyncChecks.java.
+            long clientEpochAfter = BattleSkipClock.clientEpochAfterJump(clientEpoch, from, target);
             for (int later : new int[]{1, 20, 400}) {
                 int client = BattleClock.ticksSince(clientEpochAfter, clientNow + later * TICK);
                 int server = BattleClock.ticksSince(serverEpochAfter, arrivesServerTime + later * TICK);
-                check(Math.abs(client - server) <= 1,
+                check(client == server,
                         "client " + client + " and server " + server + " agree after the skip at " + roundTrip + " ms");
             }
         }

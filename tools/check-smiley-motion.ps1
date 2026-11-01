@@ -16,7 +16,7 @@ $dependencyJars = foreach ($group in $groups) {
 }
 $classPath = (@($outputDir, "$projectDir\build\classes\java\main",
     "$projectDir\build\moddev\artifacts\neoforge-21.1.230-merged.jar") + @($dependencyJars)) -join [IO.Path]::PathSeparator
-$javaDir = 'C:\Program Files\Eclipse Adoptium\jdk-21.0.11.10-hotspot\bin'
+$javaDir = & (Join-Path $PSScriptRoot 'find-jdk.ps1')
 $sourcePaths = @('src/main/java/ru/gora/musicbattle/data/SmileyWalkAnimation.java',
     'src/main/java/ru/gora/musicbattle/entity/SmileyBallEntity.java',
     'src/main/java/ru/gora/musicbattle/client/SmileyBallModel.java',

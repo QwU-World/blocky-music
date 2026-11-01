@@ -1,5 +1,6 @@
 package ru.gora.musicbattle.data;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
@@ -33,8 +34,13 @@ public final class BattlePlacementMath {
     public record Pair(Candidate left, Candidate right) {
     }
 
-    /** Distance from the arena centre to the opening frame of a battle camera, automatic or placed. */
-    public static final double CAMERA_INTRO_DISTANCE = 1.2D;
+    /**
+     * Distance from the arena centre to the opening frame of a battle camera, automatic or placed. It was 1.2 while the
+     * lens stood almost three blocks up. At head height that opened between the fighters' heads: for about a second
+     * both were cut in half at the edges of the picture, under the lane panels, and a camera block's dolly swept the
+     * nearer fighter's body past the lens. From 2.4 out both fighters are in the picture whole from the first frame.
+     */
+    public static final double CAMERA_INTRO_DISTANCE = 2.4D;
 
     /** Rotation drift, in degrees, a held participant may keep before the server re-sends its own rotation. */
     public static final float ROTATION_CORRECTION_DEGREES = 2.5F;
@@ -77,6 +83,50 @@ public final class BattlePlacementMath {
                 opposite.rotated(-QUARTER_TURN),
                 new Direction(-bisector.z(), bisector.x()),
                 new Direction(bisector.z(), -bisector.x()));
+    }
+
+    /** One spot the automatic camera may take: which way from the arena centre, how far out, and how high. */
+    public record CameraSpot(Direction direction, double distance, double height) {
+    }
+
+    /**
+     * Every spot the automatic camera tries, in order, for a perpendicular bisector ({@code bisectorX},
+     * {@code bisectorZ}). First both sides of the bisector at the usual {@code distances}, as before: one side's
+     * distances and lens {@code heights}, then the other's. Then the bisector again, closer in, at
+     * {@code closeDistances}: every height on both sides before stepping closer. Only after those the diagonals and
+     * the two sides at the usual distances, in the order of {@link #cameraDirections}.
+     *
+     * <p>The closer bisector spots are for a cramped room. A blocked bisector used to lead straight to a diagonal at
+     * the usual distance, and in a closed 7 by 7 room that stood the lens 1.8 to 2.7 blocks from the player: the player
+     * filled a third of the picture at its edge, under their own lane panel, with the other fighter small at the back.
+     * On the bisector both fighters are the same size and the same distance away. An open stage has room at the first
+     * spot, the same one as before, so its shot does not change.</p>
+     */
+    public static List<CameraSpot> automaticCameraSpots(double bisectorX, double bisectorZ, double[] distances,
+                                                        double[] closeDistances, double[] heights) {
+        List<Direction> directions = cameraDirections(bisectorX, bisectorZ);
+        List<CameraSpot> spots = new ArrayList<>();
+        for (int index = 0; index < 2; index++) {
+            addSpots(spots, directions.get(index), distances, heights);
+        }
+        for (double distance : closeDistances) {
+            for (double height : heights) {
+                spots.add(new CameraSpot(directions.get(0), distance, height));
+                spots.add(new CameraSpot(directions.get(1), distance, height));
+            }
+        }
+        for (int index = 2; index < directions.size(); index++) {
+            addSpots(spots, directions.get(index), distances, heights);
+        }
+        return spots;
+    }
+
+    private static void addSpots(List<CameraSpot> spots, Direction direction, double[] distances, double[] heights) {
+        for (double distance : distances) {
+            for (double height : heights) {
+                spots.add(new CameraSpot(direction, distance, height));
+            }
+        }
     }
 
     /** A horizontal offset from the arena centre, in blocks; unlike {@link Direction} it has a length. */

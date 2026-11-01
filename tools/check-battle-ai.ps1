@@ -9,10 +9,9 @@ $jars = foreach ($group in $groups) {
 }
 $compiled = Join-Path $projectRoot 'build/classes/java/main'
 $cp = (@($outputDir, $compiled, "$projectRoot/build/moddev/artifacts/neoforge-21.1.230-merged.jar") + @($jars)) -join [IO.Path]::PathSeparator
-$jdk = 'C:/Program Files/Eclipse Adoptium/jdk-21.0.11.10-hotspot/bin'
+$jdk = & (Join-Path $PSScriptRoot 'find-jdk.ps1')
 & "$jdk/javac.exe" -proc:none -encoding UTF-8 -cp $cp -d $outputDir "$projectRoot/tools/BattleAiChecks.java"
 if ($LASTEXITCODE) { throw 'Battle AI test compilation failed' }
+# Isolates the battle classes and then runs the checks against them in the same JVM (see BattleAiChecks#main).
 & "$jdk/java.exe" -cp $cp BattleAiChecks $compiled $outputDir
-if ($LASTEXITCODE) { throw 'Battle AI world isolation failed' }
-& "$jdk/java.exe" -cp $cp BattleAiChecks
 if ($LASTEXITCODE) { throw 'Battle AI regression failed' }

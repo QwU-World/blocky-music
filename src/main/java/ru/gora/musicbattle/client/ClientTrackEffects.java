@@ -62,6 +62,19 @@ public final class ClientTrackEffects {
 
     public static EffectState sample(List<TrackEffect> effects, float trackTick, int bpm, float playbackSpeed,
                                      float visibilityMultiplier) {
+        return sample(effects, trackTick, bpm, playbackSpeed, visibilityMultiplier, 0.0F);
+    }
+
+    /**
+     * {@code beatOriginTicks} is where beat 1 falls on {@code trackTick}'s clock ({@code ChartBeat.originTicks} of the
+     * chart's offset, already divided by a sped-up battle's speed). Every effect that moves on the beat counts its beats
+     * from there: the pulse, a beat-reactive effect's swell, a flash that follows the beat, the block outline's throb, the
+     * stars' surge and the highlight's pulse and alternation. 0 is a chart without an offset and gives exactly the values
+     * this gave before the offset existed.
+     */
+    public static EffectState sample(List<TrackEffect> effects, float trackTick, int bpm, float playbackSpeed,
+                                     float visibilityMultiplier, float beatOriginTicks) {
+        float origin = Float.isFinite(beatOriginTicks) ? beatOriginTicks : 0.0F;
         float effectSpeed = Mth.clamp(playbackSpeed, 1.0F, 2.0F);
         float globalVisibility = Mth.clamp(visibilityMultiplier, 0.0F, 1.0F);
         float flash = 0.0F;
@@ -89,7 +102,7 @@ public final class ClientTrackEffects {
                 float value = amount * effect.intensity() * effect.opacity();
                 if (value >= pulse) pulseEffect = effect;
                 pulse = Math.min(5.0F, Math.max(pulse, value));
-                pulseBeat = Math.max(pulseBeat, value * beatEnvelope(effect, trackTick, bpm, effectSpeed));
+                pulseBeat = Math.max(pulseBeat, value * beatEnvelope(effect, trackTick, bpm, effectSpeed, origin));
             }
             for (TrackEffect effect : effects) {
                 if (effect.type() == TrackEffect.Type.HIDE_BATTLE_PANELS) {
@@ -118,7 +131,7 @@ public final class ClientTrackEffects {
                 }
                 switch (effect.type()) {
                     case FLASH -> {
-                        float candidate = value * effect.opacity() * flashModulation(effect, trackTick, bpm, effectSpeed);
+                        float candidate = value * effect.opacity() * flashModulation(effect, trackTick, bpm, effectSpeed, origin);
                         if (candidate >= flash) flashEffect = effect;
                         flash = Math.max(flash, candidate);
                     }
@@ -159,7 +172,7 @@ public final class ClientTrackEffects {
         return new EffectState(flash, oldTv, shake, pulse, pulseBeat, vignette, trackTick,
                 pulseEffect, visualizerEffect, textEffect, fireEffect, highlightEffect, objectOutlineEffect,
                 hideBattlePanels, flashEffect, oldTvEffect, vignetteEffect, List.copyOf(overlayEffects), bpm, effectSpeed,
-                globalVisibility, List.of());
+                globalVisibility, List.of(), origin);
     }
 
     private static int globalRow(TrackEffect effect) {
@@ -178,20 +191,21 @@ public final class ClientTrackEffects {
                 ? candidate : current;
     }
 
-    private static float beatEnvelope(TrackEffect effect, float trackTick, int bpm, float playbackSpeed) {
-        float phase = beatPhase(trackTick, bpm, playbackSpeed);
+    private static float beatEnvelope(TrackEffect effect, float trackTick, int bpm, float playbackSpeed, float origin) {
+        float phase = beatPhase(trackTick, bpm, playbackSpeed, origin);
         return Mth.clamp(1.0F - phase * 4.0F, 0.0F, 1.0F);
     }
 
-    private static float objectOutlineBeat(TrackEffect effect, float trackTick, int bpm, float playbackSpeed) {
-        float phase = beatPhase(trackTick, bpm, playbackSpeed);
+    private static float objectOutlineBeat(TrackEffect effect, float trackTick, int bpm, float playbackSpeed, float origin) {
+        float phase = beatPhase(trackTick, bpm, playbackSpeed, origin);
         float envelope = Mth.clamp(1.0F - phase * 3.2F, 0.0F, 1.0F);
         return smooth(envelope);
     }
 
     private static float objectOutlineAmount(TrackEffect effect, EffectState state, float baseAmount) {
         float rhythm = effect.beatReactive()
-                ? 0.18F + 0.82F * objectOutlineBeat(effect, state.trackTick(), state.bpm(), state.playbackSpeed())
+                ? 0.18F + 0.82F * objectOutlineBeat(effect, state.trackTick(), state.bpm(), state.playbackSpeed(),
+                        state.beatOriginTicks())
                 : 1.0F;
         return Mth.clamp(baseAmount * effect.opacity() * rhythm
                 * Mth.clamp(effect.intensity(), 0.1F, 1.5F), 0.0F, 1.0F);
@@ -219,7 +233,7 @@ public final class ClientTrackEffects {
         return lerpColor(colors.get(firstIndex), colors.get(secondIndex), smooth(fractional(palettePosition)));
     }
 
-    private static float flashPulse(TrackEffect effect, float trackTick, int bpm, float playbackSpeed) {
+    private static float flashPulse(TrackEffect effect, float trackTick, int bpm, float playbackSpeed, float origin) {
         float softness = Mth.clamp(effect.softness(), 0.0F, 1.0F);
         float elapsed = Math.max(0.0F, trackTick - effect.tick());
         if (effect.durationTicks() <= 0) {
@@ -230,7 +244,7 @@ public final class ClientTrackEffects {
             float fall = Mth.clamp((1.0F - progress) / Math.max(0.05F, 1.0F - attack), 0.0F, 1.0F);
             return smooth(rise) * smooth(fall) * (1.0F - softness * 0.22F);
         }
-        float phase = beatPhase(trackTick, bpm, playbackSpeed);
+        float phase = beatPhase(trackTick, bpm, playbackSpeed, origin);
         float attack = 0.01F + softness * 0.10F;
         float releaseEnd = 0.20F + softness * 0.34F;
         float rise = Mth.clamp(phase / attack, 0.0F, 1.0F);
@@ -238,8 +252,8 @@ public final class ClientTrackEffects {
         return smooth(rise) * smooth(fall) * (1.0F - softness * 0.22F);
     }
 
-    private static float flashModulation(TrackEffect effect, float trackTick, int bpm, float playbackSpeed) {
-        return effect.flashFollowsBeat() ? flashPulse(effect, trackTick, bpm, playbackSpeed) : 1.0F;
+    private static float flashModulation(TrackEffect effect, float trackTick, int bpm, float playbackSpeed, float origin) {
+        return effect.flashFollowsBeat() ? flashPulse(effect, trackTick, bpm, playbackSpeed, origin) : 1.0F;
     }
 
     /**
@@ -260,18 +274,36 @@ public final class ClientTrackEffects {
     }
 
     /**
+     * The phase counted from beat 1 at {@code originTicks}. Before beat 1 (a song's lead-in) the beats run on backwards
+     * from it, as the editor's grid does, so the first beat of the song lands exactly on beat 1. An origin of 0 is the
+     * phase above, unchanged.
+     */
+    public static float beatPhase(float trackTick, int roundedEffectiveBpm, float playbackSpeed, float originTicks) {
+        if (originTicks == 0.0F) {
+            return beatPhase(trackTick, roundedEffectiveBpm, playbackSpeed);
+        }
+        float beatTicks = beatDurationTicks(roundedEffectiveBpm, playbackSpeed);
+        float within = (trackTick - originTicks) % beatTicks;
+        if (within < 0.0F) {
+            within += beatTicks;
+        }
+        return within >= beatTicks ? 0.0F : within / beatTicks;
+    }
+
+    /**
      * Extra travel, in ticks, that the beat has added by this moment.
      *
      * Each beat contributes a fixed amount of additional drift, nearly all of it immediately after the beat lands
      * and easing to nothing before the next. The total only ever grows, so nothing jumps backwards, and because it
      * is measured in beats rather than seconds a slow track surges as clearly as a fast one.
      */
-    private static float beatSurgeTicks(float trackTick, int bpm, float playbackSpeed) {
+    private static float beatSurgeTicks(float trackTick, int bpm, float playbackSpeed, float origin) {
         float beatTicks = beatDurationTicks(bpm, playbackSpeed);
         if (beatTicks <= 0.001F) {
             return 0.0F;
         }
-        float beats = Math.max(0.0F, trackTick) / beatTicks;
+        // From beat 1; in a lead-in the beats before it surge too (floor keeps the total rising through 0).
+        float beats = (origin == 0.0F ? Math.max(0.0F, trackTick) : trackTick - origin) / beatTicks;
         float whole = Mth.floor(beats);
         float within = beats - whole;
         float eased = 1.0F - (float) Math.exp(-6.0F * within);
@@ -391,6 +423,7 @@ public final class ClientTrackEffects {
         boolean preservingText = false;
         boolean preservingPlayers = false;
         boolean preservingEntities = false;
+        boolean preservingPanels = false;
         boolean protectionConfigured = false;
         List<ClientFxShaderEngine.ScreenWarp> precedingWarps = new ArrayList<>();
         try {
@@ -409,15 +442,21 @@ public final class ClientTrackEffects {
                         && ClientModelGlowEngine.hasPlayerFxMask();
                 boolean shouldPreserveEntities = (blockOnlyOutline || !effect.settings().overlayEntities())
                         && ClientModelGlowEngine.hasEntityFxMask();
+                // A spectator's panels above the fighters are their gameplay panels: like the HUD panels, they stay
+                // above an effect that does not cover the interface.
+                boolean shouldPreservePanels = !effect.settings().overlayInterface()
+                        && ClientModelGlowEngine.hasPanelFxMask();
                 if (!protectionConfigured || shouldPreserve != preservingOutline || shouldPreserveText != preservingText
-                        || shouldPreservePlayers != preservingPlayers || shouldPreserveEntities != preservingEntities) {
+                        || shouldPreservePlayers != preservingPlayers || shouldPreserveEntities != preservingEntities
+                        || shouldPreservePanels != preservingPanels) {
                     graphics.flush();
                     ClientModelGlowEngine.setFxProtection(shouldPreserve, shouldPreserveText,
-                            shouldPreservePlayers, shouldPreserveEntities);
+                            shouldPreservePlayers, shouldPreserveEntities, shouldPreservePanels);
                     preservingOutline = shouldPreserve;
                     preservingText = shouldPreserveText;
                     preservingPlayers = shouldPreservePlayers;
                     preservingEntities = shouldPreserveEntities;
+                    preservingPanels = shouldPreservePanels;
                     protectionConfigured = true;
                 }
                 renderOverlayEffect(graphics, sourceState, effect, precedingWarps);
@@ -427,9 +466,9 @@ public final class ClientTrackEffects {
             }
             }
         } finally {
-            if (preservingOutline || preservingText || preservingPlayers || preservingEntities) {
+            if (preservingOutline || preservingText || preservingPlayers || preservingEntities || preservingPanels) {
                 graphics.flush();
-                ClientModelGlowEngine.setFxProtection(false, false, false, false);
+                ClientModelGlowEngine.setFxProtection(false, false, false, false, false);
             }
             graphics.flush();
             fullscreenState.restore();
@@ -499,7 +538,8 @@ public final class ClientTrackEffects {
         try {
             switch (effect.type()) {
                 case PULSE -> addWarp(precedingWarps,
-                        renderPulse(graphics, effect, baseAmount, state.trackTick(), state.bpm(), state.playbackSpeed()));
+                        renderPulse(graphics, effect, baseAmount, state.trackTick(), state.bpm(), state.playbackSpeed(),
+                                state.beatOriginTicks()));
                 case OLD_TV -> renderOldTv(graphics, effect, value * effect.opacity(),
                         animationTick(effect, state.trackTick(), state.playbackSpeed()), state.pulseBeat());
                 case FISH_EYE -> addWarp(precedingWarps,
@@ -508,11 +548,12 @@ public final class ClientTrackEffects {
                         state.trackTick(), state.playbackSpeed());
                 case VIGNETTE -> renderVignette(graphics, effect, value, state.pulseBeat());
                 case FLASH -> renderFlash(graphics, effect,
-                        value * effect.opacity() * flashModulation(effect, state.trackTick(), state.bpm(), state.playbackSpeed()), state.pulseBeat());
+                        value * effect.opacity() * flashModulation(effect, state.trackTick(), state.bpm(), state.playbackSpeed(),
+                                state.beatOriginTicks()), state.pulseBeat());
                 case VISUALIZER -> renderVisualizer(graphics, effect, baseAmount, state.trackTick(), state.pulseBeat());
                 case PIXEL_FIRE -> renderPixelFire(graphics, effect, baseAmount, state.trackTick(), state.pulseBeat(), state.playbackSpeed());
                 case STARS -> renderStars(graphics, effect, baseAmount, state.trackTick(), state.pulseBeat(),
-                        state.playbackSpeed(), state.bpm());
+                        state.playbackSpeed(), state.bpm(), state.beatOriginTicks());
                 case TEXT -> renderText(graphics, effect, baseAmount, state.trackTick(), state.pulseBeat(), state.playbackSpeed());
                 case COLOR_CORRECTION -> renderColorCorrection(effect, value * effect.opacity());
                 case OBJECT_OUTLINE -> {
@@ -546,9 +587,9 @@ public final class ClientTrackEffects {
 
     private static ClientFxShaderEngine.ScreenWarp renderPulse(GuiGraphics graphics, TrackEffect effect,
                                                                 float baseAmount, float trackTick,
-                                                                int bpm, float playbackSpeed) {
+                                                                int bpm, float playbackSpeed, float origin) {
         float pulse = baseAmount * effect.intensity() * effect.opacity()
-                * beatEnvelope(effect, trackTick, bpm, playbackSpeed);
+                * beatEnvelope(effect, trackTick, bpm, playbackSpeed, origin);
         if (pulse <= 0.001F) return null;
         // Pulse captures the current framebuffer directly. Do not let batched GUI geometry
         // arrive only after that capture (the preview screen already happened to flush here,
@@ -822,7 +863,7 @@ public final class ClientTrackEffects {
     }
 
     private static void renderStars(GuiGraphics graphics, TrackEffect effect, float baseAmount, float trackTick,
-                                    float pulseBeat, float playbackSpeed, int bpm) {
+                                    float pulseBeat, float playbackSpeed, int bpm, float origin) {
         var settings = effect.settings();
         float strength = Mth.clamp(baseAmount * effect.intensity() * settings.starBrightness(), 0.0F, 3.0F);
         if (strength <= 0.001F) return;
@@ -835,7 +876,7 @@ public final class ClientTrackEffects {
         // Marked beat-reactive, the field keeps its steady drift and surges on every beat: a kick that is spent
         // within the first third of the beat and has settled by the next one, so the field reads as moving to the
         // music at any tempo rather than simply faster.
-        float travel = effect.beatReactive() ? time + beatSurgeTicks(time, bpm, playbackSpeed) : time;
+        float travel = effect.beatReactive() ? time + beatSurgeTicks(time, bpm, playbackSpeed, origin) : time;
         float drift = travel * settings.starDriftSpeed() * 0.0025F;
         float spread = settings.starSpread();
         float driftXScale;
@@ -1081,7 +1122,7 @@ public final class ClientTrackEffects {
                               TrackEffect flashEffect, TrackEffect oldTvEffect,
                               TrackEffect vignetteEffect,
                               List<TrackEffect> overlayEffects, int bpm, float playbackSpeed,
-                              float visibilityMultiplier, List<EffectState> preceding) {
+                              float visibilityMultiplier, List<EffectState> preceding, float beatOriginTicks) {
         public boolean hidesParticles() {
             return overlayEffects.stream().anyMatch(e -> e.type() == TrackEffect.Type.HIDE_PARTICLES_HAND
                     && e.settings().hideParticles()) || preceding.stream().anyMatch(EffectState::hidesParticles);
@@ -1101,7 +1142,8 @@ public final class ClientTrackEffects {
         public EffectState withPreceding(List<EffectState> states) {
             return new EffectState(flash,oldTv,shake,pulse,pulseBeat,vignette,trackTick,pulseEffect,
                     visualizerEffect,textEffect,fireEffect,highlightEffect,objectOutlineEffect,hideBattlePanels,
-                    flashEffect,oldTvEffect,vignetteEffect,overlayEffects,bpm,playbackSpeed,visibilityMultiplier,List.copyOf(states));
+                    flashEffect,oldTvEffect,vignetteEffect,overlayEffects,bpm,playbackSpeed,visibilityMultiplier,List.copyOf(states),
+                    beatOriginTicks);
         }
         public List<EffectState> states() {
             if(preceding.isEmpty())return List.of(this);

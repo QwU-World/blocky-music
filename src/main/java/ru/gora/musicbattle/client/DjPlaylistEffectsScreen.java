@@ -2,6 +2,13 @@ package ru.gora.musicbattle.client;
 
 import java.util.*;
 import ru.gora.musicbattle.client.ui.Palette;
+import ru.gora.musicbattle.client.ui.RoundedRect;
+import ru.gora.musicbattle.client.ui.TextStyle;
+import ru.gora.musicbattle.client.ui.TextStyles;
+import ru.gora.musicbattle.client.workshop.WorkshopDraw;
+import ru.gora.musicbattle.client.workshop.layout.Metrics;
+import ru.gora.musicbattle.client.workshop.layout.Rect;
+import ru.gora.musicbattle.client.workshop.layout.TextFit;
 import java.nio.file.Path;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.screens.Screen;
@@ -11,8 +18,27 @@ import net.neoforged.neoforge.network.PacketDistributor;
 import ru.gora.musicbattle.data.*;
 import ru.gora.musicbattle.network.EditDjPlaylistEffectPayload;
 
-/** Edits the current queue entry, preserving chart timing and every FX parameter. */
+/**
+ * Edits the current queue entry, preserving chart timing and every FX parameter.
+ *
+ * <p>Drawn as the toolkit's card over a light wash, like the playlist it is opened from: rounded rows with a rail, the
+ * Nunito faces, and a beatmap effect's start on the right of its row in the playlist's clock. It was a teal slab with
+ * the bitmap font and an "@ 1.25 s" whose unit no language file could translate.
+ */
 final class DjPlaylistEffectsScreen extends Screen implements DjPanelOwnedScreen {
+    /**
+     * The light wash DjVisualFxScreen lays over the broadcast camera and, without one, over the world around the DJ:
+     * the controls stay readable and the picture the effects are judged against stays in sight. Without a camera this
+     * screen used to fill the window opaque, which hid the world for nothing: the running effect stack is silent while
+     * it is open (ClientBattleController.authoringDjFx), so there is no second set of effects to hide.
+     */
+    private static final int WASH = Palette.withAlpha(Palette.BG_0, 0.28F);
+    /** The card keeps the translucency the old panel had, so what is behind it still reads faintly through. */
+    private static final int CARD = Palette.withAlpha(Palette.BG_1, 0.82F);
+    private static final int ROW_STEP = 24;
+    private static final int ROW_HEIGHT = 22;
+    private static final int LIST_TOP = 48;
+    private static final int LIST_LEFT = 16;
     private final DjPanelScreen owner;
     private final UUID entryId;
     private final List<TrackEffect> effects=new ArrayList<>();
@@ -37,21 +63,83 @@ final class DjPlaylistEffectsScreen extends Screen implements DjPanelOwnedScreen
         }
     }
     public void renderBackground(GuiGraphics g,int x,int y,float p){}
-    public void render(GuiGraphics g,int mx,int my,float partial) {
-        if(!owner.renderActiveCameraPreview(g,0,0,width,height,partial))g.fill(0,0,width,height,0xFF080C12);
-        g.fill(8,6,width-8,height-6,0xD012232D);
-        g.drawCenteredString(font,title,width/2,14,0xFFFFFFFF);
-        g.drawCenteredString(font,Component.translatable("screen.music_battle.dj_playlist.fx_"+mode.name().toLowerCase(Locale.ROOT)),width/2,29,0xFF72DFF5);
-        int rows=Math.max(1,(height-86)/24);scroll=Mth.clamp(scroll,0,Math.max(0,effects.size()-rows));
-        for(int r=0;r<rows&&scroll+r<effects.size();r++) {
-            int i=scroll+r,y=48+r*24;TrackEffect fx=effects.get(i);
-            g.fill(16,y,width-16,y+22,mx>=16&&mx<width-16&&my>=y&&my<y+22?0xFF24566A:0xCC162832);
-            String line=(i+1)+". "+Component.translatable("effect.music_battle."+fx.type().id()).getString();
-            if(mode==DjPlaylistEntry.FxMode.TRACK)line+="  @ "+String.format(Locale.ROOT,"%.2f s",fx.tick()/20f);
-            g.drawString(font,font.plainSubstrByWidth(line,width-48),24,y+7,0xFFFFFFFF,false);
+
+    @Override
+    public void render(GuiGraphics g, int mx, int my, float partial) {
+        // The camera when there is one, the world when there is not; the same wash over either (see WASH).
+        owner.renderActiveCameraPreview(g, 0, 0, width, height, partial);
+        g.fill(0, 0, width, height, WASH);
+        RoundedRect.fill(g, 8, 6, width - 16, height - 12, Palette.RADIUS_MD, CARD);
+        RoundedRect.stroke(g, 8, 6, width - 16, height - 12, Palette.RADIUS_MD, 1.0F,
+                Palette.withAlpha(Palette.LINE, 0.6F));
+        float textRoom = width - 48.0F;
+        TextStyles.queueCentered(g, TextStyles.ellipsize(TextStyles.styled(title, TextStyle.TITLE), textRoom),
+                width / 2.0F, 14, Palette.TEXT_1);
+        Component source = Component.translatable("screen.music_battle.dj_playlist.fx_" + mode.name().toLowerCase(Locale.ROOT));
+        TextStyles.queueCentered(g, TextStyles.ellipsize(TextStyles.styled(source, TextStyle.LABEL), textRoom),
+                width / 2.0F, 30, Palette.ACCENT);
+        drawRows(g, mx, my);
+        super.render(g, mx, my, partial);
+    }
+
+    /** The entry's effects as the playlist draws its queue: rounded rows with a rail, the start on the right. */
+    private void drawRows(GuiGraphics g, int mx, int my) {
+        int rows = visibleRows();
+        scroll = Mth.clamp(scroll, 0, Math.max(0, effects.size() - rows));
+        int right = width - LIST_LEFT;
+        boolean scrolls = effects.size() > rows;
+        // A list that scrolls keeps its rows clear of the scrollbar on the right.
+        int rowRight = scrolls ? right - 6 : right;
+        for (int r = 0; r < rows && scroll + r < effects.size(); r++) {
+            int i = scroll + r;
+            int y = LIST_TOP + r * ROW_STEP;
+            TrackEffect fx = effects.get(i);
+            boolean hovered = mx >= LIST_LEFT && mx < right && my >= y && my < y + ROW_HEIGHT;
+            RoundedRect.fill(g, LIST_LEFT, y, rowRight - LIST_LEFT, ROW_HEIGHT, Palette.RADIUS_SM,
+                    hovered ? Palette.BG_3 : Palette.BG_2);
+            RoundedRect.pill(g, LIST_LEFT + 1.5F, y + 4, 2.5F, ROW_HEIGHT - 8,
+                    hovered ? Palette.mix(Palette.LINE, Palette.ACCENT, 0.6F) : Palette.LINE);
+            // Only a beatmap's own effects sit at a moment of the song; a DJ's run for as long as the entry plays.
+            String start = mode == DjPlaylistEntry.FxMode.TRACK ? formatTicks(fx.tick()) : "";
+            float startWidth = TextFit.width(TextStyles.measurer(), start, TextStyle.CAPTION);
+            if (!start.isEmpty()) {
+                TextStyles.queueRight(g, TextStyles.text(start, TextStyle.CAPTION).getVisualOrderText(), rowRight - 8,
+                        TextStyles.centeredCapY(TextStyle.CAPTION, y, ROW_HEIGHT), Palette.TEXT_MUTE);
+            }
+            String name = (i + 1) + ".  " + Component.translatable("effect.music_battle." + fx.type().id()).getString();
+            float nameX = LIST_LEFT + 10;
+            float nameRoom = rowRight - 8 - (start.isEmpty() ? 0 : startWidth + Metrics.GAP + 4) - nameX;
+            String fitted = TextFit.ellipsize(TextStyles.measurer(), name, TextStyle.BODY, nameRoom);
+            if (!fitted.isEmpty()) {
+                TextStyles.queue(g, TextStyles.text(fitted, TextStyle.BODY).getVisualOrderText(), nameX,
+                        TextStyles.centeredCapY(TextStyle.BODY, y, ROW_HEIGHT), Palette.TEXT_1);
+            }
         }
-        if(effects.isEmpty())g.drawCenteredString(font,Component.translatable("screen.music_battle.dj_playlist.no_entry_fx"),width/2,64,Palette.TEXT_2);
-        super.render(g,mx,my,partial);
+        if (scrolls) {
+            WorkshopDraw.scrollbar(g, new Rect(LIST_LEFT, LIST_TOP, right - LIST_LEFT, rows * ROW_STEP - 2),
+                    scroll * ROW_STEP, effects.size() * ROW_STEP, false);
+        }
+        if (effects.isEmpty()) {
+            float y = LIST_TOP + 16;
+            for (String line : TextFit.wrap(TextStyles.measurer(),
+                    Component.translatable("screen.music_battle.dj_playlist.no_entry_fx").getString(), TextStyle.BODY,
+                    width - 48.0F, 2)) {
+                TextStyles.queueCentered(g, TextStyles.text(line, TextStyle.BODY).getVisualOrderText(), width / 2.0F, y,
+                        Palette.TEXT_2);
+                y += Metrics.lineHeight(TextStyle.BODY);
+            }
+        }
+    }
+
+    private int visibleRows() {
+        return Math.max(1, (height - 86) / ROW_STEP);
+    }
+
+    /** The playlist's clock (DjPlaylistScreen's cue), so a start reads the same on both screens and in any language. */
+    private static String formatTicks(int ticks) {
+        int seconds = Math.max(0, ticks) / 20;
+        return String.format(Locale.ROOT, "%02d:%02d.%02d", seconds / 60, seconds % 60,
+                Math.round((Math.max(0, ticks) % 20) * 5.0F));
     }
     public boolean mouseClicked(double x,double y,int button) {
         int rows=Math.max(1,(height-86)/24);

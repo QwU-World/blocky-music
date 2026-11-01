@@ -8,6 +8,9 @@ import java.util.Arrays;
 import ru.gora.musicbattle.client.GlowMeshExpansion;
 import ru.gora.musicbattle.client.SmileyBallModel;
 import java.lang.reflect.Constructor;
+import java.util.LinkedHashMap;
+import net.minecraft.client.renderer.MultiBufferSource;
+import net.minecraft.client.renderer.RenderType;
 
 /** CPU/allocation contract, actual animated-model vertices; no game or GPU workload. */
 public final class GlowMeshPerformanceChecks {
@@ -30,6 +33,8 @@ public final class GlowMeshPerformanceChecks {
             batchConstructor=batch.getDeclaredConstructor(MeshData.class);batchConstructor.setAccessible(true);
             batchMesh=batch.getDeclaredMethod("mesh",float.class,int.class);batchMesh.setAccessible(true);
         }catch(ClassNotFoundException ignored){}
+        checkWrappedFlush();
+        checkIrisMasks();
         ALLOC.setThreadAllocatedMemoryEnabled(true);
         try(ByteBufferBuilder storage=new ByteBufferBuilder(256*1024)) {
             if(batchConstructor!=null)checkBatch(storage);
@@ -46,6 +51,26 @@ public final class GlowMeshPerformanceChecks {
                 if(batchConstructor==null)throw new AssertionError("Production renderer still captures/welds separately for each shell pass");
             }
         }
+    }
+    /**
+     * Fish-eye and pulse take the highlighted-model mask under a shader pack as the block outline does. They used
+     * to skip it whenever Iris had a pack on, so the warp bent highlighted players and mobs there and nowhere else. Every
+     * full-screen pass that reads ModelMaskSampler builds its mask the same way, with no Iris condition; the in-game proof
+     * under Iris is the hidden run, not this.
+     */
+    private static void checkIrisMasks() throws Exception {
+        String source = java.nio.file.Files.readString(java.nio.file.Path.of(
+                "src/main/java/ru/gora/musicbattle/client/ClientFxShaderEngine.java")).replaceAll("(?s)/\\*.*?\\*/|//[^\\n]*", "");
+        int uses = source.split("setSampler\\(\"ModelMaskSampler\"", -1).length - 1;
+        int built = source.split("int modelMaskTexture = buildModelMask\\(main\\);", -1).length - 1;
+        if (uses != 2 || built != 2) {
+            throw new AssertionError("fish-eye and pulse must build the model mask unconditionally, as the outline does: "
+                    + uses + " passes sample it, " + built + " build it without a condition");
+        }
+        if (source.contains("isIrisShaderPackInUse() ? 0 : buildModelMask")) {
+            throw new AssertionError("a full-screen pass still drops the highlight mask under a shader pack");
+        }
+        System.out.println("Iris highlight mask PASS: fish-eye and pulse build the mask under a shader pack too");
     }
     private static void render(ByteBufferBuilder storage)throws Exception {
         if(batchConstructor!=null)try(MeshData capture=capture(storage);
@@ -100,4 +125,106 @@ public final class GlowMeshPerformanceChecks {
         System.out.println("Production ShellBatch PASS: independent radii, per-pass alpha, original mesh/attributes/lifetime preserved");
     }
     private static byte[] bytes(ByteBuffer b){byte[] out=new byte[b.remaining()];b.duplicate().get(out);return out;}
+
+    /**
+     * While a shader pack is on, Iris hands each entity renderer a BufferSourceWrapper: a plain MultiBufferSource
+     * that cannot be flushed. The glow engine flushed nothing then, so a player's or mob's body was drawn after its
+     * stencil bit was switched off again, and the block outline traced every entity. The engine must flush the
+     * source the wrapper hands back from getOriginal(), and must survive a wrapper that loops, fails or returns
+     * nothing. Iris itself is not on this classpath: the wrappers below have the shape of its class.
+     */
+    private static void checkWrappedFlush() throws Exception {
+        Method flush = Class.forName("ru.gora.musicbattle.client.ClientModelGlowEngine")
+                .getDeclaredMethod("flushBuffers", MultiBufferSource.class);
+        flush.setAccessible(true);
+        try (ByteBufferBuilder shared = new ByteBufferBuilder(256)) {
+            CountingSource source = new CountingSource(shared);
+            flush.invoke(null, source);
+            if (source.flushes != 1) throw new AssertionError("A plain buffer source must be flushed once: " + source.flushes);
+            flush.invoke(null, new Wrapper(source));
+            if (source.flushes != 2) throw new AssertionError("An Iris-style wrapper must flush the source it wraps: " + source.flushes);
+            flush.invoke(null, new Wrapper(new Wrapper(source)));
+            if (source.flushes != 3) throw new AssertionError("A wrapper of a wrapper must still reach the source: " + source.flushes);
+            for (MultiBufferSource odd : new MultiBufferSource[]{new SelfWrapper(), new Wrapper(null), new ThrowingWrapper(),
+                    new OddWrapper(source), type -> null}) {
+                flush.invoke(null, odd);
+            }
+            if (source.flushes != 3) throw new AssertionError("Only real wrappers may flush a source: " + source.flushes);
+        }
+        System.out.println("Glow buffer flush PASS: plain sources, Iris-style wrappers and broken wrappers");
+    }
+
+    /** Counts flushes instead of drawing. */
+    private static final class CountingSource extends MultiBufferSource.BufferSource {
+        private int flushes;
+
+        private CountingSource(ByteBufferBuilder shared) {
+            super(shared, new LinkedHashMap<>());
+        }
+
+        @Override
+        public void endBatch() {
+            flushes++;
+        }
+    }
+
+    /** The shape of Iris's BufferSourceWrapper. Public, as the engine looks the method up by name. */
+    public static final class Wrapper implements MultiBufferSource {
+        private final MultiBufferSource original;
+
+        Wrapper(MultiBufferSource original) {
+            this.original = original;
+        }
+
+        public MultiBufferSource getOriginal() {
+            return original;
+        }
+
+        @Override
+        public VertexConsumer getBuffer(RenderType type) {
+            throw new AssertionError("nothing is drawn here");
+        }
+    }
+
+    /** A wrapper that hands back itself: the engine must not loop forever. */
+    public static final class SelfWrapper implements MultiBufferSource {
+        public MultiBufferSource getOriginal() {
+            return this;
+        }
+
+        @Override
+        public VertexConsumer getBuffer(RenderType type) {
+            throw new AssertionError("nothing is drawn here");
+        }
+    }
+
+    /** A wrapper whose getOriginal() fails: a broken wrapper must not take the entity render down. */
+    public static final class ThrowingWrapper implements MultiBufferSource {
+        public MultiBufferSource getOriginal() {
+            throw new IllegalStateException("broken wrapper");
+        }
+
+        @Override
+        public VertexConsumer getBuffer(RenderType type) {
+            throw new AssertionError("nothing is drawn here");
+        }
+    }
+
+    /** A getOriginal() that is not a buffer source at all is not a wrapper. */
+    public static final class OddWrapper implements MultiBufferSource {
+        private final Object original;
+
+        OddWrapper(Object original) {
+            this.original = original;
+        }
+
+        public Object getOriginal() {
+            return original;
+        }
+
+        @Override
+        public VertexConsumer getBuffer(RenderType type) {
+            throw new AssertionError("nothing is drawn here");
+        }
+    }
 }

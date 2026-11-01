@@ -22,12 +22,20 @@ public final class BattleCameraBlockEntity extends BlockEntity {
     public static final float DEFAULT_FOV = 70.0F;
     public static final float DEFAULT_PITCH = 0.0F;
     private static final String OPTICAL_POSITION_TAG = "CameraPositionIsOptical";
+    /** Saved only when on, so cameras placed before follow mode existed load exactly as they were: fixed. */
+    private static final String FOLLOW_PLAYERS_TAG = "CameraFollowsPlayers";
     private double offsetX;
     private double offsetY;
     private double offsetZ;
     private float yaw;
     private float pitch;
     private float fov = DEFAULT_FOV;
+    /**
+     * Follow mode: in a battle this camera keeps the spot and the angle it was given, but sways and turns towards
+     * whoever is playing the way the automatic battle shot does, instead of holding one fixed frame. DJ shots of the
+     * same camera stay fixed either way; only a battle moves it.
+     */
+    private boolean followPlayers;
     private long placementGameTime = Long.MIN_VALUE;
     /** Client only, never saved: when this client began drawing the placement clip, on its own clock. */
     private long clientAnimationStartNanos;
@@ -77,6 +85,17 @@ public final class BattleCameraBlockEntity extends BlockEntity {
         return fov;
     }
 
+    public boolean isFollowPlayers() {
+        return followPlayers;
+    }
+
+    public void setFollowPlayers(boolean followPlayers) {
+        if (this.followPlayers != followPlayers) {
+            this.followPlayers = followPlayers;
+            setChanged();
+        }
+    }
+
     public void markPlaced(long gameTime) {
         placementGameTime = gameTime;
         setChanged();
@@ -122,6 +141,9 @@ public final class BattleCameraBlockEntity extends BlockEntity {
         tag.putFloat("CameraPitch", pitch);
         tag.putFloat("CameraFov", fov);
         tag.putBoolean(OPTICAL_POSITION_TAG, true);
+        if (followPlayers) {
+            tag.putBoolean(FOLLOW_PLAYERS_TAG, true);
+        }
         if (placementGameTime != Long.MIN_VALUE) {
             tag.putLong("PlacementGameTime", placementGameTime);
         }
@@ -150,6 +172,7 @@ public final class BattleCameraBlockEntity extends BlockEntity {
         if (tag.contains("CameraFov")) {
             fov = Mth.clamp(tag.getFloat("CameraFov"), 30.0F, 110.0F);
         }
+        followPlayers = tag.getBoolean(FOLLOW_PLAYERS_TAG);
         placementGameTime = tag.contains("PlacementGameTime") ? tag.getLong("PlacementGameTime") : Long.MIN_VALUE;
     }
 

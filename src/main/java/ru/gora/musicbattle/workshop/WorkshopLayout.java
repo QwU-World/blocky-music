@@ -30,8 +30,8 @@ public final class WorkshopLayout {
     public static final String PACKAGE_EXTENSION = ".blockymap";
     /**
      * A one-line JSON file the QwU Workshop Helper drops in the inbox instead of a package:
-     * {@code {"v":1,"setId":42,"source":"helper","at":"<ISO-8601>"}} named {@code <setId>.blockymap-request}
-     * (spec 07 section 8, wave I1). The mod downloads the set itself, under its own network consent; the helper
+     * {@code {"v":1,"setId":42,"source":"helper","at":"<ISO-8601>"}} named {@code <setId>.blockymap-request}.
+     * The mod downloads the set itself, under its own network consent; the helper
      * never touches the network. See {@link ru.gora.musicbattle.workshop.api.WorkshopRequest}.
      */
     public static final String REQUEST_EXTENSION = ".blockymap-request";
@@ -60,13 +60,13 @@ public final class WorkshopLayout {
     /** Last installed-check answer per set, under {@code music_battle_tracks}. */
     public static final String STATE_FILE_NAME = ".workshop_state.json";
     /**
-     * Offline card data written by the downloader next to an installed set (spec 08 A5.5): the set detail as the
+     * Offline card data written by the downloader next to an installed set: the set detail as the
      * site returned it plus {@code fetchedAt}. Undeclared by the manifest, so installs and checks ignore it; a
      * replaced revision loses it and the downloader writes it again. The installed folder is never passed to
      * MusicBattleTracks.loadDirectory, so the {@code .json} name cannot turn into a bogus track.
      */
     public static final String CARD_SIDECAR_FILE_NAME = "workshop-card.json";
-    /** The site's 30-second preview clip saved next to an installed set (spec 08 A5.5). */
+    /** The site's 30-second preview clip saved next to an installed set. */
     public static final String PREVIEW_SIDECAR_FILE_NAME = "preview.ogg";
     public static final int MAX_CHART_KEY_LENGTH = 32;
 

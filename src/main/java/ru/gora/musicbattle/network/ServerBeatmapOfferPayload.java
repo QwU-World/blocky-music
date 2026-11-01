@@ -7,7 +7,7 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import ru.gora.musicbattle.MusicBattleMod;
 
 /**
- * "Add to server": the client offers a package it has installed (spec 06 section 9.1). Nothing is uploaded yet —
+ * "Add to server": the client offers a package it has installed. Nothing is uploaded yet —
  * the server answers {@code have}, {@code need} or {@code denied} in {@link ServerBeatmapOfferResultPayload}.
  */
 public record ServerBeatmapOfferPayload(UUID transferId, long setId, int revision, String contentSha256, long size)

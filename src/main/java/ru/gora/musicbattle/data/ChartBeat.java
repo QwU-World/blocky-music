@@ -23,7 +23,7 @@ public final class ChartBeat {
     public static final int MAX_OFFSET_MS = 12_000;
     public static final int MS_PER_TICK = 50;
     private static final long MS_PER_MINUTE = 60_000L;
-    private static final int BEATS_PER_BAR = 4;
+    public static final int BEATS_PER_BAR = 4;
 
     private ChartBeat() {
     }
@@ -76,6 +76,82 @@ public final class ChartBeat {
         double folded = timeMs - Math.floor(timeMs / barMs) * barMs;
         long rounded = Math.round(folded);
         return clampOffsetMs(rounded >= Math.round(barMs) ? 0 : rounded);
+    }
+
+    /**
+     * A beat-1 time the editor can store. Between 0 and {@link #MAX_OFFSET_MS} it is kept to the millisecond, so bar 1
+     * starts exactly where the player put it; a later time (a long intro) or one typed below 0 moves by whole bars to
+     * the nearest storable one, which draws the very same grid. {@link #offsetForBeatAt} folds into the first bar
+     * instead, which also keeps the grid but loses which bar is bar 1.
+     */
+    public static int storableOffsetMs(double timeMs, int bpm) {
+        if (!Double.isFinite(timeMs)) {
+            return 0;
+        }
+        long rounded = Math.round(timeMs);
+        if (rounded >= 0L && rounded <= MAX_OFFSET_MS) {
+            return (int) rounded;
+        }
+        double barMs = barMs(bpm);
+        double folded = timeMs > MAX_OFFSET_MS
+                ? timeMs - Math.ceil((timeMs - MAX_OFFSET_MS) / barMs) * barMs
+                : timeMs + Math.ceil(-timeMs / barMs) * barMs;
+        return clampOffsetMs(Math.round(folded));
+    }
+
+    /** One bar of four beats, in milliseconds; the grid repeats with this period. */
+    public static double barMs(int bpm) {
+        return BEATS_PER_BAR * MS_PER_MINUTE / (double) clampBpm(bpm);
+    }
+
+    /** The bar a cell lies in, counted from beat 1 as bar 1; the lead-in before beat 1 is bar 0 and below. */
+    public static long barOfCell(long cell, int cellsPerBeat) {
+        return Math.floorDiv(cell, (long) BEATS_PER_BAR * Math.max(1, cellsPerBeat)) + 1L;
+    }
+
+    /**
+     * The cell whose span holds an exact time: the last line at or before it. The editor draws a note as a box to the
+     * right of its line, so this is the box under the mouse, where {@link #nearestCell} is the line nearest to it.
+     */
+    public static long cellAtOrBefore(int offsetMs, int bpm, int cellsPerBeat, double exactTick) {
+        double cells = (exactTick - originTicks(offsetMs)) * clampBpm(bpm) * Math.max(1, cellsPerBeat) * MS_PER_TICK
+                / (double) MS_PER_MINUTE;
+        // A time computed from a line's own position can land a hair before it; that is still the line's box.
+        return (long) Math.floor(cells + 1e-9);
+    }
+
+    /**
+     * The line a tick stands on, on a grid of {@code cellsPerBeat} cells a beat (a power of two). Where the grid is
+     * finer than a tick - eighths above 150 BPM - two lines round to one tick, and the nearest line by time can be the
+     * odd one out, so a note on a beat would count as standing on the eighth after it. The coarsest line through the
+     * tick wins - a beat, then a half, a quarter - since that is the line it was most likely put on; a tick on no line
+     * gets the nearest one.
+     */
+    public static long lineOf(int offsetMs, int bpm, int cellsPerBeat, int tick) {
+        int perBeat = Math.max(1, cellsPerBeat);
+        for (int coarse = 1; coarse < perBeat; coarse *= 2) {
+            if (perBeat % coarse != 0) {
+                continue;
+            }
+            long cell = nearestCell(offsetMs, bpm, coarse, tick);
+            if (cellTick(offsetMs, bpm, coarse, cell) == tick) {
+                return cell * (perBeat / coarse);
+            }
+        }
+        return nearestCell(offsetMs, bpm, perBeat, tick);
+    }
+
+    /**
+     * The tick of the grid line {@code lines} lines after the one {@code tick} stands on, and always later than the
+     * tick: where two lines round to one tick, a hold must still be released after it is pressed.
+     */
+    public static int lineAfter(int offsetMs, int bpm, int cellsPerBeat, int tick, int lines) {
+        long cell = lineOf(offsetMs, bpm, cellsPerBeat, tick) + Math.max(1, lines);
+        int line = cellTick(offsetMs, bpm, cellsPerBeat, cell);
+        while (line <= tick) {
+            line = cellTick(offsetMs, bpm, cellsPerBeat, ++cell);
+        }
+        return line;
     }
 
     /** The whole tick nearest to cell {@code cell} of a grid with {@code cellsPerBeat} cells a beat (halves round up). */

@@ -22,7 +22,7 @@ public final class SpeakerModelChecks {
     private static int checks;
     public static void main(String[] args) throws Exception {
         Path assets = args.length > 1
-                ? FileSystems.newFileSystem(Path.of(args[0], "build/libs/blocky_music-0.1.0.jar")).getPath("/assets")
+                ? FileSystems.newFileSystem(packagedJar(Path.of(args[0]))).getPath("/assets")
                 : Path.of(args[0], "src/main/resources/assets");
         verifyResources(assets);
         Class<?> unsafeClass = Class.forName("sun.misc.Unsafe");
@@ -163,5 +163,15 @@ public final class SpeakerModelChecks {
             for(Point p:points){b[0]=Math.min(b[0],p.x);b[1]=Math.min(b[1],p.y);b[2]=Math.min(b[2],p.z);b[3]=Math.max(b[3],p.x);b[4]=Math.max(b[4],p.y);b[5]=Math.max(b[5],p.z);}
             return b;
         }
+    }
+
+    /** The packaged jar of this build: build/libs/blocky_music-<mod_version from gradle.properties>.jar. */
+    private static Path packagedJar(Path root) throws java.io.IOException {
+        for (String line : java.nio.file.Files.readAllLines(root.resolve("gradle.properties"))) {
+            if (line.startsWith("mod_version=")) {
+                return root.resolve("build/libs/blocky_music-" + line.substring("mod_version=".length()).trim() + ".jar");
+            }
+        }
+        throw new IllegalStateException("no mod_version in " + root.resolve("gradle.properties"));
     }
 }

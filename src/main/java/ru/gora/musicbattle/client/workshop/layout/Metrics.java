@@ -5,14 +5,14 @@ import ru.gora.musicbattle.client.ui.TextStyle;
 
 /**
  * Sizes of the Workshop screens in GUI units. osu! lazer's numbers times {@link Palette#PX} (1 osu! px = 0.7 GUI units
- * at GUI scale 2, research {@code mc-gui-feasibility.md} section 1), rounded to something that still reads at GUI
+ * at GUI scale 2), rounded to something that still reads at GUI
  * scale 4 and fits a 320×240 window. Pure constants: the screens and the layout check share them.
  */
 public final class Metrics {
     /** Below this width or height the shell uses its short bars and one column (GUI scale 4 on 1280×720). */
     public static final float COMPACT_WIDTH = 430F;
     public static final float COMPACT_HEIGHT = 300F;
-    /** The filter panel starts collapsed under this height (review of 03 section 4.1). */
+    /** The filter panel starts collapsed under this height. */
     public static final float COLLAPSE_FILTERS_HEIGHT = 360F;
     /** The set page and the info section keep two columns from this content width. */
     public static final float TWO_COLUMN_WIDTH = 520F;
@@ -33,10 +33,15 @@ public final class Metrics {
     public static final float ICON_SM = 7F;
     public static final float SCROLLBAR = 3F;
 
-    /** Card grid: lazer 345×80 / 345×112 at 0.7 units per osu! px, with a smaller minimum so 320-wide windows work. */
+    /**
+     * Card grid: lazer 345×80 / 345×112 at 0.7 units per osu! px. The narrowest card is lazer's own width: at 214 the
+     * card right after a column split left 109 units of text beside an extra card's cover, too few for a Russian status
+     * pill ("СООБЩЕСТВО") or the "Update" badge at GUI scale 1 without cutting them. A 320-wide window still has one
+     * column, as wide as the window.
+     */
     public static final float CARD_NORMAL_H = 56F;
     public static final float CARD_EXTRA_H = 78F;
-    public static final float CARD_MIN_W = 214F;
+    public static final float CARD_MIN_W = 240F;
     public static final float CARD_GAP = 7F;
     public static final int CARD_MAX_COLUMNS = 3;
     /** The strip on the card's right edge: 8 u collapsed, 24 u on hover (lazer). */

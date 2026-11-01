@@ -122,7 +122,11 @@ public final class SmileyBallEntity extends Animal {
         goalSelector.addGoal(3, new Goal() {
             private BlockPos panel;
             private int nextSearchTick;
-            { setFlags(java.util.EnumSet.of(Flag.LOOK)); }
+            // MOVE as well as LOOK: a ball out of the speakers' range (so not dancing) went on strolling, and walking
+            // turns a mob's body to where it walks every tick, so it showed the booth its back. A ball that
+            // watches a playing booth stands still; it strolls again once the booth pauses.
+            { setFlags(java.util.EnumSet.of(Flag.MOVE, Flag.LOOK)); }
+            @Override public void start() { getNavigation().stop(); }
 
             @Override public boolean canUse() {
                 if (!(level() instanceof ServerLevel serverLevel) || BattleManager.isEntityInBattle(SmileyBallEntity.this)) {

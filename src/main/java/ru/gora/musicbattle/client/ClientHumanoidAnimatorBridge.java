@@ -50,13 +50,15 @@ public final class ClientHumanoidAnimatorBridge {
                 && Math.abs(model.rightArm.z - model.body.z) <= 8.0F;
     }
 
-    static void prepareBattleAnimation(LivingEntity entity, HumanoidModel<?> model, int triggerSerial,
-                                       int triggerLane, int heldLaneMask, int bpm, float battleTick,
-                                       float triggerTick, float partialTick) {
+    static void prepareBattleAnimation(LivingEntity entity, HumanoidModel<?> model, int pressSerial, int pressLane,
+                                       float pressTick, int judgedSerial, int judgedLane, float judgedTick,
+                                       int heldLaneMask, int bpm, float battleTick, float partialTick) {
+        // Keyed by the entity's id, which Minecraft compares entities by: unlike a player's layer this one is not part
+        // of the entity object, so a mob drawn again under the same id rightly carries on with the same state.
         MobLayer mobLayer = LAYERS.computeIfAbsent(entity, ignored -> new MobLayer(ClientBattleAnimation.createLayer()));
         tickToEntity(mobLayer, entity.tickCount);
-        if (!ClientBattleAnimation.update(mobLayer.animation, triggerSerial, triggerLane, heldLaneMask,
-                bpm, battleTick, triggerTick)) {
+        if (!ClientBattleAnimation.update(mobLayer.animation, pressSerial, pressLane, pressTick, judgedSerial,
+                judgedLane, judgedTick, heldLaneMask, bpm, battleTick)) {
             return;
         }
 

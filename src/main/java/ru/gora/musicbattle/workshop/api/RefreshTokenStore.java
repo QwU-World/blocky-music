@@ -13,7 +13,7 @@ import java.util.Optional;
 import java.util.regex.Pattern;
 
 /**
- * The optional "remember me" refresh token (spec 06 section 7.1 as changed by the architect for wave M2b). It lives
+ * The optional "remember me" refresh token. It lives
  * <b>inside</b> the game directory, next to the rest of the mod's files, so nothing is written outside the Minecraft
  * folder: {@code music_battle_tracks/.account/session.json}. The folder is not a track folder (the catalogue loaders
  * never scan the {@code music_battle_tracks} root), and the dot keeps it out of casual sight.

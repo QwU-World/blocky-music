@@ -11,11 +11,15 @@ import com.mojang.blaze3d.vertex.VertexFormat;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.List;
+import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.ShaderInstance;
 import net.minecraft.util.Mth;
+import net.minecraft.world.phys.Vec3;
 import net.neoforged.neoforge.client.event.RegisterShadersEvent;
 import net.neoforged.neoforge.common.NeoForgeConfig;
+import org.joml.Matrix4f;
+import org.joml.Quaternionf;
 import org.lwjgl.BufferUtils;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL14;
@@ -32,18 +36,30 @@ public final class ClientFxShaderEngine {
     private static ShaderInstance vignetteShader;
     private static ShaderInstance colorCorrectionShader;
     private static ShaderInstance objectOutlineShader;
-    private static ShaderInstance objectDepthCopyShader;
     private static ShaderInstance modelMaskShader;
     private static TextureTarget scratchTarget;
     private static TextureTarget modelMaskTarget;
-    private static TextureTarget objectOutlineColorTarget;
-    private static TextureTarget objectOutlineDepthTarget;
     private static boolean scratchFailed;
     private static boolean modelMaskFailed;
-    private static boolean objectOutlineBlockTargetFailed;
+    private static final OutlineSnapshot OBJECT_OUTLINE_SNAPSHOT = new OutlineSnapshot("player view");
     private static boolean objectOutlineBlocksCaptured;
     private static ObjectOutlineCapture objectOutlineSourceOverride;
     private static final int MAX_OBJECT_OUTLINE_WARPS = 8;
+    /**
+     * Iris draws the solid first-person hand into the world depth before translucent blocks, with the projection's
+     * depth squeezed to an eighth around the middle of the range (its HandRenderer.DEPTH). The hand therefore
+     * lands between 0.44 and 0.56, while world geometry only gets that close to 0.5 within about 0.12 blocks of
+     * the eye. Everything nearer than this is the hand under a shader pack.
+     */
+    private static final float IRIS_HAND_DEPTH_LIMIT = 0.6F;
+    private static final String[] AUDIBLE_SPHERE_UNIFORMS = new String[FxAudibleArea.SHADER_SPHERES];
+    private static final float[] AUDIBLE_SPHERES = new float[FxAudibleArea.SHADER_SPHERES * 4];
+
+    static {
+        for (int index = 0; index < AUDIBLE_SPHERE_UNIFORMS.length; index++) {
+            AUDIBLE_SPHERE_UNIFORMS[index] = "AudibleSphere" + index;
+        }
+    }
 
     /** Separate scratch images keep a small monitor from resizing the main-view FX every frame. */
     static final class TargetBuffers {
@@ -99,8 +115,6 @@ public final class ClientFxShaderEngine {
                 DefaultVertexFormat.BLIT_SCREEN), loaded -> colorCorrectionShader = loaded);
         event.registerShader(new ShaderInstance(event.getResourceProvider(), MusicBattleMod.id("object_outline"),
                 DefaultVertexFormat.BLIT_SCREEN), loaded -> objectOutlineShader = loaded);
-        event.registerShader(new ShaderInstance(event.getResourceProvider(), MusicBattleMod.id("object_depth_copy"),
-                DefaultVertexFormat.BLIT_SCREEN), loaded -> objectDepthCopyShader = loaded);
         event.registerShader(new ShaderInstance(event.getResourceProvider(), MusicBattleMod.id("fx_model_mask"),
                 DefaultVertexFormat.BLIT_SCREEN), loaded -> modelMaskShader = loaded);
     }
@@ -120,16 +134,21 @@ public final class ClientFxShaderEngine {
 
     /** Captures block geometry into an isolated source owned by a nested camera render. */
     public static boolean captureObjectOutlineBlocks(ObjectOutlineCapture capture) {
-        ShaderInstance depthCopyShader = objectDepthCopyShader;
         Minecraft minecraft = Minecraft.getInstance();
         RenderTarget main = minecraft.getMainRenderTarget();
-        if (depthCopyShader == null || main == null || main.width <= 0 || main.height <= 0
-                || main.getDepthTextureId() <= 0
+        if (main == null || main.width <= 0 || main.height <= 0 || main.getDepthTextureId() <= 0
                 || GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING) != main.frameBufferId) {
             return false;
         }
+        // Iris draws the world a second time into its shadow map and fires the same block-layer
+        // events there. That pass looks from the sun, so it must never become the outline source.
+        if (ClientModelGlowEngine.isIrisShadowPass()) {
+            return false;
+        }
+        OutlineSnapshot snapshot = capture == null ? OBJECT_OUTLINE_SNAPSHOT : capture.snapshot;
         int previousRead = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING);
         int previousDraw = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
+        // Allocating or resizing the snapshot binds it, sets its viewport and clears it.
         int[] viewport = new int[4];
         GL11.glGetIntegerv(GL11.GL_VIEWPORT, viewport);
         boolean depthEnabled = GL11.glIsEnabled(GL11.GL_DEPTH_TEST);
@@ -148,37 +167,24 @@ public final class ClientFxShaderEngine {
         boolean writeGreen = colorWriteMask.get(1) != 0;
         boolean writeBlue = colorWriteMask.get(2) != 0;
         boolean writeAlpha = colorWriteMask.get(3) != 0;
-        boolean shaderApplied = false;
         try {
-            TextureTarget colorTarget = ensureObjectOutlineTarget(main, false, capture);
-            TextureTarget depthTarget = ensureObjectOutlineTarget(main, true, capture);
-            if (colorTarget == null || depthTarget == null) return false;
+            TextureTarget target = snapshot.ensure(main);
+            if (target == null) return false;
 
-            // Never blit depth here. The main target has a combined depth/stencil texture for
-            // player FX, while an ordinary TextureTarget has a depth-only texture. OpenGL
-            // rejects cross-format depth blits and leaves the object source empty.
+            // Copy, never draw. While a shader pack renders the world, Iris switches colour and depth
+            // writes off right after any shader it does not know is applied, so the full-screen pass that
+            // used to encode this depth wrote nothing and the outline vanished under Iris. A blit is not
+            // a shader. The snapshot's depth texture has the same format as the source's, mirrored in
+            // OutlineSnapshot.ensure, because OpenGL refuses depth blits between different formats.
             GL11.glDisable(GL11.GL_SCISSOR_TEST);
-            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, main.frameBufferId);
-            GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, colorTarget.frameBufferId);
-            GL30.glBlitFramebuffer(0, 0, main.width, main.height,
-                    0, 0, colorTarget.width, colorTarget.height,
-                    GL11.GL_COLOR_BUFFER_BIT, GL11.GL_NEAREST);
-
-            // Encode block-only depth into a regular colour texture through a shader. This is
-            // compatible with both depth-only and combined depth/stencil main targets and does
-            // not modify or attach the player/entity stencil buffer.
-            GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, depthTarget.frameBufferId);
-            GL11.glViewport(0, 0, depthTarget.viewWidth, depthTarget.viewHeight);
-            GL11.glDisable(GL11.GL_DEPTH_TEST);
-            GL11.glDepthMask(false);
-            GL11.glDisable(GL11.GL_BLEND);
-            GL11.glDisable(GL11.GL_CULL_FACE);
-            GL11.glDisable(GL11.GL_STENCIL_TEST);
             GL11.glColorMask(true, true, true, true);
-            depthCopyShader.setSampler("DepthSampler", main.getDepthTextureId());
-            depthCopyShader.apply();
-            shaderApplied = true;
-            drawBlitQuad();
+            GL11.glDepthMask(true);
+            GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, main.frameBufferId);
+            GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, target.frameBufferId);
+            GL30.glBlitFramebuffer(0, 0, main.width, main.height,
+                    0, 0, target.width, target.height,
+                    GL11.GL_COLOR_BUFFER_BIT | GL11.GL_DEPTH_BUFFER_BIT, GL11.GL_NEAREST);
+            snapshot.recordView(minecraft);
             if (capture == null) {
                 objectOutlineBlocksCaptured = true;
             } else {
@@ -186,18 +192,13 @@ public final class ClientFxShaderEngine {
             }
             return true;
         } catch (RuntimeException exception) {
-            if (capture == null) {
-                objectOutlineBlockTargetFailed = true;
-            } else {
-                capture.failed = true;
-                capture.captured = false;
-            }
+            snapshot.failed = true;
+            if (capture != null) capture.captured = false;
             MusicBattleMod.LOGGER.warn(capture == null
                     ? "Unable to capture the Blocky Music block-only outline source"
                     : "Unable to capture the Blocky Music DJ camera block-only outline source", exception);
             return false;
         } finally {
-            if (shaderApplied) depthCopyShader.clear();
             GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, previousRead);
             GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, previousDraw);
             GL11.glViewport(viewport[0], viewport[1], viewport[2], viewport[3]);
@@ -231,10 +232,13 @@ public final class ClientFxShaderEngine {
 
         TrackEffectSettings settings = effect.settings();
         shader.setSampler("DiffuseSampler", scratch.getColorTextureId());
-        // Iris owns different depth/stencil attachments while a shader pack is active. Keep the
-        // normal source mask everywhere else, but avoid cross-attaching an Iris-owned image to
-        // our temporary framebuffer. The fullscreen effect itself remains enabled.
-        int modelMaskTexture = ClientModelGlowEngine.isIrisShaderPackInUse() ? 0 : buildModelMask(main);
+        // Highlighted players and mobs stay where they are while the world bends around them, under a
+        // shader pack too. These passes used to skip the mask there, on the belief that Iris gives the
+        // world other depth/stencil images; it attaches the main target's own depth/stencil texture to
+        // its framebuffers, and since ClientModelGlowEngine flushes through Iris's entity wrapper the
+        // models' stencil bits are written there as well. The block outline reads the same mask under
+        // Iris (G04), and fish-eye and pulse now do as it does.
+        int modelMaskTexture = buildModelMask(main);
         shader.setSampler("ModelMaskSampler", modelMaskTexture != 0 ? modelMaskTexture : scratch.getColorTextureId());
         shader.safeGetUniform("UseModelMask").set(modelMaskTexture != 0 ? 1.0F : 0.0F);
         shader.safeGetUniform("Strength").set(Mth.clamp(settings.fishEyeStrength() * strengthAmount, 0.0F, 1.5F));
@@ -267,7 +271,8 @@ public final class ClientFxShaderEngine {
         TextureTarget scratch = captureMain(main);
         if (scratch == null) return false;
         shader.setSampler("DiffuseSampler", scratch.getColorTextureId());
-        int modelMaskTexture = ClientModelGlowEngine.isIrisShaderPackInUse() ? 0 : buildModelMask(main);
+        // The highlight mask under a shader pack too, as fish-eye and the block outline take it.
+        int modelMaskTexture = buildModelMask(main);
         shader.setSampler("ModelMaskSampler", modelMaskTexture != 0 ? modelMaskTexture : scratch.getColorTextureId());
         shader.safeGetUniform("UseModelMask").set(modelMaskTexture != 0 ? 1.0F : 0.0F);
         shader.safeGetUniform("Scale").set(1.0F + Mth.clamp(amount, 0.0F, 5.0F) * 0.055F);
@@ -326,24 +331,26 @@ public final class ClientFxShaderEngine {
         Minecraft minecraft = Minecraft.getInstance();
         RenderTarget main = minecraft.getMainRenderTarget();
         ObjectOutlineCapture override = objectOutlineSourceOverride;
-        TextureTarget blockColors = override == null ? objectOutlineColorTarget : override.colorTarget;
-        TextureTarget blockDepth = override == null ? objectOutlineDepthTarget : override.depthTarget;
+        OutlineSnapshot snapshot = override == null ? OBJECT_OUTLINE_SNAPSHOT : override.snapshot;
+        TextureTarget blocks = snapshot.target;
         RenderTarget sceneTarget = override == null ? main : override.sceneTarget;
         boolean captured = override == null ? objectOutlineBlocksCaptured : override.captured;
         if (main == null || main.width <= 0 || main.height <= 0
-                || !captured || blockColors == null || blockDepth == null || sceneTarget == null
-                || blockColors.width <= 0 || blockColors.height <= 0
-                || blockDepth.width != blockColors.width || blockDepth.height != blockColors.height
-                || sceneTarget.width != blockColors.width || sceneTarget.height != blockColors.height
+                || !captured || snapshot.failed || blocks == null || sceneTarget == null
+                || blocks.width <= 0 || blocks.height <= 0 || blocks.getDepthTextureId() <= 0
+                || sceneTarget.width != blocks.width || sceneTarget.height != blocks.height
                 || GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING) != main.frameBufferId) {
             return false;
         }
-        shader.setSampler("BlockColorSampler", blockColors.getColorTextureId());
-        shader.setSampler("BlockDepthSampler", blockDepth.getColorTextureId());
-        int exclusionMaskTexture = ClientModelGlowEngine.isIrisShaderPackInUse()
-                ? 0 : buildModelMask(main);
+        shader.setSampler("BlockColorSampler", blocks.getColorTextureId());
+        shader.setSampler("BlockDepthSampler", blocks.getDepthTextureId());
+        // The stencil bits come from the main target's own depth/stencil texture. Iris renders the
+        // world into its buffers with that very texture attached as depth and stencil, so players and
+        // mobs write their bits under a shader pack too (ClientModelGlowEngine flushes each of them
+        // through Iris's entity wrapper), and the mask keeps them out of the block contours there as well.
+        int exclusionMaskTexture = buildModelMask(main);
         shader.setSampler("ExcludedSampler", exclusionMaskTexture != 0
-                ? exclusionMaskTexture : blockDepth.getColorTextureId());
+                ? exclusionMaskTexture : blocks.getColorTextureId());
         shader.safeGetUniform("UseExcludedMask").set(exclusionMaskTexture != 0 ? 1.0F : 0.0F);
         int sceneDepthTexture = sceneTarget.getDepthTextureId();
         // Sampling a texture that is attached to the framebuffer currently being written is
@@ -351,9 +358,14 @@ public final class ClientFxShaderEngine {
         // only a nested preview samples depth from its separate camera framebuffer.
         boolean useSceneDepth = override != null && sceneDepthTexture > 0;
         shader.setSampler("SceneDepthSampler", useSceneDepth
-                ? sceneDepthTexture : blockDepth.getColorTextureId());
+                ? sceneDepthTexture : blocks.getDepthTextureId());
         shader.safeGetUniform("UseSceneDepth").set(useSceneDepth ? 1.0F : 0.0F);
-        shader.safeGetUniform("InSize").set((float) blockColors.width, (float) blockColors.height);
+        // A shader pack draws the world into its own buffers: the copied colour is only the clear colour,
+        // and its depth also holds the first-person hand (see IRIS_HAND_DEPTH_LIMIT).
+        shader.safeGetUniform("SuppressColorEdges").set(snapshot.irisPack ? 1.0F : 0.0F);
+        shader.safeGetUniform("HandDepthLimit").set(snapshot.irisPack ? IRIS_HAND_DEPTH_LIMIT : 0.0F);
+        applyAudibleArea(shader, snapshot);
+        shader.safeGetUniform("InSize").set((float) blocks.width, (float) blocks.height);
         shader.safeGetUniform("OutlineColor").set(
                 ((color >> 16) & 255) / 255.0F,
                 ((color >> 8) & 255) / 255.0F,
@@ -421,35 +433,144 @@ public final class ClientFxShaderEngine {
         }
     }
 
-    private static TextureTarget ensureObjectOutlineTarget(RenderTarget main, boolean depthValues,
-                                                            ObjectOutlineCapture capture) {
-        if (capture != null) {
-            return capture.ensureTarget(main, depthValues);
-        }
-        if (objectOutlineBlockTargetFailed) return null;
-        try {
-            TextureTarget target = depthValues ? objectOutlineDepthTarget : objectOutlineColorTarget;
-            if (target == null) {
-                target = new TextureTarget(main.width, main.height, false, Minecraft.ON_OSX);
-                if (depthValues) objectOutlineDepthTarget = target; else objectOutlineColorTarget = target;
-            } else if (target.width != main.width || target.height != main.height) {
-                target.resize(main.width, main.height, Minecraft.ON_OSX);
+    /**
+     * Hands the snapshot's audible area to the outline shader. Spheres go relative to the snapshot's camera,
+     * which is also what the shader rebuilds from the copied depth, so far-off worlds keep their precision.
+     */
+    private static void applyAudibleArea(ShaderInstance shader, OutlineSnapshot snapshot) {
+        FxAudibleArea area = snapshot.area;
+        boolean bounded = snapshot.viewKnown && !area.unbounded();
+        int count = bounded ? area.packCameraRelative(snapshot.cameraX, snapshot.cameraY, snapshot.cameraZ,
+                AUDIBLE_SPHERES) : 0;
+        shader.safeGetUniform("UseAudibleArea").set(bounded ? 1.0F : 0.0F);
+        shader.safeGetUniform("AudibleCount").set((float) count);
+        shader.safeGetUniform("AudibleFadeRule").set(FxAudibleArea.FADE_FRACTION,
+                FxAudibleArea.MIN_FADE_BLOCKS, FxAudibleArea.MAX_FADE_BLOCKS);
+        shader.safeGetUniform("InverseViewProjection").set(snapshot.inverseViewProjection);
+        for (int index = 0; index < AUDIBLE_SPHERE_UNIFORMS.length; index++) {
+            if (index < count) {
+                shader.safeGetUniform(AUDIBLE_SPHERE_UNIFORMS[index]).set(AUDIBLE_SPHERES[index * 4],
+                        AUDIBLE_SPHERES[index * 4 + 1], AUDIBLE_SPHERES[index * 4 + 2], AUDIBLE_SPHERES[index * 4 + 3]);
+            } else {
+                shader.safeGetUniform(AUDIBLE_SPHERE_UNIFORMS[index]).set(0.0F, 0.0F, 0.0F, 0.0F);
             }
-            return target;
-        } catch (RuntimeException exception) {
-            objectOutlineBlockTargetFailed = true;
-            MusicBattleMod.LOGGER.warn("Unable to allocate the Blocky Music block-only outline target", exception);
-            return null;
+        }
+    }
+
+    /**
+     * One copy of a world pass taken right after its translucent blocks: colour and depth together, plus the
+     * camera that saw them and the audible area of that moment, so the late composite can put every outline
+     * pixel back into the world and fade it at the edge of the area.
+     */
+    private static final class OutlineSnapshot {
+        private final String owner;
+        private TextureTarget target;
+        private boolean failed;
+        private boolean formatVerified;
+        private final Matrix4f inverseViewProjection = new Matrix4f();
+        private boolean viewKnown;
+        private double cameraX;
+        private double cameraY;
+        private double cameraZ;
+        private FxAudibleArea area = FxAudibleArea.UNBOUNDED;
+        private boolean irisPack;
+
+        private OutlineSnapshot(String owner) {
+            this.owner = owner;
+        }
+
+        /** The copy target, with a depth texture of exactly the source's format, or null after a failure. */
+        private TextureTarget ensure(RenderTarget source) {
+            if (failed) return null;
+            try {
+                // RenderTarget picks its depth format from its stencil flag: a stencil target holds
+                // DEPTH32F_STENCIL8, any other a float depth texture. Mirroring the flag gives both the
+                // same format, the only way glBlitFramebuffer copies depth at all.
+                if (target != null && target.isStencilEnabled() != source.isStencilEnabled()) {
+                    target.destroyBuffers();
+                    target = null;
+                }
+                boolean allocated = false;
+                if (target == null) {
+                    target = new TextureTarget(source.width, source.height, true, Minecraft.ON_OSX);
+                    if (source.isStencilEnabled()) target.enableStencil();
+                    allocated = true;
+                } else if (target.width != source.width || target.height != source.height) {
+                    target.resize(source.width, source.height, Minecraft.ON_OSX);
+                    allocated = true;
+                }
+                if (allocated) {
+                    formatVerified = false;
+                    // A new or resized target clears itself through its own bindWrite, and Iris reads any bindWrite
+                    // of a target other than the main one as the world pass leaving the main framebuffer: the rest
+                    // of this frame's world (particles, clouds, rain) would then skip the shader pack's programs.
+                    // Binding the source the same way tells Iris the world pass is still on it.
+                    source.bindWrite(false);
+                }
+                if (!formatVerified) {
+                    int sourceFormat = depthFormat(source.getDepthTextureId());
+                    int copyFormat = depthFormat(target.getDepthTextureId());
+                    if (sourceFormat != copyFormat) {
+                        // Another mod changed the world's depth format. A refused blit would leave stale
+                        // depth behind, so the outline stays off instead of tracing an old frame.
+                        throw new IllegalStateException(String.format(
+                                "the world depth format 0x%X cannot be copied into 0x%X", sourceFormat, copyFormat));
+                    }
+                    formatVerified = true;
+                }
+                return target;
+            } catch (RuntimeException exception) {
+                failed = true;
+                MusicBattleMod.LOGGER.warn("Unable to allocate the Blocky Music block-only outline copy for the {}",
+                        owner, exception);
+                return null;
+            }
+        }
+
+        /**
+         * Remembers the camera this copy was taken through. The block-entity dispatcher holds the camera of
+         * the pass being drawn, the DJ monitor's included, and the projection is still the world's here.
+         */
+        private void recordView(Minecraft minecraft) {
+            Camera camera = minecraft.getBlockEntityRenderDispatcher().camera;
+            if (camera == null) camera = minecraft.gameRenderer.getMainCamera();
+            Vec3 position = camera.getPosition();
+            cameraX = position.x;
+            cameraY = position.y;
+            cameraZ = position.z;
+            // The same view matrix GameRenderer and the DJ monitor give the level renderer.
+            Matrix4f view = new Matrix4f().rotation(camera.rotation().conjugate(new Quaternionf()));
+            inverseViewProjection.set(RenderSystem.getProjectionMatrix()).mul(view).invert();
+            viewKnown = inverseViewProjection.isFinite();
+            area = FxAudibleAreaResolver.current();
+            irisPack = ClientModelGlowEngine.isIrisShaderPackInUse();
+        }
+
+        private void release() {
+            if (target != null) target.destroyBuffers();
+            target = null;
+            failed = false;
+            formatVerified = false;
+            viewKnown = false;
+            area = FxAudibleArea.UNBOUNDED;
+        }
+
+        private static int depthFormat(int texture) {
+            int previous = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
+            try {
+                GL11.glBindTexture(GL11.GL_TEXTURE_2D, texture);
+                return GL11.glGetTexLevelParameteri(GL11.GL_TEXTURE_2D, 0, GL11.GL_TEXTURE_INTERNAL_FORMAT);
+            } finally {
+                GL11.glBindTexture(GL11.GL_TEXTURE_2D, previous);
+            }
         }
     }
 
     /** Owns color/depth snapshots without ever replacing the regular world-frame capture. */
     public static final class ObjectOutlineCapture {
-        private TextureTarget colorTarget;
-        private TextureTarget depthTarget;
+        private final OutlineSnapshot snapshot = new OutlineSnapshot("DJ camera");
         private RenderTarget sceneTarget;
         private boolean captured;
-        private boolean failed;
 
         public void beginFrame(RenderTarget sceneTarget) {
             this.sceneTarget = sceneTarget;
@@ -457,7 +578,7 @@ public final class ClientFxShaderEngine {
         }
 
         public boolean hasFrame() {
-            return captured && !failed && colorTarget != null && depthTarget != null && sceneTarget != null;
+            return captured && !snapshot.failed && snapshot.target != null && sceneTarget != null;
         }
 
         public void invalidateScene(RenderTarget sceneTarget) {
@@ -468,37 +589,9 @@ public final class ClientFxShaderEngine {
         }
 
         public void release() {
-            if (colorTarget != null) {
-                colorTarget.destroyBuffers();
-                colorTarget = null;
-            }
-            if (depthTarget != null) {
-                depthTarget.destroyBuffers();
-                depthTarget = null;
-            }
+            snapshot.release();
             sceneTarget = null;
             captured = false;
-            failed = false;
-        }
-
-        private TextureTarget ensureTarget(RenderTarget source, boolean depthValues) {
-            if (failed) return null;
-            try {
-                TextureTarget target = depthValues ? depthTarget : colorTarget;
-                if (target == null) {
-                    target = new TextureTarget(source.width, source.height, false, Minecraft.ON_OSX);
-                    if (depthValues) depthTarget = target; else colorTarget = target;
-                } else if (target.width != source.width || target.height != source.height) {
-                    target.resize(source.width, source.height, Minecraft.ON_OSX);
-                }
-                return target;
-            } catch (RuntimeException exception) {
-                failed = true;
-                captured = false;
-                MusicBattleMod.LOGGER.warn(
-                        "Unable to allocate the Blocky Music DJ camera block-only outline target", exception);
-                return null;
-            }
         }
     }
 

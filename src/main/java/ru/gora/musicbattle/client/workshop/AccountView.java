@@ -21,10 +21,10 @@ import ru.gora.musicbattle.workshop.api.WorkshopDtos;
 import ru.gora.musicbattle.workshop.api.WorkshopSession;
 
 /**
- * The account view (spec 06 section 6.4, 08 A1.2): signing in with the Minecraft account or with a code, the device
+ * The account view: signing in with the Minecraft account or with a code, the device
  * code with "Open the link" and "Copy code", "Signed in as @username. Continue · This isn't me", and, once signed in,
  * the linked Minecraft accounts, the automatic sign-in state, the one-time acceptance of the Workshop Terms and the
- * Community Rules, notifications, the standing banner and sign-out.
+ * Community Rules, notifications, the standing banner and sign-out; signed in or out, the Network access switch.
  */
 public final class AccountView implements WorkshopScreen.Overlay {
     private final WorkshopScreen screen;
@@ -165,7 +165,7 @@ public final class AccountView implements WorkshopScreen.Overlay {
         AccountForm.State value = new AccountForm.State(mode, minecraftAvailable, remember, code, status, error,
                 state.account() == null ? null : state.account().username(),
                 state.account() == null ? null : state.account().displayName(), minecraft, canLink, autoSignIn, notifications,
-                standing, unread, busy, rules, rulesChanged, rulesPending, card);
+                standing, unread, busy, rules, rulesChanged, rulesPending, card, client.networkAllowed());
         form.setItems(AccountForm.build(WorkshopTr.INSTANCE, value));
     }
 
@@ -219,13 +219,18 @@ public final class AccountView implements WorkshopScreen.Overlay {
         if (me.minecraft() != null) {
             MinecraftSignIn.Player current = MinecraftProof.microsoftAccount() ? MinecraftProof.playerOrNull() : null;
             String currentName = current == null ? null : current.name();
+            String currentUuid = current == null ? null : current.uuid().toString();
             for (WorkshopDtos.MinecraftLink link : me.minecraft()) {
                 rows.add(new Form.Row("account.mc." + link.uuid(), link.name() == null ? link.uuid() : link.name(),
                         WorkshopTr.INSTANCE.get(WorkshopStrings.KEY + (link.autoSignIn() ? "account.link.auto" : "account.link.manual"))));
-                if (link.autoSignIn()) {
+                boolean isCurrent = currentUuid != null && currentUuid.equalsIgnoreCase(link.uuid())
+                        || currentName != null && currentName.equalsIgnoreCase(link.name());
+                // On this computer the game signs in by itself only for the account being played, when the site allows
+                // it for that link and this Minecraft account signed in here before (see MinecraftSignIn.Memory).
+                if (isCurrent && link.autoSignIn() && client.signIn().remembered(current.uuid())) {
                     autoSignIn = true;
                 }
-                if (currentName != null && currentName.equalsIgnoreCase(link.name())) {
+                if (isCurrent) {
                     canLink = false;
                 }
             }
@@ -483,6 +488,7 @@ public final class AccountView implements WorkshopScreen.Overlay {
             }
             case "account.open_standing" -> LinkActions.openTrusted(screen, client.api().pageUrl("/account/standing"));
             case "account.mark_read" -> markRead();
+            case AccountForm.NETWORK -> toggleNetwork();
             default -> {
                 // Rows and notes are not clickable.
             }
@@ -499,6 +505,33 @@ public final class AccountView implements WorkshopScreen.Overlay {
     private void askNetwork(Runnable retry) {
         afterConsent = retry;
         screen.openConsent();
+    }
+
+    /**
+     * The Network access switch. Off → on goes through the first-run screen, as every other way to allow it does. On →
+     * off stops the Workshop's network access at once: downloads are cancelled, the listing shows its offline state with
+     * "Allow network", and the sign-in and the remembered Minecraft account are kept for when it is turned on again.
+     */
+    private void toggleNetwork() {
+        if (!client.networkAllowed()) {
+            askNetwork(() -> {
+                rebuild();
+                loadAccount();
+            });
+            return;
+        }
+        try {
+            client.setNetworkConsent(false);
+        } catch (java.io.IOException exception) {
+            ru.gora.musicbattle.MusicBattleMod.LOGGER.warn("Unable to save the Workshop network choice: {}", exception.getMessage());
+            error = WorkshopTr.INSTANCE.get("screen.music_battle.workshop.consent.save_failed");
+            rebuild();
+            return;
+        }
+        status = null;
+        busy = false;
+        screen.networkTurnedOff();
+        rebuild();
     }
 
     private void signInWithMinecraft() {
@@ -651,6 +684,19 @@ public final class AccountView implements WorkshopScreen.Overlay {
                 Component.translatable(WorkshopStrings.KEY + "account.sign_out_title"),
                 Component.translatable(WorkshopStrings.KEY + "account.sign_out_body"),
                 Component.translatable(WorkshopStrings.KEY + "account.sign_out"), () -> screen.run(() -> {
+                    // An explicit sign-out: the next launch no longer signs this Minecraft account in by itself.
+                    MinecraftSignIn.Player current = MinecraftProof.playerOrNull();
+                    if (current != null) {
+                        client.signIn().forget(current.uuid());
+                    }
+                    WorkshopSession.State before = client.session().state();
+                    if (before.minecraft() != null && before.minecraft().uuid() != null) {
+                        try {
+                            client.signIn().forget(java.util.UUID.fromString(before.minecraft().uuid()));
+                        } catch (IllegalArgumentException notUuid) {
+                            // Nothing remembered under a name that is not a UUID.
+                        }
+                    }
                     client.session().signOut(CancelToken.none());
                     client.forgetParticipation();
                     deliver(() -> {

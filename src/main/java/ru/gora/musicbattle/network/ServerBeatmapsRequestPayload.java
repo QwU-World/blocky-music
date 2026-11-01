@@ -5,7 +5,7 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import ru.gora.musicbattle.MusicBattleMod;
 
-/** One page of the Server beatmaps tab (spec 06 section 9.1). An empty cursor means "from the start". */
+/** One page of the Server beatmaps tab. An empty cursor means "from the start". */
 public record ServerBeatmapsRequestPayload(String cursor, String query) implements CustomPacketPayload {
     public static final Type<ServerBeatmapsRequestPayload> TYPE = new Type<>(MusicBattleMod.id("server_beatmaps_request"));
     public static final int MAX_CURSOR = 64;

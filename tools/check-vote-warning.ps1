@@ -20,7 +20,7 @@ $sources = @(
     "$root/src/main/java/ru/gora/musicbattle/network/SettingsPayload.java",
     "$root/src/main/java/ru/gora/musicbattle/network/NoteAppearanceCodec.java"
 )
-$jdk = 'C:/Program Files/Eclipse Adoptium/jdk-21.0.11.10-hotspot/bin'
+$jdk = & (Join-Path $PSScriptRoot 'find-jdk.ps1')
 & "$jdk/javac.exe" -proc:none -encoding UTF-8 -cp $cp -d $out @sources
 if ($LASTEXITCODE) { throw 'Vote warning test compilation failed' }
 & "$jdk/java.exe" -Djava.awt.headless=true -cp $cp MusicBattleVoteWarningChecks $root

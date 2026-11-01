@@ -15,7 +15,7 @@ $classpath = (@(
     "$projectRoot/build/moddev/artifacts/neoforge-21.1.230-merged.jar",
     "$projectRoot/build/moddev/artifacts/neoforge-21.1.230-client-extra-aka-minecraft-resources.jar"
 ) + @($jars)) -join [IO.Path]::PathSeparator
-$jdk = 'C:/Program Files/Eclipse Adoptium/jdk-21.0.11.10-hotspot/bin'
+$jdk = & (Join-Path $PSScriptRoot 'find-jdk.ps1')
 $sources = @(
     "$projectRoot/tools/CalibrationColorRenderChecks.java",
     "$projectRoot/src/main/java/ru/gora/musicbattle/client/MusicBattleCalibrationScreen.java"

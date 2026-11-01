@@ -5,11 +5,11 @@ import java.util.Locale;
 
 /**
  * A failed workshop call with a stable {@link #code()} a screen maps to {@code music_battle.workshop.error.<code>}.
- * Server errors keep the API's code (spec 02 section 1); local failures use the codes below. Messages are English,
+ * Server errors keep the API's code; local failures use the codes below. Messages are English,
  * for logs only, and never contain tokens.
  */
 public final class WorkshopApiException extends IOException {
-    /** No network consent yet (spec 06 section 4): nothing was sent. */
+    /** No network consent yet: nothing was sent. */
     public static final String CONSENT_REQUIRED = "consent_required";
     public static final String NETWORK_ERROR = "network_error";
     public static final String TIMEOUT = "timeout";
@@ -72,7 +72,7 @@ public final class WorkshopApiException extends IOException {
         return field;
     }
 
-    /** Translation key for this error, spec 06 section 11. */
+    /** Translation key for this error. */
     public String translationKey() {
         return translationKey(code);
     }

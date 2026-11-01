@@ -29,7 +29,7 @@ import ru.gora.musicbattle.workshop.WorkshopLayout;
 import ru.gora.musicbattle.workshop.WorkshopSignature;
 
 /**
- * The {@code server-beatmaps} check of spec 06 section 12: offer verdicts, signature rules, chunk validation,
+ * The {@code server-beatmaps} check: offer verdicts, signature rules, chunk validation,
  * permission-free quota refusals, removal and index persistence including crash recovery.
  *
  * <p>It exercises the production classes, not copies: {@link ServerBeatmaps} is bound to a temporary world folder

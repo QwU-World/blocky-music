@@ -2,22 +2,42 @@ package ru.gora.musicbattle.client;
 
 import static ru.gora.musicbattle.client.ClientTranslations.text;
 
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import com.mojang.blaze3d.platform.InputConstants;
+import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.gui.components.AbstractButton;
 import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.narration.NarrationElementOutput;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.inventory.InventoryScreen;
 import net.minecraft.client.resources.sounds.SoundInstance;
 import net.minecraft.network.chat.Component;
 import net.minecraft.util.Mth;
+import net.neoforged.fml.loading.FMLPaths;
 import org.joml.Quaternionf;
 import org.joml.Vector3f;
 import org.lwjgl.glfw.GLFW;
+import ru.gora.musicbattle.MusicBattleMod;
+import ru.gora.musicbattle.client.ui.HandCursor;
+import ru.gora.musicbattle.client.ui.Palette;
+import ru.gora.musicbattle.client.ui.RoundedRect;
+import ru.gora.musicbattle.client.ui.TextMeasurer;
+import ru.gora.musicbattle.client.ui.TextStyle;
+import ru.gora.musicbattle.client.ui.TextStyles;
+import ru.gora.musicbattle.client.ui.UiIcon;
+import ru.gora.musicbattle.client.workshop.WorkshopDraw;
+import ru.gora.musicbattle.client.workshop.layout.Rect;
+import ru.gora.musicbattle.client.workshop.layout.TextFit;
 import ru.gora.musicbattle.data.BattleNote;
 import ru.gora.musicbattle.data.CalibrationTiming;
 import ru.gora.musicbattle.data.TrackEffect;
@@ -29,11 +49,41 @@ public final class TrackGameplayPreviewScreen extends Screen {
     private static final int HOLD_RELEASE_EARLY_TICKS = 2;
     private static final String[] DEFAULT_LABELS = {"<", "v", "^", ">"};
     private static final float FOREGROUND_Z = 1000.0F;
+    /** The corner buttons: Back to the editor on the left and, without a world, the background colour on the right. */
+    private static final int CORNER_BUTTON_WIDTH = 104;
+    private static final int CORNER_MARGIN = 8;
+    /** Between a corner button and the header card. */
+    private static final int CORNER_GAP = 6;
+    /** The narrowest header card the corner buttons make room for; see {@link #corners}. */
+    static final int CARD_MIN = 120;
+    /**
+     * A label keeps this much room from its button's edges (the room a 104-unit Back leaves the longest Russian label
+     * at GUI scale 1); a swatch sits {@code SWATCH_PAD} in from the edge and from its label.
+     */
+    static final int LABEL_PAD = 6;
+    static final int SWATCH_PAD = 5;
+    /** The arrow in front of the short Back, and its gap to the word. */
+    private static final float ARROW = 9F;
+    private static final float ARROW_GAP = 4F;
+    private static final Component BACK = Component.translatable("music_battle.l10n.editor.preview_back");
+    /** Vanilla's own "Back", which every language the game ships has: the narrow form of {@link #BACK}. */
+    private static final Component BACK_SHORT = Component.translatable("gui.back");
+    private static final Component BACKGROUND = Component.translatable("music_battle.l10n.editor.preview_background");
+    /** Where the background colour is kept between sessions, next to the mod's other client settings. */
+    private static final String SETTINGS_FILE = "music_battle-editor-preview.json";
+    private static final int DEFAULT_BACKGROUND = Palette.BG_0;
+    /** The fill behind a preview with no world to show; {@code null} until it is first read from the settings file. */
+    private static Integer backgroundColor;
     private final Screen parent;
     private final Path audioPath;
     private final Path previewPath;
     private final String trackTitle;
     private final int bpm;
+    /**
+     * Beat 1 on the preview's clock, in ticks: the chart's offset, as the battle has it. The pulse, the combo's beat, the
+     * cover's beat, the poses and every beat effect count from here, as they do in the battle this previews.
+     */
+    private final float beatOrigin;
     private final float volume;
     private final int durationTicks;
     private final int startTick;
@@ -59,8 +109,13 @@ public final class TrackGameplayPreviewScreen extends Screen {
     private int animationTriggerSerial;
     private int animationTriggerLane = -1;
     private int animationHeldMask;
+    /** The colour picker is open over this screen, which keeps playing behind it: leaving for it must not stop the song. */
+    private boolean choosingBackground;
+    /** The corner buttons and the header card for this window, from {@link #corners}; set on every init. */
+    private Corners corners;
 
-    public TrackGameplayPreviewScreen(Screen parent, Path audioPath, Path previewPath, String trackTitle, int bpm, float volume,
+    public TrackGameplayPreviewScreen(Screen parent, Path audioPath, Path previewPath, String trackTitle, int bpm,
+                                      int offsetMs, float volume,
                                       int durationTicks, int startTick, int owner, List<BattleNote> sourceNotes,
                                       List<TrackEffect> effects, boolean disableStageBars, boolean hideStandardDimming) {
         super(Component.literal(text("music_battle.l10n.client.116")));
@@ -69,6 +124,8 @@ public final class TrackGameplayPreviewScreen extends Screen {
         this.previewPath = previewPath;
         this.trackTitle = trackTitle;
         this.bpm = Mth.clamp(bpm, 20, 400);
+        this.beatOrigin = (float) ru.gora.musicbattle.data.ChartBeat.originTicks(
+                ru.gora.musicbattle.data.ChartBeat.clampOffsetMs(offsetMs));
         this.volume = Mth.clamp(volume, 0.0F, 2.0F);
         this.durationTicks = Math.max(1, durationTicks);
         this.startTick = Math.max(0, startTick);
@@ -85,7 +142,15 @@ public final class TrackGameplayPreviewScreen extends Screen {
 
     @Override
     protected void init() {
-        this.addRenderableWidget(FancyButton.create(Component.literal("Exit Preview"), button -> this.onClose(), 8, 7, 104, 20));
+        choosingBackground = false;
+        corners = corners(this.width, TextStyles.measurer(), BACK.getString(), BACK_SHORT.getString(),
+                BACKGROUND.getString());
+        this.addRenderableWidget(new BackButton(CORNER_MARGIN, 7, corners.buttonWidth(), 20, corners.compact()));
+        if (this.minecraft.level == null) {
+            // Opposite Back, so the battle header between them stays clear of both at any window size.
+            this.addRenderableWidget(new BackgroundButton(this.width - CORNER_MARGIN - corners.buttonWidth(), 7,
+                    corners.buttonWidth(), 20, corners.backgroundLabel()));
+        }
         if (!soundSubmitted) {
             ClientAudioAnalyzer.activate(audioPath);
             sound = new ExternalOggSoundInstance("editor_gameplay_preview", audioPath.getFileName().toString(), audioPath,
@@ -145,7 +210,15 @@ public final class TrackGameplayPreviewScreen extends Screen {
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
         float time = currentTick();
-        ClientTrackEffects.EffectState state = ClientTrackEffects.sample(effects, time, bpm);
+        // Sampled here rather than through sampleAt: render reads only fields and static calls, which keeps it testable
+        // by the fx-visibility probe that runs a copy of this method.
+        ClientTrackEffects.EffectState state = ClientTrackEffects.sample(effects, time, bpm, 1.0F, 1.0F, beatOrigin);
+        if (this.minecraft.level == null) {
+            // Opened from the title screen there is no world to draw behind the battle, and the menus' panorama comes
+            // from renderBackground, which this screen leaves empty for the world's sake: there was no background at
+            // all. The player's colour stands in for the world.
+            graphics.fill(0, 0, this.width, this.height, background());
+        }
         drawGameplayScene(graphics, !state.hidesBlockyMusicHud());
         graphics.flush();
 
@@ -167,16 +240,20 @@ public final class TrackGameplayPreviewScreen extends Screen {
         graphics.pose().popPose();
     }
 
+    /**
+     * The world behind the preview is dimmed and barred as this player's battle does it (BattleBackdrop with the
+     * player's settings), so the preview shows the beatmap as this player will see it; the beatmap's own switches
+     * (hideStandardDimming, disableStageBars) still win, because the conditions around both calls stay as they were.
+     */
     private void drawGameplayScene(GuiGraphics graphics, boolean showHud) {
         if (showHud && !hideStandardDimming) {
-            graphics.fill(0, 0, this.width, this.height, argb(70, 0, 0, 0));
+            BattleBackdrop.dim(graphics::fill, this.width, this.height, ClientBattleSettings.worldDimmingAlpha());
         }
         drawPreviewPlayer(graphics);
     }
 
     private void drawStageBars(GuiGraphics graphics) {
-        graphics.fill(0, 0, this.width, 36, argb(185, 0, 0, 0));
-        graphics.fill(0, this.height - 30, this.width, this.height, argb(185, 0, 0, 0));
+        BattleBackdrop.bars(graphics::fill, this.width, this.height, ClientBattleSettings.stageBarAlpha());
     }
 
     private void drawGameplayHud(GuiGraphics graphics, float time) {
@@ -186,7 +263,9 @@ public final class TrackGameplayPreviewScreen extends Screen {
         if (!clockStarted) {
             graphics.drawCenteredString(this.font, text("music_battle.l10n.client.117"), this.width / 2, 40, 0xFFFFE78A);
         } else if (finished) {
-            graphics.drawCenteredString(this.font, text("music_battle.l10n.client.118"), this.width / 2, this.height - 20, 0xFFFFE78A);
+            // Names the button by its label, which used to be the untranslated "Exit Preview".
+            graphics.drawCenteredString(this.font, Component.translatable("music_battle.l10n.editor.preview_finished",
+                    Component.translatable("music_battle.l10n.editor.preview_back")), this.width / 2, this.height - 20, 0xFFFFE78A);
         } else {
             graphics.drawCenteredString(this.font, text("music_battle.l10n.client.119") + formatTime(startTick), this.width / 2, this.height - 20, 0xFFB9D7E5);
         }
@@ -201,7 +280,7 @@ public final class TrackGameplayPreviewScreen extends Screen {
         String[] labels = own
                 ? ClientBattleSettings.keyLabels().toArray(String[]::new)
                 : DEFAULT_LABELS;
-        BattlePanelRenderer.draw(graphics, this.font, this.width, this.height, time, bpm, 1.0F, notes,
+        BattlePanelRenderer.draw(graphics, this.font, this.width, this.height, time, bpm, beatOrigin, 1.0F, notes,
                 new BattlePanelRenderer.Panel(
                         panelOwner,
                         panelOwner,
@@ -260,26 +339,72 @@ public final class TrackGameplayPreviewScreen extends Screen {
         graphics.disableScissor();
     }
 
+    /**
+     * The battle's own header card (BattlePanelRenderer.drawHeader), but only as wide as the room between the corner
+     * buttons (see {@link #corners}): at the GUI scales laptops choose (about 430 GUI pixels across) the battle's width
+     * ran under Back, and the title is cut to the card rather than running under the buttons. The preview has no
+     * count-in, so the card never shows the READY pill.
+     */
     private void drawBattleHeader(GuiGraphics graphics, float time) {
-        int barWidth = Math.min(this.width - 80, 420);
-        int x = this.width / 2 - barWidth / 2;
-        int y = 12;
         float progress = Mth.clamp(Math.max(0.0F, time) / durationTicks, 0.0F, 1.0F);
-        graphics.fill(x, y, x + barWidth, y + 24, argb(150, 8, 10, 16));
-        graphics.fill(x, y + 22, x + Math.round(barWidth * progress), y + 24, argb(230, 90, 210, 235));
-        net.minecraft.resources.ResourceLocation preview = ClientPreviewTextures.get("editor", previewPath);
-        if (preview != null) {
-            int baseSize = 10;
-            int size = Math.round(baseSize * (1.0F + beatPulse(time) * 0.20F));
-            int titleLeft = this.width / 2 - this.font.width(trackTitle) / 2;
-            int imageX = titleLeft - 4 - size;
-            int imageY = y + 2 - (size - baseSize) / 2;
-            graphics.fill(imageX - 1, imageY - 1, imageX + size + 1, imageY + size + 1, 0xDDFFFFFF);
-            graphics.blit(preview, imageX, imageY, 0.0F, 0.0F, size, size, size, size);
-        }
-        graphics.drawCenteredString(this.font, trackTitle, this.width / 2, y + 4, 0xFFFFFFFF);
         int remaining = Math.max(0, (durationTicks - Math.max(0, (int) time) + 19) / 20);
-        graphics.drawCenteredString(this.font, String.format(java.util.Locale.ROOT, "%02d:%02d", remaining / 60, remaining % 60), this.width / 2, y + 14, 0xFFB8DCE8);
+        BattlePanelRenderer.drawHeader(graphics, corners.card(),
+                new BattlePanelRenderer.Header(trackTitle, ClientPreviewTextures.get("editor", previewPath), progress,
+                        remaining, 0, beatPulse(time), 1.0F));
+        graphics.flush();
+    }
+
+    /**
+     * The corner buttons and the header card between them: both buttons {@code buttonWidth} wide, Back from the left
+     * edge and Background from the right, and the card centred in the room left between them.
+     *
+     * @param compact Back shows the arrow and the short word; Background shows its label only if {@code backgroundLabel}
+     */
+    record Corners(int buttonWidth, boolean compact, boolean backgroundLabel, BattlePanelRenderer.HeaderLayout card) {
+    }
+
+    /**
+     * How the corner buttons and the card share a screen this wide. The buttons take what the card leaves them at its
+     * {@link #CARD_MIN}, up to 104 units, so from 356 units up they are 104 and the card grows; below that the card
+     * keeps its minimum and the buttons shrink. Once they are too narrow for their whole labels, Back shows the arrow
+     * and the short "Back" and Background its swatch, with its label only if that fits beside it, at the same width:
+     * only the words change there, not the card. On a window too narrow even for that, the buttons stay as wide as the
+     * arrow and the short word need and the card takes the rest. Widening the window never narrows the card: the narrow
+     * form used to size the buttons to its words, and the card was up to 87 units wider just before the whole labels
+     * came in than just after. Below 356 the card used to keep its 120 units and run under both buttons, which drew
+     * over it. The two buttons stay one width, so the card stays centred over the battle. Pure: the labels are measured
+     * through {@code measurer}, for battle-panel-geometry.
+     */
+    static Corners corners(int width, TextMeasurer measurer, String back, String backShort, String background) {
+        int share = Math.min(CORNER_BUTTON_WIDTH, (width - (CORNER_MARGIN + CORNER_GAP) * 2 - CARD_MIN) / 2);
+        float labels = Math.max(backWidth(measurer, back, false), backgroundWidth(measurer, background));
+        boolean compact = share < labels;
+        int narrowest = Math.min(CORNER_BUTTON_WIDTH, (int) Math.ceil(backWidth(measurer, backShort, true)));
+        int button = compact ? Math.max(share, narrowest) : share;
+        boolean backgroundLabel = backgroundWidth(measurer, background) <= button;
+        int card = Math.max(0, Math.min(cardRoom(width, button), BattlePanelRenderer.HeaderLayout.MAX_WIDTH));
+        return new Corners(button, compact, backgroundLabel, BattlePanelRenderer.HeaderLayout.centred(width, card));
+    }
+
+    /** The card's room between two buttons this wide, with the margins and the gaps on both sides. */
+    private static int cardRoom(int width, int button) {
+        return width - (CORNER_MARGIN + button + CORNER_GAP) * 2;
+    }
+
+    /** What Back needs: its whole label, or the arrow and the short word, with {@link #LABEL_PAD} either side. */
+    static float backWidth(TextMeasurer measurer, String label, boolean compact) {
+        float text = TextFit.width(measurer, label, TextStyle.BODY);
+        return text + LABEL_PAD * 2 + (compact ? ARROW + ARROW_GAP : 0F);
+    }
+
+    /** What Background needs to show its swatch and its whole label. */
+    static float backgroundWidth(TextMeasurer measurer, String label) {
+        return SWATCH_PAD + swatch() + SWATCH_PAD + TextFit.width(measurer, label, TextStyle.BODY) + LABEL_PAD;
+    }
+
+    /** The colour swatch of a 20-unit button. */
+    private static float swatch() {
+        return 20 - 8;
     }
 
     @Override
@@ -498,12 +623,18 @@ public final class TrackGameplayPreviewScreen extends Screen {
     }
 
     ClientTrackEffects.EffectState currentEffectState() {
-        return ClientTrackEffects.sample(effects, currentTick(), bpm);
+        return sampleAt(currentTick());
     }
 
     ClientTrackEffects.EffectState effectStateAt(float tick) {
-        return ClientTrackEffects.sample(effects, tick, bpm);
+        return sampleAt(tick);
     }
+
+    private ClientTrackEffects.EffectState sampleAt(float tick) {
+        return ClientTrackEffects.sample(effects, tick, bpm, 1.0F, 1.0F, beatOrigin);
+    }
+
+    float previewBeatOrigin() { return beatOrigin; }
 
     int previewOwner() { return owner; }
 
@@ -511,7 +642,26 @@ public final class TrackGameplayPreviewScreen extends Screen {
 
     int previewAnimationTriggerLane() { return animationTriggerLane; }
 
-    int previewAnimationHeldMask() { return animationHeldMask; }
+    /**
+     * Every lane the pose counts as held, as the battle hands it to the animation: the hold notes being sung and the
+     * lane keys that are down (ClientBattleController.applyPlayerAnimation, heldMasks | inputHeldMasks). The preview
+     * used to pass the hold notes alone, so a key held on a tap note, or on no note, let the body fall back to idle
+     * once its press's window ran out, and a held lane did not take the body back after a tap on another lane, where
+     * the battle keeps a held key's pose for as long as it is held. Presses need nothing more: every trigger here is a
+     * key going down and nothing is judged, which is what the overload the preview calls says.
+     */
+    int previewAnimationHeldMask() { return heldLanes(animationHeldMask, laneDown); }
+
+    /** The hold-note lanes and the lanes whose key is down, as one mask of the four lanes; pure for preview-animation. */
+    static int heldLanes(int holdNoteLanes, boolean[] keysDown) {
+        int mask = holdNoteLanes & 15;
+        for (int lane = 0; lane < keysDown.length && lane < 4; lane++) {
+            if (keysDown[lane]) {
+                mask |= 1 << lane;
+            }
+        }
+        return mask;
+    }
 
     int previewBpm() { return bpm; }
 
@@ -557,7 +707,7 @@ public final class TrackGameplayPreviewScreen extends Screen {
 
     double currentFovOffset() {
         float time = currentTick();
-        ClientTrackEffects.EffectState state = ClientTrackEffects.sample(effects, time, bpm);
+        ClientTrackEffects.EffectState state = sampleAt(time);
         return beatPulse(time) * (2.8D + state.pulse() * 8.0D);
     }
 
@@ -566,16 +716,15 @@ public final class TrackGameplayPreviewScreen extends Screen {
             return 0.0F;
         }
         float beatTicks = 20.0F * 60.0F / bpm;
-        return Mth.clamp(1.0F - (time % beatTicks) / beatTicks * 4.0F, 0.0F, 1.0F);
+        float sinceBeatOne = time - beatOrigin;
+        float within = beatOrigin == 0.0F ? time % beatTicks
+                : sinceBeatOne - (float) Math.floor(sinceBeatOne / beatTicks) * beatTicks;
+        return Mth.clamp(1.0F - within / beatTicks * 4.0F, 0.0F, 1.0F);
     }
 
     private static String formatTime(int tick) {
         int seconds = Math.max(0, tick) / 20;
         return String.format(java.util.Locale.ROOT, "%02d:%02d", seconds / 60, seconds % 60);
-    }
-
-    private static int argb(int alpha, int red, int green, int blue) {
-        return (Mth.clamp(alpha, 0, 255) << 24) | (red << 16) | (green << 8) | blue;
     }
 
     private void stopSound() {
@@ -597,8 +746,153 @@ public final class TrackGameplayPreviewScreen extends Screen {
 
     @Override
     public void removed() {
-        stopSound();
+        // The colour picker draws and ticks this screen behind itself, so the song plays on while a colour is chosen.
+        if (!choosingBackground) {
+            stopSound();
+        }
         super.removed();
+    }
+
+    /** The fill behind a preview with no world to show, as the player last chose it. */
+    static int background() {
+        if (backgroundColor == null) {
+            backgroundColor = readBackground();
+        }
+        return backgroundColor;
+    }
+
+    /** A missing or damaged settings file is the default colour, never a reason the preview cannot open. */
+    private static int readBackground() {
+        try {
+            Path file = settingsFile();
+            if (Files.isRegularFile(file)) {
+                JsonElement root = JsonParser.parseString(Files.readString(file));
+                JsonElement value = root.isJsonObject() ? root.getAsJsonObject().get("background") : null;
+                if (value != null && value.isJsonPrimitive()) {
+                    String hex = value.getAsString().trim();
+                    hex = hex.startsWith("#") ? hex.substring(1) : hex;
+                    if (hex.length() == 6) {
+                        return 0xFF000000 | Integer.parseInt(hex, 16);
+                    }
+                }
+            }
+        } catch (IOException | RuntimeException exception) {
+            MusicBattleMod.LOGGER.warn("Editor preview background unreadable, using the default: {}", exception.toString());
+        }
+        return DEFAULT_BACKGROUND;
+    }
+
+    private static void saveBackground(int color) {
+        backgroundColor = 0xFF000000 | color;
+        try {
+            Path file = settingsFile();
+            Files.createDirectories(file.getParent());
+            JsonObject root = new JsonObject();
+            root.addProperty("background", String.format(Locale.ROOT, "#%06X", color & 0xFFFFFF));
+            Files.writeString(file, root.toString());
+        } catch (IOException | RuntimeException exception) {
+            // The colour still applies for this session; only remembering it failed.
+            MusicBattleMod.LOGGER.warn("Could not save the editor preview background: {}", exception.toString());
+        }
+    }
+
+    private static Path settingsFile() {
+        return FMLPaths.CONFIGDIR.get().resolve(SETTINGS_FILE).toAbsolutePath().normalize();
+    }
+
+    /**
+     * Back to the editor, drawn as FancyButton draws a button. On a screen too narrow for the whole label (see
+     * {@link #corners}) it shows the toolkit's arrow and the short "Back" instead; the narrator still reads the whole
+     * label either way.
+     */
+    private final class BackButton extends AbstractButton {
+        private final boolean compact;
+
+        private BackButton(int x, int y, int width, int height, boolean compact) {
+            super(x, y, width, height, BACK);
+            this.compact = compact;
+        }
+
+        @Override
+        public void onPress() {
+            onClose();
+        }
+
+        @Override
+        protected void renderWidget(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
+            boolean hovered = isHoveredOrFocused();
+            if (hovered && this.active) {
+                HandCursor.request(HandCursor.Kind.HAND);
+            }
+            Rect rect = Rect.of(getX(), getY(), getWidth(), getHeight());
+            WorkshopDraw.button(graphics, rect, WorkshopDraw.ButtonStyle.SECONDARY, hovered, this.active);
+            int colour = !this.active ? Palette.TEXT_MUTE : hovered ? Palette.TEXT_1 : Palette.TEXT_2;
+            float capY = TextStyles.centeredCapY(TextStyle.BODY, rect.y(), rect.h());
+            String label = (compact ? BACK_SHORT : getMessage()).getString();
+            float room = Math.max(4F, rect.w() - LABEL_PAD * 2 - (compact ? ARROW + ARROW_GAP : 0F));
+            String fitted = TextFit.ellipsize(TextStyles.measurer(), label, TextStyle.BODY, room);
+            float textWidth = TextFit.width(TextStyles.measurer(), fitted, TextStyle.BODY);
+            float left = rect.centerX() - (textWidth + (compact ? ARROW + ARROW_GAP : 0F)) * 0.5F;
+            if (compact) {
+                WorkshopDraw.icon(graphics, new Rect(left, rect.centerY() - ARROW * 0.5F, ARROW, ARROW), UiIcon.ARROW_LEFT,
+                        colour);
+                left += ARROW + ARROW_GAP;
+            }
+            TextStyles.queue(graphics, TextStyles.text(fitted, TextStyle.BODY).getVisualOrderText(), left, capY, colour);
+        }
+
+        @Override
+        protected void updateWidgetNarration(NarrationElementOutput output) {
+            defaultButtonNarrationText(output);
+        }
+    }
+
+    /**
+     * The background colour as a swatch beside its name; a press opens the exact colour picker, which shows each colour
+     * on this preview live behind itself. Offered only where no world is drawn, the one case the colour is used.
+     */
+    private final class BackgroundButton extends AbstractButton {
+        /** False on a screen too narrow for the label: the swatch alone, centred; the narrator still reads the label. */
+        private final boolean labelled;
+
+        private BackgroundButton(int x, int y, int width, int height, boolean labelled) {
+            super(x, y, width, height, BACKGROUND);
+            this.labelled = labelled;
+        }
+
+        @Override
+        public void onPress() {
+            choosingBackground = true;
+            minecraft.setScreen(new ExactColorPickerScreen(TrackGameplayPreviewScreen.this,
+                    Component.translatable("music_battle.l10n.editor.preview_background_title"), background(),
+                    color -> backgroundColor = 0xFF000000 | color, TrackGameplayPreviewScreen::saveBackground));
+        }
+
+        @Override
+        protected void renderWidget(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
+            boolean hovered = isHoveredOrFocused();
+            if (hovered && this.active) {
+                HandCursor.request(HandCursor.Kind.HAND);
+            }
+            WorkshopDraw.button(graphics, Rect.of(getX(), getY(), getWidth(), getHeight()), WorkshopDraw.ButtonStyle.SECONDARY,
+                    hovered, this.active);
+            float swatch = getHeight() - 8;
+            float swatchX = labelled ? getX() + SWATCH_PAD : getX() + (getWidth() - swatch) * 0.5F;
+            float swatchY = getY() + 4;
+            RoundedRect.fill(graphics, swatchX, swatchY, swatch, swatch, Palette.RADIUS_SM, background());
+            RoundedRect.stroke(graphics, swatchX, swatchY, swatch, swatch, Palette.RADIUS_SM, 1.0F, Palette.TEXT_2);
+            if (labelled) {
+                float textLeft = swatchX + swatch + SWATCH_PAD;
+                TextStyles.queue(graphics, TextStyles.ellipsize(TextStyles.styled(getMessage(), TextStyle.BODY),
+                        getX() + getWidth() - LABEL_PAD - textLeft), textLeft,
+                        TextStyles.centeredCapY(TextStyle.BODY, getY(), getHeight()), hovered ? Palette.TEXT_1 : Palette.TEXT_2);
+            }
+        }
+
+        @Override
+        protected void updateWidgetNarration(NarrationElementOutput output) {
+            defaultButtonNarrationText(output);
+        }
     }
 
     @Override

@@ -9,7 +9,7 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import ru.gora.musicbattle.MusicBattleMod;
 
 /**
- * One page of server comments, newest first (spec 06 section 9.2). Each row carries the author's signed skin
+ * One page of server comments, newest first. Each row carries the author's signed skin
  * textures when the server had them, so {@code ui.SkinHead} can draw a secure head; on an offline-mode server
  * {@code onlineMode} is false and the screen says that names are not verified.
  */

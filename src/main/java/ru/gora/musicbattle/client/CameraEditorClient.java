@@ -1,12 +1,15 @@
 package ru.gora.musicbattle.client;
 
 import com.mojang.blaze3d.platform.InputConstants;
+import com.mojang.blaze3d.systems.RenderSystem;
+import java.util.List;
 import java.util.UUID;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.screens.PauseScreen;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
+import net.minecraft.util.FormattedCharSequence;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.phys.Vec3;
@@ -18,6 +21,13 @@ import net.neoforged.neoforge.client.event.ScreenEvent;
 import net.neoforged.neoforge.client.event.ViewportEvent;
 import net.neoforged.neoforge.network.PacketDistributor;
 import org.lwjgl.glfw.GLFW;
+import org.lwjgl.opengl.GL11;
+import ru.gora.musicbattle.client.ui.Palette;
+import ru.gora.musicbattle.client.ui.RoundedRect;
+import ru.gora.musicbattle.client.ui.TextStyle;
+import ru.gora.musicbattle.client.ui.TextStyles;
+import ru.gora.musicbattle.network.CameraFollowModePayload;
+import ru.gora.musicbattle.network.CameraFollowStatePayload;
 import ru.gora.musicbattle.network.CloseCameraEditorPayload;
 import ru.gora.musicbattle.network.CameraEditorClosedPayload;
 import ru.gora.musicbattle.network.OpenCameraEditorPayload;
@@ -26,6 +36,13 @@ import ru.gora.musicbattle.data.CameraCollision;
 
 public final class CameraEditorClient {
     private static final float ROTATION_DEGREES_PER_TICK = 1.25F;
+    /** The hint panel: its widest, its distance from the screen's top and edges, and its inner padding. */
+    private static final float HINT_MAX_WIDTH = 440.0F;
+    private static final float HINT_MARGIN = 8.0F;
+    private static final float HINT_PADDING = 10.0F;
+    private static final float HINT_PILL_HEIGHT = 15.0F;
+    private static final float HINT_PILL_PADDING = 7.0F;
+    private static final float HINT_GAP = 4.0F;
     private static boolean active;
     private static OpenCameraEditorPayload session;
     private static Vec3 position = Vec3.ZERO;
@@ -45,6 +62,11 @@ public final class CameraEditorClient {
     private static boolean resumeSoundsAfterCancelledPause;
     private static boolean finishKeyDown;
     private static boolean resetKeyDown;
+    private static boolean followKeyDown;
+    /** The camera block's follow mode as the server last confirmed it. */
+    private static boolean followPlayers;
+    /** A switch was asked for and the server has not answered yet; the panel shows the mode dimmed meanwhile. */
+    private static boolean followPending;
     private static boolean mouseModeKeyDown;
     private static boolean mouseLookEnabled = true;
     private static boolean mousePositionValid;
@@ -81,6 +103,9 @@ public final class CameraEditorClient {
         active = true;
         session = payload;
         resetPending = false;
+        // The server sends the block's follow mode right after this payload; until then nothing is claimed.
+        followPlayers = false;
+        followPending = true;
         applyTransform(payload);
         minecraft.setScreen(null);
         if (minecraft.player != null) {
@@ -93,6 +118,7 @@ public final class CameraEditorClient {
         finishKeyDown = InputConstants.isKeyDown(window, GLFW.GLFW_KEY_ENTER)
                 || InputConstants.isKeyDown(window, GLFW.GLFW_KEY_KP_ENTER);
         resetKeyDown = InputConstants.isKeyDown(window, GLFW.GLFW_KEY_R);
+        followKeyDown = InputConstants.isKeyDown(window, GLFW.GLFW_KEY_F);
         mouseModeKeyDown = keyDown(minecraft, MusicBattleKeys.CAMERA_EDITOR_MOUSE_MODE);
         mouseLookEnabled = true;
         applyMouseMode(minecraft);
@@ -125,6 +151,15 @@ public final class CameraEditorClient {
         }
     }
 
+    /** The server's word on the follow mode of the camera being set up. */
+    public static void acceptFollowState(CameraFollowStatePayload payload) {
+        if (!active || session == null || !session.blockPos().equals(payload.blockPos())) {
+            return;
+        }
+        followPlayers = payload.followPlayers();
+        followPending = false;
+    }
+
     public static boolean isActive() {
         return active;
     }
@@ -142,6 +177,9 @@ public final class CameraEditorClient {
         fov = 70.0F;
         finishKeyDown = false;
         resetKeyDown = false;
+        followKeyDown = false;
+        followPlayers = false;
+        followPending = false;
         mouseModeKeyDown = false;
         mouseLookEnabled = true;
         mousePositionValid = false;
@@ -241,6 +279,15 @@ public final class CameraEditorClient {
             position = CameraCollision.resolve(minecraft.level, minecraft.getCameraEntity(), position, desiredPosition);
         }
 
+        boolean followDown = InputConstants.isKeyDown(window, GLFW.GLFW_KEY_F);
+        if (followDown && !followKeyDown && !followPending) {
+            // F, like R and Enter, is read as a physical key: the editor clears every ordinary key mapping each tick
+            // (ClientInputIsolation), so F does not also swap the player's hands while the camera is being set up.
+            followPending = true;
+            PacketDistributor.sendToServer(new CameraFollowModePayload(session.blockPos(), !followPlayers));
+        }
+        followKeyDown = followDown;
+
         boolean resetDown = InputConstants.isKeyDown(window, GLFW.GLFW_KEY_R);
         if (resetDown && !resetKeyDown) {
             resetKeyDown = true;
@@ -310,34 +357,106 @@ public final class CameraEditorClient {
         return true;
     }
 
+    /**
+     * The setup hints, drawn last in the GUI over a cleared depth buffer.
+     *
+     * <p>Everything else in the GUI is drawn in front of this event's depth: each HUD layer sits 200 units nearer than
+     * the one before, and an FX row that covers the interface another 400. A DJ set or a battle nearby therefore hid
+     * the hints behind its flash, vignette or cinema bars even though they were drawn after them. With the depth
+     * cleared they lie on top of all of it; nothing in the GUI is drawn after this event.
+     */
     public static void render(RenderGuiEvent.Post event) {
         if (!active) {
             return;
         }
         Minecraft minecraft = Minecraft.getInstance();
         GuiGraphics graphics = event.getGuiGraphics();
-        int width = minecraft.getWindow().getGuiScaledWidth();
-        int panelWidth = Math.min(760, width - 16);
-        int left = (width - panelWidth) / 2;
-        graphics.fill(left, 8, left + panelWidth, 60, 0xD914242E);
-        graphics.fill(left, 8, left + panelWidth, 10, 0xFF54D7F3);
-        graphics.drawCenteredString(minecraft.font,
-                Component.translatable("hud.music_battle.camera_editor.title", Math.round(fov)),
-                width / 2, 14, 0xFFFFFFFF);
-        drawCenteredFitted(graphics, minecraft,
-                Component.translatable("hud.music_battle.camera_editor.guide_move"),
-                width, 26, panelWidth - 12, 0xFFD9F6FF);
-        drawCenteredFitted(graphics, minecraft,
-                Component.translatable("hud.music_battle.camera_editor.guide_actions",
-                        MusicBattleKeys.CAMERA_EDITOR_MOUSE_MODE.getTranslatedKeyMessage()),
-                width, 37, panelWidth - 12, 0xFFB5D7E2);
-        Component mouseMode = Component.translatable(
-                "hud.music_battle.camera_editor.mouse_mode",
+        graphics.flush();
+        RenderSystem.clear(GL11.GL_DEPTH_BUFFER_BIT, Minecraft.ON_OSX);
+        drawHints(graphics, minecraft.getWindow().getGuiScaledWidth());
+        graphics.flush();
+    }
+
+    /** The hint panel in the Workshop's look: a dark rounded card, the title, the keys, and the two modes as pills. */
+    private static void drawHints(GuiGraphics g, int screenWidth) {
+        float width = Math.min(HINT_MAX_WIDTH, screenWidth - HINT_MARGIN * 2.0F);
+        float inner = width - HINT_PADDING * 2.0F;
+        if (inner <= 0.0F) {
+            return;
+        }
+        float x = (screenWidth - width) * 0.5F;
+        float top = HINT_MARGIN;
+        Component title = TextStyles.translated("hud.music_battle.camera_editor.title", TextStyle.TITLE,
+                Integer.toString(Math.round(fov)));
+        List<FormattedCharSequence> move = TextStyles.wrap(
+                TextStyles.translated("hud.music_battle.camera_editor.guide_move", TextStyle.CAPTION), inner);
+        List<FormattedCharSequence> actions = TextStyles.wrap(TextStyles.styled(Component.translatable(
+                "hud.music_battle.camera_editor.guide_actions",
+                MusicBattleKeys.CAMERA_EDITOR_MOUSE_MODE.getTranslatedKeyMessage()), TextStyle.CAPTION), inner);
+        Component mouseMode = TextStyles.styled(Component.translatable("hud.music_battle.camera_editor.mouse_mode",
                 Component.translatable(mouseLookEnabled
                         ? "hud.music_battle.camera_editor.mouse_look"
-                        : "hud.music_battle.camera_editor.cursor_free"));
-        drawCenteredFitted(graphics, minecraft, mouseMode,
-                width, 48, panelWidth - 12, mouseLookEnabled ? 0xFF82F6B0 : 0xFFFFD37A);
+                        : "hud.music_battle.camera_editor.cursor_free")), TextStyle.LABEL);
+        Component follow = TextStyles.styled(Component.translatable("hud.music_battle.camera_editor.follow",
+                Component.translatable(followPlayers
+                        ? "hud.music_battle.camera_editor.follow_on"
+                        : "hud.music_battle.camera_editor.follow_off")), TextStyle.LABEL);
+        List<FormattedCharSequence> followHint = TextStyles.wrap(TextStyles.translated(followPlayers
+                ? "hud.music_battle.camera_editor.follow_hint_on"
+                : "hud.music_battle.camera_editor.follow_hint_off", TextStyle.CAPTION), inner);
+
+        float caption = TextStyle.CAPTION.lineHeight();
+        float mouseWidth = pillWidth(mouseMode, true, inner);
+        float followWidth = pillWidth(follow, false, inner);
+        boolean pillsShareRow = mouseWidth + HINT_GAP + followWidth <= inner;
+        float pillsHeight = pillsShareRow ? HINT_PILL_HEIGHT : HINT_PILL_HEIGHT * 2.0F + HINT_GAP;
+        float height = HINT_PADDING + TextStyle.TITLE.lineHeight() + HINT_GAP
+                + (move.size() + actions.size()) * caption + HINT_GAP * 2.0F
+                + pillsHeight + HINT_GAP + followHint.size() * caption + HINT_PADDING;
+
+        RoundedRect.shadow(g, x, top, width, height, Palette.RADIUS_LG, 10.0F, Palette.SHADOW_LIFTED);
+        RoundedRect.fill(g, x, top, width, height, Palette.RADIUS_LG, Palette.withAlpha(Palette.BG_1, 0.94F));
+        RoundedRect.stroke(g, x, top, width, height, Palette.RADIUS_LG, 1.0F, Palette.LINE);
+        float y = top + HINT_PADDING;
+        RoundedRect.pill(g, x + HINT_PADDING, y + 1.0F, 3.0F, TextStyle.TITLE.capHeight(), Palette.ACCENT);
+        TextStyles.queue(g, TextStyles.ellipsize(title, inner - 8.0F), x + HINT_PADDING + 8.0F, y, Palette.TEXT_1);
+        y += TextStyle.TITLE.lineHeight() + HINT_GAP;
+        y += TextStyles.queueLines(g, move, x + HINT_PADDING, y, caption, Palette.TEXT_2);
+        y += TextStyles.queueLines(g, actions, x + HINT_PADDING, y, caption, Palette.TEXT_3);
+        y += HINT_GAP * 2.0F;
+        float pillX = x + HINT_PADDING;
+        drawPill(g, pillX, y, mouseWidth, mouseMode, Palette.BG_3, Palette.TEXT_2,
+                mouseLookEnabled ? Palette.ACCENT : Palette.WARN);
+        if (pillsShareRow) {
+            pillX += mouseWidth + HINT_GAP;
+        } else {
+            y += HINT_PILL_HEIGHT + HINT_GAP;
+        }
+        float followAlpha = followPending ? 0.55F : 1.0F;
+        drawPill(g, pillX, y, followWidth, follow,
+                Palette.fade(followPlayers ? Palette.ACCENT_STRONG : Palette.BG_3, followAlpha),
+                Palette.fade(followPlayers ? Palette.TEXT_1 : Palette.TEXT_2, followAlpha), 0);
+        y += HINT_PILL_HEIGHT + HINT_GAP;
+        TextStyles.queueLines(g, followHint, x + HINT_PADDING, y, caption, Palette.TEXT_3);
+    }
+
+    private static float pillWidth(Component label, boolean dot, float maxWidth) {
+        float width = TextStyles.width(label) + HINT_PILL_PADDING * 2.0F + (dot ? 9.0F : 0.0F);
+        return Math.min(width, maxWidth);
+    }
+
+    /** A rounded pill with its label, and a small coloured dot in front when {@code dotColor} is not zero. */
+    private static void drawPill(GuiGraphics g, float x, float y, float width, Component label,
+                                 int background, int textColor, int dotColor) {
+        RoundedRect.pill(g, x, y, width, HINT_PILL_HEIGHT, background);
+        float textX = x + HINT_PILL_PADDING;
+        if (dotColor != 0) {
+            RoundedRect.circle(g, textX + 2.5F, y + HINT_PILL_HEIGHT * 0.5F, 2.5F, dotColor);
+            textX += 9.0F;
+        }
+        float room = x + width - HINT_PILL_PADDING - textX;
+        TextStyles.queue(g, TextStyles.ellipsize(label, room), textX,
+                TextStyles.centeredCapY(TextStyle.LABEL, y, HINT_PILL_HEIGHT), textColor);
     }
 
     public static void hideHand(RenderHandEvent event) {
@@ -542,23 +661,5 @@ public final class CameraEditorClient {
         mouseLookEnabled = true;
         mouseModeKeyDown = false;
         mousePositionValid = false;
-    }
-
-    private static void drawCenteredFitted(GuiGraphics graphics, Minecraft minecraft, Component text,
-                                           int screenWidth, int y, int availableWidth, int color) {
-        int textWidth = minecraft.font.width(text);
-        float scale = textWidth <= availableWidth || textWidth <= 0
-                ? 1.0F
-                : Math.max(0.65F, availableWidth / (float) textWidth);
-        graphics.pose().pushPose();
-        graphics.pose().scale(scale, scale, 1.0F);
-        graphics.drawCenteredString(
-                minecraft.font,
-                text,
-                Math.round(screenWidth * 0.5F / scale),
-                Math.round(y / scale),
-                color
-        );
-        graphics.pose().popPose();
     }
 }

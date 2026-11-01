@@ -5,7 +5,7 @@ import ru.gora.musicbattle.client.ui.TextMeasurer;
 import ru.gora.musicbattle.client.ui.TextStyle;
 
 /**
- * The set page (spec 06 section 6.2, lazer's {@code BeatmapSetOverlay}): a header over the cover with the chart
+ * The set page (lazer's {@code BeatmapSetOverlay}): a header over the cover with the chart
  * tiles, title, artist, mapper card, availability banner and the action buttons; a right column with the status pill,
  * the preview bar, basic stats, attribute bars and the user-rating box; then the info section with description,
  * metadata and the charts table. Laid out in the scroll container's coordinates; comments follow underneath.
@@ -44,10 +44,61 @@ public final class SetPageLayout {
                         List<Stat> metadata, List<Stat> basicStats, List<Attribute> attributes, String ratingAverage,
                         List<Integer> ratingHistogram, String ratingNegative, String ratingPositive, Integer myRating,
                         boolean canRate, String cannotRate, String audioLine, List<ChartRow> charts, boolean local,
-                        boolean previewPlaying, int selectedChart) {
+                        boolean previewPlaying, int selectedChart, boolean serverTrack) {
+        public State(String title, String artist, List<Badge> badges, String statusLabel, String chartName,
+                     List<Double> chartStars, String mapper, String submitted, String updated, String counters,
+                     String availability, String installLabel, String installSub, boolean canInstall, boolean favourited,
+                     boolean canFavourite, boolean installing, float installProgress, String description,
+                     boolean descriptionSpoiler, String credits, String featuredNote,
+                     List<Stat> metadata, List<Stat> basicStats, List<Attribute> attributes, String ratingAverage,
+                     List<Integer> ratingHistogram, String ratingNegative, String ratingPositive, Integer myRating,
+                     boolean canRate, String cannotRate, String audioLine, List<ChartRow> charts, boolean local,
+                     boolean previewPlaying, int selectedChart) {
+            this(title, artist, badges, statusLabel, chartName, chartStars, mapper, submitted, updated, counters, availability,
+                    installLabel, installSub, canInstall, favourited, canFavourite, installing, installProgress, description,
+                    descriptionSpoiler, credits, featuredNote, metadata, basicStats, attributes, ratingAverage, ratingHistogram,
+                    ratingNegative, ratingPositive, myRating, canRate, cannotRate, audioLine, charts, local, previewPlaying,
+                    selectedChart, false);
+        }
+    }
+
+    /**
+     * The page of one of the server's own beatmaps (the Server tab's {@code track_<id>} cards): made in the editor or
+     * put there by the operator, never published to the Workshop. It shows what the server's list says about it - its
+     * kind, who made it, its BPM, its length and its description - and none of the Workshop's parts: no status pill,
+     * download and favourite counters, rating box, attribute bars, star tiles or difficulty table, and no favourite,
+     * browser, settings or preview controls, because none of them has anything behind it for such a beatmap. The page
+     * used to fill them with the Workshop's zeros: BPM 0, length 0:00, a COMMUNITY pill and "0 downloads".
+     *
+     * @param kindLabel the card's own pill ("SERVER", "PLAYERS"), shown as the page's one badge
+     * @param byline    "mapped by …" as the card writes it, or empty when the server knows no maker
+     * @param bpm       0 when the server does not know it; the stat is then left out
+     */
+    public static State serverTrack(Tr tr, String title, String kindKey, String kindLabel, String byline, int bpm,
+                                    long durationMs, String description, String installLabel) {
+        List<Stat> basic = new java.util.ArrayList<>();
+        basic.add(new Stat(tr.get(WorkshopStrings.KEY + "set.length"),
+                WorkshopStrings.duration(Math.max(0L, durationMs))));
+        if (bpm > 0) {
+            basic.add(new Stat(tr.get(WorkshopStrings.KEY + "set.bpm"), String.valueOf(bpm)));
+        }
+        List<Badge> badges = kindLabel == null || kindLabel.isBlank() ? List.of() : List.of(new Badge(kindKey, kindLabel));
+        return new State(title, "", badges, "", "", List.of(), byline == null ? "" : byline, "", "", "", "", installLabel,
+                "", false, false, false, false, 0F, description == null ? "" : description, false, "", null, List.of(),
+                List.copyOf(basic), List.of(), "", List.of(), "", "", null, false, null, "", List.of(), false, false, 0, true);
     }
 
     private SetPageLayout() {
+    }
+
+    /** Whether every basic stat's label and value fit {@code room}. */
+    private static boolean statsFit(TextMeasurer measurer, List<Stat> stats, float room) {
+        for (Stat stat : stats) {
+            if (!TextFit.fits(measurer, stat.label(), TextStyle.CAPTION, room) || !TextFit.fits(measurer, stat.value(), TextStyle.LABEL, room)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /** Moves the boxes laid out in {@code [from, to)} down by {@code dy}. */
@@ -91,10 +142,14 @@ public final class SetPageLayout {
         if (!state.chartStars().isEmpty()) {
             hy += tile + 3;
         }
-        layout.label("set.chartname", HEADER, left, hy, leftInner, state.chartName(), TextStyle.STRONG);
-        hy += TextStyle.STRONG.capHeight() + 3;
-        layout.label("set.counters", HEADER, left, hy, leftInner, state.counters(), TextStyle.CAPTION);
-        hy += TextStyle.CAPTION.capHeight() + 5;
+        if (!state.serverTrack()) {
+            // A server beatmap has one chart, named as the beatmap is, and nothing the Workshop counts: the line over
+            // the title repeated the title and the counters read "0 downloads 0 favourites".
+            layout.label("set.chartname", HEADER, left, hy, leftInner, state.chartName(), TextStyle.STRONG);
+            hy += TextStyle.STRONG.capHeight() + 3;
+            layout.label("set.counters", HEADER, left, hy, leftInner, state.counters(), TextStyle.CAPTION);
+            hy += TextStyle.CAPTION.capHeight() + 5;
+        }
 
         float titleHeight = layout.paragraph("set.title", HEADER, left, hy, leftInner, state.title(), TextStyle.DISPLAY,
                 Metrics.lineHeight(TextStyle.DISPLAY), 2);
@@ -118,19 +173,28 @@ public final class SetPageLayout {
         layout.label("set.artist", HEADER, left, hy, leftInner, state.artist(), TextStyle.TITLE);
         hy += TextStyle.TITLE.capHeight() + 6;
 
-        float avatar = compact ? 18F : Metrics.AVATAR;
-        layout.add("set.avatar", HEADER, Layout.Kind.IMAGE, new Rect(left, hy, avatar, avatar));
-        float mapperX = left + avatar + 5;
-        float mapperRoom = Math.max(30F, leftInner - avatar - 5);
-        layout.label("set.mapper", HEADER, mapperX, hy, mapperRoom, state.mapper(), TextStyle.CAPTION);
-        layout.label("set.submitted", HEADER, mapperX, hy + TextStyle.CAPTION.capHeight() + 3, mapperRoom, state.submitted(),
-                TextStyle.CAPTION);
-        float mapperBottom = hy + Math.max(avatar, (TextStyle.CAPTION.capHeight() + 3) * 2 + TextStyle.CAPTION.capHeight());
-        if (state.updated() != null && !state.updated().isEmpty()) {
-            layout.label("set.updated", HEADER, mapperX, hy + (TextStyle.CAPTION.capHeight() + 3) * 2, mapperRoom, state.updated(),
+        if (state.serverTrack()) {
+            // No Workshop account stands behind a server beatmap, so there is no avatar to draw: only the byline, and
+            // nothing at all when the server knows no maker (an empty "mapped by" under a blank circle, before).
+            if (state.mapper() != null && !state.mapper().isBlank()) {
+                layout.label("set.mapper", HEADER, left, hy, leftInner, state.mapper(), TextStyle.CAPTION);
+                hy += TextFit.boxHeight(TextStyle.CAPTION) + 4;
+            }
+        } else {
+            float avatar = compact ? 18F : Metrics.AVATAR;
+            layout.add("set.avatar", HEADER, Layout.Kind.IMAGE, new Rect(left, hy, avatar, avatar));
+            float mapperX = left + avatar + 5;
+            float mapperRoom = Math.max(30F, leftInner - avatar - 5);
+            layout.label("set.mapper", HEADER, mapperX, hy, mapperRoom, state.mapper(), TextStyle.CAPTION);
+            layout.label("set.submitted", HEADER, mapperX, hy + TextStyle.CAPTION.capHeight() + 3, mapperRoom, state.submitted(),
                     TextStyle.CAPTION);
+            float mapperBottom = hy + Math.max(avatar, (TextStyle.CAPTION.capHeight() + 3) * 2 + TextStyle.CAPTION.capHeight());
+            if (state.updated() != null && !state.updated().isEmpty()) {
+                layout.label("set.updated", HEADER, mapperX, hy + (TextStyle.CAPTION.capHeight() + 3) * 2, mapperRoom,
+                        state.updated(), TextStyle.CAPTION);
+            }
+            hy = mapperBottom + 4;
         }
-        hy = mapperBottom + 4;
 
         if (state.availability() != null && !state.availability().isEmpty()) {
             float bannerTop = hy;
@@ -152,8 +216,10 @@ public final class SetPageLayout {
         }
         float square = actionH;
         float bx = left;
-        layout.add("set.favourite", HEADER, Layout.Kind.BUTTON, new Rect(bx, hy, square, actionH));
-        bx += square + Metrics.GAP_SM;
+        if (!state.serverTrack()) {
+            layout.add("set.favourite", HEADER, Layout.Kind.BUTTON, new Rect(bx, hy, square, actionH));
+            bx += square + Metrics.GAP_SM;
+        }
         float installWidth = Math.min(Math.max(70F, leftInner * 0.45F), leftInner - (square + Metrics.GAP_SM) * 3);
         Rect install = new Rect(bx, hy, Math.max(50F, installWidth), actionH);
         layout.add("set.install", HEADER, Layout.Kind.BUTTON, install);
@@ -171,9 +237,12 @@ public final class SetPageLayout {
                     new Rect(install.x() + 1, install.bottom() - 3, install.w() - 2, 2));
         }
         bx = install.right() + Metrics.GAP_SM;
-        layout.add("set.browser", HEADER, Layout.Kind.BUTTON, new Rect(bx, hy, square, actionH));
-        bx += square + Metrics.GAP_SM;
-        layout.add("set.more", HEADER, Layout.Kind.BUTTON, new Rect(bx, hy, square, actionH));
+        if (!state.serverTrack()) {
+            // The Workshop's page in a browser and the set's own menu: a server beatmap has neither.
+            layout.add("set.browser", HEADER, Layout.Kind.BUTTON, new Rect(bx, hy, square, actionH));
+            bx += square + Metrics.GAP_SM;
+            layout.add("set.more", HEADER, Layout.Kind.BUTTON, new Rect(bx, hy, square, actionH));
+        }
         hy += actionH + pad;
         float headerHeight = hy - headerTop;
         int headerEnd = layout.boxes().size();
@@ -186,19 +255,26 @@ public final class SetPageLayout {
         float rightLeft = rightX + (twoColumns ? 0 : pad);
         layout.add(RIGHT, "", Layout.Kind.PANEL, new Rect(rightX, rightTop, rightWidth, buttonH));
 
-        float pillWidth = Math.min(rightInner, TextFit.width(measurer, state.statusLabel(), TextStyle.PILL) + 24);
-        Rect statusPill = new Rect(rightLeft + rightInner - pillWidth, ry, pillWidth, Metrics.PILL_H + 3);
-        layout.add("set.status", RIGHT, Layout.Kind.PILL, statusPill);
-        layout.labelCentered("set.status.text", "set.status", statusPill.centerX(),
-                ShellLayout.capY(TextStyle.PILL, statusPill.y(), statusPill.h()), pillWidth - 6, state.statusLabel(), TextStyle.PILL);
-        ry = statusPill.bottom() + Metrics.GAP_SM;
+        if (!state.serverTrack()) {
+            // The Workshop's status and its preview clip; a server beatmap is neither ranked there nor previewed.
+            float pillWidth = Math.min(rightInner, TextFit.width(measurer, state.statusLabel(), TextStyle.PILL) + 24);
+            Rect statusPill = new Rect(rightLeft + rightInner - pillWidth, ry, pillWidth, Metrics.PILL_H + 3);
+            layout.add("set.status", RIGHT, Layout.Kind.PILL, statusPill);
+            layout.labelCentered("set.status.text", "set.status", statusPill.centerX(),
+                    ShellLayout.capY(TextStyle.PILL, statusPill.y(), statusPill.h()), pillWidth - 6, state.statusLabel(),
+                    TextStyle.PILL);
+            ry = statusPill.bottom() + Metrics.GAP_SM;
 
-        Rect preview = new Rect(rightLeft, ry, rightInner, Math.max(16F, buttonH));
-        layout.add("set.preview", RIGHT, Layout.Kind.BUTTON, preview);
-        layout.add("set.preview.bar", "set.preview", Layout.Kind.BAR, new Rect(preview.x(), preview.bottom() - 2, preview.w(), 2));
-        ry = preview.bottom() + Metrics.GAP_SM;
+            Rect preview = new Rect(rightLeft, ry, rightInner, Math.max(16F, buttonH));
+            layout.add("set.preview", RIGHT, Layout.Kind.BUTTON, preview);
+            layout.add("set.preview.bar", "set.preview", Layout.Kind.BAR,
+                    new Rect(preview.x(), preview.bottom() - 2, preview.w(), 2));
+            ry = preview.bottom() + Metrics.GAP_SM;
+        }
 
-        int statColumns = rightInner >= 150 ? 4 : 2;
+        // Four stats to a row only while every label and number fits a quarter: "Удержания" did not, and read
+        // "Удержа…" beside the cover on every window wide enough for two columns.
+        int statColumns = rightInner >= 150 && statsFit(measurer, state.basicStats(), rightInner / 4F - 3F) ? 4 : 2;
         float statWidth = rightInner / statColumns;
         for (int i = 0; i < state.basicStats().size(); i++) {
             Stat stat = state.basicStats().get(i);
@@ -228,54 +304,58 @@ public final class SetPageLayout {
         }
         ry += state.attributes().size() * (Metrics.OPTION_H + 1) + Metrics.GAP_SM;
 
-        // User rating: average, the split bar with its counts, the spread histogram and the 10-segment input.
-        float ratingTop = ry;
-        layout.add("set.rating", RIGHT, Layout.Kind.PANEL, new Rect(rightLeft, ratingTop, rightInner, 10));
-        float rty = ratingTop + 4;
-        layout.labelCentered("set.rating.title", "set.rating", rightLeft + rightInner * 0.5F, rty, rightInner - 6,
-                tr.get(WorkshopStrings.KEY + "set.rating", state.ratingAverage()), TextStyle.CAPTION);
-        rty += TextFit.boxHeight(TextStyle.CAPTION) + 3;
-        layout.add("set.rating.bar", "set.rating", Layout.Kind.BAR, new Rect(rightLeft + 3, rty, rightInner - 6, 4));
-        rty += 6;
-        layout.label("set.rating.negative", "set.rating", rightLeft + 3, rty, rightInner * 0.4F, state.ratingNegative(),
-                TextStyle.CAPTION);
-        layout.labelRight("set.rating.positive", "set.rating", rightLeft + rightInner - 3, rty, rightInner * 0.4F,
-                state.ratingPositive(), TextStyle.CAPTION);
-        rty += TextFit.boxHeight(TextStyle.CAPTION) + 3;
-        layout.labelCentered("set.rating.spread", "set.rating", rightLeft + rightInner * 0.5F, rty, rightInner - 6,
-                tr.get(WorkshopStrings.KEY + "set.rating_spread"), TextStyle.CAPTION);
-        rty += TextFit.boxHeight(TextStyle.CAPTION) + 3;
-        float histogramHeight = compact ? 14F : 20F;
-        float barStep = (rightInner - 6) / 10F;
-        for (int i = 0; i < 10; i++) {
-            layout.add("set.rating.hist." + i, "set.rating", Layout.Kind.BAR,
-                    new Rect(rightLeft + 3 + i * barStep, rty, Math.max(1F, barStep - 1), histogramHeight));
-        }
-        rty += histogramHeight + 3;
-        if (state.canRate()) {
-            layout.label("set.rating.mine", "set.rating", rightLeft + 3, rty, rightInner - 6,
-                    state.myRating() == null ? tr.get(WorkshopStrings.KEY + "set.rate_hint")
-                            : tr.get(WorkshopStrings.KEY + "set.your_rating", String.valueOf(state.myRating())), TextStyle.CAPTION);
-            rty += TextFit.boxHeight(TextStyle.CAPTION) + 2;
-            float segment = (rightInner - 6) / 10F;
+        if (state.serverTrack()) {
+            ry += pad - Metrics.GAP_SM;
+        } else {
+            // User rating: average, the split bar with its counts, the spread histogram and the 10-segment input.
+            float ratingTop = ry;
+            layout.add("set.rating", RIGHT, Layout.Kind.PANEL, new Rect(rightLeft, ratingTop, rightInner, 10));
+            float rty = ratingTop + 4;
+            layout.labelCentered("set.rating.title", "set.rating", rightLeft + rightInner * 0.5F, rty, rightInner - 6,
+                    tr.get(WorkshopStrings.KEY + "set.rating", state.ratingAverage()), TextStyle.CAPTION);
+            rty += TextFit.boxHeight(TextStyle.CAPTION) + 3;
+            layout.add("set.rating.bar", "set.rating", Layout.Kind.BAR, new Rect(rightLeft + 3, rty, rightInner - 6, 4));
+            rty += 6;
+            layout.label("set.rating.negative", "set.rating", rightLeft + 3, rty, rightInner * 0.4F, state.ratingNegative(),
+                    TextStyle.CAPTION);
+            layout.labelRight("set.rating.positive", "set.rating", rightLeft + rightInner - 3, rty, rightInner * 0.4F,
+                    state.ratingPositive(), TextStyle.CAPTION);
+            rty += TextFit.boxHeight(TextStyle.CAPTION) + 3;
+            layout.labelCentered("set.rating.spread", "set.rating", rightLeft + rightInner * 0.5F, rty, rightInner - 6,
+                    tr.get(WorkshopStrings.KEY + "set.rating_spread"), TextStyle.CAPTION);
+            rty += TextFit.boxHeight(TextStyle.CAPTION) + 3;
+            float histogramHeight = compact ? 14F : 20F;
+            float barStep = (rightInner - 6) / 10F;
             for (int i = 0; i < 10; i++) {
-                layout.add("set.rate." + (i + 1), "set.rating", Layout.Kind.BUTTON,
-                        new Rect(rightLeft + 3 + i * segment, rty, Math.max(1F, segment - 1), Metrics.OPTION_H));
+                layout.add("set.rating.hist." + i, "set.rating", Layout.Kind.BAR,
+                        new Rect(rightLeft + 3 + i * barStep, rty, Math.max(1F, barStep - 1), histogramHeight));
             }
-            rty += Metrics.OPTION_H + 2;
-            if (state.myRating() != null) {
-                layout.label("set.rate.remove", "set.rating", rightLeft + 3, rty, rightInner - 6,
-                        tr.get(WorkshopStrings.KEY + "set.remove_rating"), TextStyle.LABEL);
-                rty += TextFit.boxHeight(TextStyle.LABEL) + 2;
+            rty += histogramHeight + 3;
+            if (state.canRate()) {
+                layout.label("set.rating.mine", "set.rating", rightLeft + 3, rty, rightInner - 6,
+                        state.myRating() == null ? tr.get(WorkshopStrings.KEY + "set.rate_hint")
+                                : tr.get(WorkshopStrings.KEY + "set.your_rating", String.valueOf(state.myRating())), TextStyle.CAPTION);
+                rty += TextFit.boxHeight(TextStyle.CAPTION) + 2;
+                float segment = (rightInner - 6) / 10F;
+                for (int i = 0; i < 10; i++) {
+                    layout.add("set.rate." + (i + 1), "set.rating", Layout.Kind.BUTTON,
+                            new Rect(rightLeft + 3 + i * segment, rty, Math.max(1F, segment - 1), Metrics.OPTION_H));
+                }
+                rty += Metrics.OPTION_H + 2;
+                if (state.myRating() != null) {
+                    layout.label("set.rate.remove", "set.rating", rightLeft + 3, rty, rightInner - 6,
+                            tr.get(WorkshopStrings.KEY + "set.remove_rating"), TextStyle.LABEL);
+                    rty += TextFit.boxHeight(TextStyle.LABEL) + 2;
+                }
+            } else if (state.cannotRate() != null && !state.cannotRate().isEmpty()) {
+                // The site refuses a rating with a reason of its own - sign in, your own set, an account that is too new -
+                // and the box used to drop its input without a word, so the reader was left guessing what went wrong.
+                rty += layout.paragraph("set.rating.cannot", "set.rating", rightLeft + 3, rty, rightInner - 6,
+                        state.cannotRate(), TextStyle.CAPTION, Metrics.lineHeight(TextStyle.CAPTION), 3) + 2;
             }
-        } else if (state.cannotRate() != null && !state.cannotRate().isEmpty()) {
-            // The site refuses a rating with a reason of its own - sign in, your own set, an account that is too new -
-            // and the box used to drop its input without a word, so the reader was left guessing what went wrong.
-            rty += layout.paragraph("set.rating.cannot", "set.rating", rightLeft + 3, rty, rightInner - 6,
-                    state.cannotRate(), TextStyle.CAPTION, Metrics.lineHeight(TextStyle.CAPTION), 3) + 2;
+            layout.resize("set.rating", new Rect(rightLeft, ratingTop, rightInner, rty - ratingTop + 3));
+            ry = rty + 3 + pad;
         }
-        layout.resize("set.rating", new Rect(rightLeft, ratingTop, rightInner, rty - ratingTop + 3));
-        ry = rty + 3 + pad;
         layout.resize(RIGHT, new Rect(rightX, rightTop, rightWidth, ry - rightTop));
         if (twoColumns && ry > headerTop + headerHeight) {
             // The cover runs the full height of the right column beside it, and what the header holds sinks to its
@@ -347,6 +427,13 @@ public final class SetPageLayout {
         }
 
         float chartsY = Math.max(dy, my) + Metrics.GAP;
+        if (state.charts().isEmpty()) {
+            // A server beatmap has no difficulty table; its one chart is the beatmap itself.
+            float bottom = Math.max(dy, my) + pad;
+            layout.resize(INFO, new Rect(0, infoTop, width, bottom - infoTop));
+            layout.setContentHeight(bottom);
+            return layout;
+        }
         layout.label("set.charts.title", INFO, pad, chartsY, width - pad * 2, tr.get(WorkshopStrings.KEY + "set.charts"),
                 TextStyle.STRONG);
         chartsY += TextStyle.STRONG.capHeight() + 4;

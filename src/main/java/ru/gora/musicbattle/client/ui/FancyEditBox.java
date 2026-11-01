@@ -52,6 +52,28 @@ public final class FancyEditBox extends EditBox {
         graphics.pose().popPose();
     }
 
+    /**
+     * Vanilla draws the hint in the colour of typed text unless the hint carries a colour of its own, and in this
+     * field typed text is near white: a search box's "Search..." read as something already typed into it. A hint
+     * without a colour is muted here, once for every field; one that brings its own colour keeps it.
+     */
+    @Override
+    public void setHint(Component hint) {
+        super.setHint(mutedHint(hint));
+    }
+
+    /**
+     * The hint as a field should show it: in {@link Palette#TEXT_MUTE} when it sets no colour of its own. Its parts that
+     * do set one keep theirs. Public so that a screen drawing its own frame around a plain {@code EditBox} can give it
+     * the same hint.
+     */
+    public static Component mutedHint(Component hint) {
+        if (hint == null || hint.getStyle().getColor() != null) {
+            return hint;
+        }
+        return hint.copy().withColor(Palette.TEXT_MUTE);
+    }
+
     @Override
     public void onClick(double mouseX, double mouseY) {
         // The text is drawn shifted right by the inset, so a click has to be shifted back or the caret would land

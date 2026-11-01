@@ -7,7 +7,7 @@ $groups=@('com.google.code.gson','com.google.guava','com.mojang','io.netty','it.
 $jars=foreach($group in $groups){$dir=Join-Path $env:USERPROFILE ".gradle/caches/modules-2/files-2.1/$group";if(Test-Path -LiteralPath $dir){Get-ChildItem -LiteralPath $dir -Recurse -Filter '*.jar' | Where-Object Name -notmatch '(-sources|-javadoc|-natives-)' | Select-Object -ExpandProperty FullName}}
 $nativeJars=@();if($World){$nativeJars=@(rg --files (Join-Path $env:USERPROFILE '.gradle/caches/modules-2/files-2.1/org.lwjgl') -g '*natives-windows.jar' | Where-Object { [IO.Path]::GetFileName($_) -match '^lwjgl(-jemalloc)?-3\.3\.3-natives-windows\.jar$' })}
 $cp=(@($outputDir,"$projectRoot/build/classes/java/main","$projectRoot/build/moddev/artifacts/neoforge-21.1.230-merged.jar")+@($jars)+$nativeJars)-join [IO.Path]::PathSeparator
-$jdk='C:/Program Files/Eclipse Adoptium/jdk-21.0.11.10-hotspot/bin'
+$jdk = & (Join-Path $PSScriptRoot 'find-jdk.ps1')
 $sources=@("$projectRoot/tools/NoteAppearanceChecks.java")
 if($World){$sources+="$projectRoot/tools/WorldNoteShapeChecks.java"}
 foreach($name in @('data/NoteAppearance','data/NoteSpeed','network/NoteAppearanceCodec','network/SettingsPayload','network/BattleStartPayload','network/SpectatorBattlePayload','network/BattleAppearancePayload')){$source="$projectRoot/src/main/java/ru/gora/musicbattle/$name.java";if(Test-Path -LiteralPath $source){$sources+=$source}}

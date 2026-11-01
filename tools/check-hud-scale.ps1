@@ -8,7 +8,7 @@ $jars = foreach ($group in $groups) {
     if (Test-Path -LiteralPath $dir) { Get-ChildItem -LiteralPath $dir -Recurse -File -Filter '*.jar' | Where-Object Name -notmatch '(-sources|-javadoc|-natives-)' | Select-Object -ExpandProperty FullName }
 }
 $cp = (@($outputDir, "$projectRoot/build/moddev/artifacts/neoforge-21.1.230-merged.jar") + @($jars)) -join [IO.Path]::PathSeparator
-$jdk = 'C:/Program Files/Eclipse Adoptium/jdk-21.0.11.10-hotspot/bin'
+$jdk = & (Join-Path $PSScriptRoot 'find-jdk.ps1')
 $sources = @("$projectRoot/src/main/java/ru/gora/musicbattle/client/BattleHudScale.java", "$projectRoot/tools/HudScaleChecks.java")
 & "$jdk/javac.exe" -proc:none -encoding UTF-8 -cp $cp -d $outputDir @sources
 if ($LASTEXITCODE) { throw 'HUD scale checks compilation failed' }

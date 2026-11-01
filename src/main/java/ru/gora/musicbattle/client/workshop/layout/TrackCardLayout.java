@@ -27,6 +27,8 @@ public final class TrackCardLayout {
         }
     }
 
+    /** Between the parts of the info row's detail ("BPM 174  ·  4:22"); a part that does not fit is left out whole. */
+    public static final String DETAIL_SEPARATOR = "  \u00b7  ";
     /** Matches {@link CardLayout}: the body overlaps the thumbnail by this much, under its rounded corner. */
     private static final float BODY_OVERLAP = 6F;
     private static final float TEXT_INSET = 5F;
@@ -88,8 +90,10 @@ public final class TrackCardLayout {
             detailX = pill.right() + 4F;
         }
         if (!state.detail().isEmpty() && textRight - detailX > 12F) {
+            // The tempo and the length, as many of them whole as there is room for after the pill.
             layout.label("track.detail", "track.body", detailX, ShellLayout.capY(TextStyle.CAPTION, infoY, pillHeight),
-                    textRight - detailX, state.detail(), TextStyle.CAPTION);
+                    textRight - detailX, TextFit.wholeParts(measurer, state.detail(), DETAIL_SEPARATOR, TextStyle.CAPTION,
+                            textRight - detailX), TextStyle.CAPTION);
         }
         return layout;
     }

@@ -8,10 +8,10 @@ $jars = foreach ($group in $groups) {
     if (Test-Path -LiteralPath $directory) { rg --files $directory -g '*.jar' | Where-Object { [IO.Path]::GetFileName($_) -notmatch '(-sources|-javadoc|-natives-)' } }
 }
 $cp = (@($outputDir,"$projectRoot/build/classes/java/main","$projectRoot/build/moddev/artifacts/neoforge-21.1.230-merged.jar") + @($jars)) -join [IO.Path]::PathSeparator
-$jdk = 'C:/Program Files/Eclipse Adoptium/jdk-21.0.11.10-hotspot/bin'
+$jdk = & (Join-Path $PSScriptRoot 'find-jdk.ps1')
 $sources = @("$projectRoot/tools/NotePanelRenderChecks.java", "$projectRoot/src/main/java/ru/gora/musicbattle/client/BattlePanelRenderer.java",
     "$projectRoot/tools/note-render-support/net/minecraft/client/renderer/RenderType.java")
-foreach ($path in @('client/BattleNoteShape','client/SettingsScreenLayout','client/SettingsPanelPreview','data/NoteAppearance','data/NoteSpeed')) {
+foreach ($path in @('client/BattleNoteShape','client/SettingsScreenLayout','client/SettingsPanelPreview','client/BattleBackdrop','data/NoteAppearance','data/NoteSpeed')) {
     $source = "$projectRoot/src/main/java/ru/gora/musicbattle/$path.java"
     if (Test-Path -LiteralPath $source) { $sources += $source }
 }

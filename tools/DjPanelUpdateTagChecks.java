@@ -53,6 +53,14 @@ public final class DjPanelUpdateTagChecks {
         for (int index = 0; index < DjPanelBlockEntity.MAX_LINKED_CAMERAS; index++) {
             panel.linkCamera(new BlockPos(-30_000_000 + index, -64, 30_000_000 - index));
         }
+        boolean everyIdTaken = true;
+        for (int index = 0; index < DjPanelBlockEntity.MAX_LIBRARY_TRACKS; index++) {
+            String id = String.format("%03d", index) + "l".repeat(DjPlaylistEntry.MAX_TRACK_ID_LENGTH - 3);
+            everyIdTaken &= panel.addToLibrary(id);
+        }
+        check(everyIdTaken, "the booth's list takes its full " + DjPanelBlockEntity.MAX_LIBRARY_TRACKS
+                + " maps of the longest id");
+        check(!panel.addToLibrary("one_more"), "a full list refuses one more map");
         boolean everyRowFull = true;
         for (int row = 0; row < DjPlaylistEntry.MAX_ENTRIES; row++) {
             DjPlaylistEntry added = panel.addPlaylistEntry(longTrackId, 1_000_000 + row);
@@ -75,13 +83,14 @@ public final class DjPanelUpdateTagChecks {
         System.out.println("update tag: " + updateUsage + " accounted bytes of " + CHUNK_TAG_LIMIT);
         check(updateUsage < UPDATE_TAG_BUDGET, "the update tag stays far below the 2 MiB chunk limit");
         check(!rejectedByChunkReader(update), "the chunk reader accepts the worst-case update tag");
-        for (String heavy : List.of("DjPlaylist", "DjVisualEffects", "LinkedSpeakers", "LinkedCameras")) {
+        for (String heavy : List.of("DjPlaylist", "DjVisualEffects", "LinkedSpeakers", "LinkedCameras", "DjLibrary")) {
             check(!update.contains(heavy), "the update tag leaves out " + heavy);
         }
 
         DjPanelBlockEntity client = blankPanel();
         loadAdditional(client, roundTrip(update));
         sameClock(panel, client, "playing");
+        check(client.getLibrary().isEmpty(), "the client's copy of a booth carries no list: the panel payload brings it");
         long later = 9_000_000L + 4_321L;
         panel.pausePlayback(later, Integer.MAX_VALUE);
         loadAdditional(client, roundTrip(panel.getUpdateTag(null)));
@@ -102,6 +111,9 @@ public final class DjPanelUpdateTagChecks {
         check(reloaded.getLinkedSpeakers().size() == DjPanelBlockEntity.MAX_LINKED_SPEAKERS
                 && reloaded.getDjVisualEffects().size() == DjVisualEffectConfig.MAX_CONFIGS,
                 "disk keeps speakers and the rack's DJ effects");
+        check(reloaded.getLibrary().equals(panel.getLibrary()), "disk keeps the booth's list, every map in its order");
+        libraryChecks();
+        resetChecks(chart);
 
         if (failures > 0) {
             System.out.println(failures + " DJ panel update tag check(s) failed");
@@ -216,8 +228,74 @@ public final class DjPanelUpdateTagChecks {
         field("linkedSpeakers").set(panel, new LinkedHashSet<BlockPos>());
         field("linkedCameras").set(panel, new LinkedHashSet<BlockPos>());
         field("playlist").set(panel, new ArrayList<DjPlaylistEntry>());
+        field("library").set(panel, new ArrayList<String>());
+        field("workshopSources").set(panel, new java.util.LinkedHashMap<String, ru.gora.musicbattle.data.DjWorkshopSource>());
         loadAdditional(panel, new CompoundTag());
         return panel;
+    }
+
+    /**
+     * The booth's own list: maps join it once and in order, leave it without touching the queue, and a booth saved
+     * before the list existed starts with the maps it was already using instead of an empty panel.
+     */
+    private static void libraryChecks() throws Exception {
+        DjPanelBlockEntity panel = blankPanel();
+        check(panel.addToLibrary("alpha") && panel.addToLibrary("beta") && !panel.addToLibrary("alpha"),
+                "a map joins the list once");
+        check(!panel.addToLibrary("") && !panel.addToLibrary(null)
+                && !panel.addToLibrary("x".repeat(DjPlaylistEntry.MAX_TRACK_ID_LENGTH + 1)),
+                "an id that could never name a track is refused");
+        DjPlaylistEntry queued = panel.addPlaylistEntry("alpha", 0);
+        check(panel.removeFromLibrary("alpha") && !panel.removeFromLibrary("alpha"), "a map leaves the list once");
+        check(panel.getLibrary().equals(List.of("beta")), "the rest of the list keeps its order");
+        check(panel.getPlaylist().size() == 1 && panel.getPlaylist().getFirst().equals(queued),
+                "taking a map off the list leaves its playlist row alone");
+        check(panel.getPlaylist().stream().noneMatch(entry -> entry.trackId().equals("beta")),
+                "putting a map on the list does not queue it");
+
+        DjPanelBlockEntity legacy = blankPanel();
+        legacy.addPlaylistEntry("row_one", 0);
+        legacy.addPlaylistEntry("row_two", 0);
+        legacy.addPlaylistEntry("row_one", 40);
+        legacy.startPlayback("on_deck", 100L);
+        // The card selected for the next song, which is not the one playing.
+        legacy.selectTrack("picked_card");
+        CompoundTag old = saveAdditional(legacy);
+        old.remove("DjLibrary");
+        DjPanelBlockEntity migrated = blankPanel();
+        loadAdditional(migrated, old);
+        check(migrated.getLibrary().equals(List.of("row_one", "row_two", "on_deck", "picked_card")),
+                "a booth saved before the list starts it with its queue, its deck and its selected card, once each");
+        DjPanelBlockEntity emptied = blankPanel();
+        CompoundTag none = saveAdditional(emptied);
+        DjPanelBlockEntity reloadedEmpty = blankPanel();
+        loadAdditional(reloadedEmpty, none);
+        check(reloadedEmpty.getLibrary().isEmpty(), "a list emptied on purpose stays empty after a reload");
+    }
+
+    /**
+     * "Reset speakers" with every speaker selected: the rack's reverb, echo and low pass go back to how the booth
+     * ships, and the Visual FX tab stays exactly as the DJ left it. For a while this reset also cleared the DJ effect
+     * stack, and a tab built over an evening was gone with one press of a button about speakers.
+     */
+    private static void resetChecks(List<TrackEffect> chart) throws Exception {
+        DjPanelBlockEntity panel = blankPanel();
+        panel.setVisualEffects(false, true, List.of(new DjVisualEffectConfig("strobe", true, chart.get(0)),
+                new DjVisualEffectConfig("sweep", false, chart.get(1))), 40);
+        panel.setDspSettings(false, true, 0.9F, 0.2F, 0.1F, true, 0.6F, 600.0F, 0.7F, true, 900.0F);
+        List<DjVisualEffectConfig> effects = panel.getDjVisualEffects();
+        long fxRevision = panel.getVisualFxRevision();
+        int activation = panel.getVisualFxActivationTick();
+        long dspRevision = panel.getDspRevision();
+        panel.resetSound();
+        check(panel.isDspEnabled() && !panel.isReverbEnabled() && !panel.isEchoEnabled() && !panel.isLowPassEnabled()
+                        && Float.compare(panel.getReverbWet(), 0.30F) == 0 && Float.compare(panel.getEchoTimeMs(), 280.0F) == 0
+                        && Float.compare(panel.getLowPassCutoffHz(), 12_000.0F) == 0 && panel.getDspRevision() != dspRevision,
+                "resetting every speaker puts the rack's reverb, echo and low pass back");
+        check(!panel.isTrackVisualFxEnabled() && panel.isDjVisualFxEnabled() && effects.size() == 2
+                        && panel.getDjVisualEffects().equals(effects) && panel.getVisualFxRevision() == fxRevision
+                        && panel.getVisualFxActivationTick() == activation,
+                "resetting the speakers leaves the Visual FX tab exactly as it was");
     }
 
     private static Field field(String name) throws NoSuchFieldException {

@@ -9,7 +9,7 @@ $jars = foreach ($group in $groups) {
 }
 $cp = (@($outputDir,"$projectDir/build/classes/java/main","$projectDir/build/moddev/artifacts/neoforge-21.1.230-merged.jar") + @($jars)) -join [IO.Path]::PathSeparator
 $sources = @('tools/DjTransitionOrderChecks.java','src/main/java/ru/gora/musicbattle/client/ClientTrackEffects.java','src/main/java/ru/gora/musicbattle/client/ClientDjFxTransition.java','src/main/java/ru/gora/musicbattle/data/TrackEffect.java','src/main/java/ru/gora/musicbattle/data/DjFxRelease.java') | ForEach-Object { Join-Path $projectDir $_ }
-$jdk = 'C:/Program Files/Eclipse Adoptium/jdk-21.0.11.10-hotspot/bin'
+$jdk = & (Join-Path $PSScriptRoot 'find-jdk.ps1')
 & "$jdk/javac.exe" -proc:none -encoding UTF-8 -cp $cp -d $outputDir @sources
 if ($LASTEXITCODE) { throw 'DJ transition order checks compilation failed' }
 & "$jdk/java.exe" -cp $cp DjTransitionOrderChecks

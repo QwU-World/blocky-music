@@ -1,0 +1,28 @@
+{
+  "parent": "music_battle:meaning_of_life",
+  "display": {
+    "icon": {
+      "id": "minecraft:jukebox"
+    },
+    "title": {
+      "translate": "advancements.music_battle.six_seven.title"
+    },
+    "description": {
+      "translate": "advancements.music_battle.six_seven.description"
+    },
+    "frame": "challenge",
+    "show_toast": true,
+    "announce_to_chat": true,
+    "hidden": true
+  },
+  "criteria": {
+    "code": {
+      "trigger": "minecraft:impossible"
+    }
+  },
+  "requirements": [
+    [
+      "code"
+    ]
+  ]
+}

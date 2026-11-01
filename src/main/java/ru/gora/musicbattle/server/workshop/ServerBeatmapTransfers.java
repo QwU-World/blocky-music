@@ -12,6 +12,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -35,7 +36,7 @@ import ru.gora.musicbattle.workshop.BeatmapPackage;
 import ru.gora.musicbattle.workshop.WorkshopLayout;
 
 /**
- * Packages travelling from a player's client to this server (spec 06 sections 9.1 and 9.4): "Add to server", a
+ * Packages travelling from a player's client to this server: "Add to server", a
  * vote for a set only the voter has installed, and a DJ's playlist pick of such a set.
  *
  * <p>One transfer per player at a time. The offer is answered before a single byte moves: {@code have} when the
@@ -43,7 +44,7 @@ import ru.gora.musicbattle.workshop.WorkshopLayout;
  * audio, a withdrawn set), otherwise {@code need}. The bytes arrive in
  * {@value ru.gora.musicbattle.network.ServerBeatmapChunkPayload#MAX_CHUNK_BYTES}-byte chunks, are appended by one
  * dedicated executor (never the server thread), and only a package whose signature, manifest and size all match the
- * offer is installed — into a temporary root first, so a failure leaves nothing behind (08 A5.3).
+ * offer is installed — into a temporary root first, so a failure leaves nothing behind.
  *
  * <p>An "Add to server" offer carries the size, so this server knows when the bytes are all here. A vote or a DJ
  * pick does not — the sender repacks the package only after being asked for it — so a vote stream ends with the first chunk that
@@ -58,7 +59,7 @@ import ru.gora.musicbattle.workshop.WorkshopLayout;
 public final class ServerBeatmapTransfers {
     /** Uploads in progress: {@code <world>/blocky_music/.workshop_uploads/<transferId>.blockymap}. */
     public static final String UPLOAD_DIRECTORY = ".workshop_uploads";
-    /** Sets fetched from a voter, one root per content hash so revisions never collide (review of 06 section 9.4). */
+    /** Sets fetched from a voter, one root per content hash so revisions never collide. */
     public static final String CACHE_DIRECTORY = "workshop_cache";
     /** {@code music_battle.workshop.error.transfer_timed_out}: nothing arrived for {@link #STALE_TRANSFER_MS}. */
     public static final String ABORT_TIMED_OUT = "transfer_timed_out";
@@ -166,7 +167,7 @@ public final class ServerBeatmapTransfers {
 
     // ---------------------------------------------------------------- offers
 
-    /** "Add to server" (spec 06 section 9.1). Server thread. */
+    /** "Add to server". Server thread. */
     public static void offer(ServerPlayer player, ServerBeatmapOfferPayload payload) {
         if (!WorkshopPermissions.canManageServerBeatmaps(player)) {
             deny(player, payload.transferId(), payload.setId(), ServerBeatmaps.DENIED_NO_PERMISSION);
@@ -196,7 +197,7 @@ public final class ServerBeatmapTransfers {
     }
 
     /**
-     * A vote for a set only the voter has (spec 06 section 9.4). Server thread. Returns the message to show when
+     * A vote for a set only the voter has. Server thread. Returns the message to show when
      * the vote cannot be taken at all, or empty when it was accepted (possibly pending a transfer).
      */
     public static Optional<Component> voteInstalled(ServerPlayer player, VoteInstalledPayload payload) {
@@ -476,8 +477,29 @@ public final class ServerBeatmapTransfers {
         return folder;
     }
 
-    /** Least-recently-used eviction down to {@code workshop.cacheQuotaBytes}; the newest entry is never dropped. */
+    /**
+     * Content hashes of cached sets a DJ booth still lists or queues, published by {@code DjWorkshopCache} on the
+     * server thread and read by {@link #evictCache} on the transfer executor. Evicting one of them used to leave the
+     * booth with a row that no longer played, and after a restart with a row nothing could find again.
+     */
+    private static volatile Set<String> protectedCache = Set.of();
+
+    /** Which cached sets the clean-up must keep, replacing the previous set. */
+    public static void protectCache(Set<String> contentHashes) {
+        protectedCache = Set.copyOf(contentHashes);
+    }
+
+    /**
+     * Least-recently-used eviction down to {@code workshop.cacheQuotaBytes}. The newest entry is never dropped, nor
+     * is a set a DJ booth uses ({@link #protectCache}); when those alone are over the quota the cache stays over it.
+     */
     static void evictCache(Path worldStorage, String keep) {
+        evictCache(worldStorage, keep, MusicBattleServerConfig.cacheQuotaBytes());
+    }
+
+    /** {@link #evictCache(Path, String)} with the quota given, so a check can run it without a server config. */
+    static void evictCache(Path worldStorage, String keep, long quota) {
+        Set<String> kept = protectedCache;
         Path root = worldStorage.resolve(CACHE_DIRECTORY).toAbsolutePath().normalize();
         if (!Files.isDirectory(root, LinkOption.NOFOLLOW_LINKS)) {
             return;
@@ -485,16 +507,16 @@ public final class ServerBeatmapTransfers {
         List<Path> folders = new ArrayList<>();
         try (var stream = Files.newDirectoryStream(root)) {
             for (Path folder : stream) {
-                if (Files.isDirectory(folder, LinkOption.NOFOLLOW_LINKS)
-                        && !String.valueOf(folder.getFileName()).equals(keep)) {
+                String name = String.valueOf(folder.getFileName());
+                if (Files.isDirectory(folder, LinkOption.NOFOLLOW_LINKS) && !name.equals(keep)
+                        && !kept.contains(name)) {
                     folders.add(folder);
                 }
             }
         } catch (IOException exception) {
             return;
         }
-        long total = ServerBeatmaps.folderBytes(root);
-        long quota = MusicBattleServerConfig.cacheQuotaBytes();
+        long total = treeBytes(root);
         if (total <= quota) {
             return;
         }
@@ -509,13 +531,32 @@ public final class ServerBeatmapTransfers {
             if (total <= quota) {
                 return;
             }
-            long size = ServerBeatmaps.folderBytes(folder);
+            long size = treeBytes(folder);
             try {
                 BeatmapPackage.deleteTree(folder, root);
                 total -= size;
             } catch (IOException exception) {
                 MusicBattleMod.LOGGER.warn("Unable to evict a cached Blocky Music package.", exception);
             }
+        }
+    }
+
+    /**
+     * Every byte under a cache folder. A cached set sits four levels down ({@code <sha>/workshop/ws_<id>/<file>}),
+     * and {@code ServerBeatmaps.folderBytes} looks two levels deep, which is right for the server's own sets but saw
+     * an empty cache here: the clean-up never deleted anything, however far over its quota the cache had grown.
+     */
+    private static long treeBytes(Path folder) {
+        try (var stream = Files.walk(folder)) {
+            return stream.filter(path -> Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)).mapToLong(path -> {
+                try {
+                    return Files.size(path);
+                } catch (IOException ignored) {
+                    return 0L;
+                }
+            }).sum();
+        } catch (IOException | java.io.UncheckedIOException ignored) {
+            return 0L;
         }
     }
 

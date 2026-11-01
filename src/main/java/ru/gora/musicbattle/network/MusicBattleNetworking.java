@@ -17,7 +17,7 @@ public final class MusicBattleNetworking {
     }
 
     public static void register(RegisterPayloadHandlersEvent event) {
-        PayloadRegistrar registrar = event.registrar("67");
+        PayloadRegistrar registrar = event.registrar("69");
         registrar.playToClient(OpenVotePayload.TYPE, OpenVotePayload.STREAM_CODEC, MusicBattleNetworking::handleOpenVote);
         registrar.playToClient(TrackPreloadPayload.TYPE, TrackPreloadPayload.STREAM_CODEC, MusicBattleNetworking::handleTrackPreload);
         registrar.playToClient(TrackAssetChunkPayload.TYPE, TrackAssetChunkPayload.STREAM_CODEC, MusicBattleNetworking::handleTrackAssetChunk);
@@ -36,6 +36,8 @@ public final class MusicBattleNetworking {
         registrar.playToClient(BattleAudiencePayload.TYPE, BattleAudiencePayload.STREAM_CODEC, MusicBattleNetworking::handleBattleAudience);
         registrar.playToClient(VoteStatusPayload.TYPE, VoteStatusPayload.STREAM_CODEC, MusicBattleNetworking::handleVoteStatus);
         registrar.playToClient(PauseSkipStatusPayload.TYPE, PauseSkipStatusPayload.STREAM_CODEC, MusicBattleNetworking::handlePauseSkipStatus);
+        registrar.playToClient(PauseSkipJumpPayload.TYPE, PauseSkipJumpPayload.STREAM_CODEC,
+                (payload, context) -> context.enqueueWork(() -> ClientPayloadBridge.acceptPauseSkipJump(payload)));
         registrar.playToClient(OpenChallengeSidePayload.TYPE, OpenChallengeSidePayload.STREAM_CODEC,
                 (payload, context) -> context.enqueueWork(() -> ClientPayloadBridge.openChallengeSide(payload)));
         registrar.playToClient(BattleMicrophonePayload.TYPE, BattleMicrophonePayload.STREAM_CODEC,
@@ -43,6 +45,8 @@ public final class MusicBattleNetworking {
         registrar.playToClient(OpenRapGodConfigPayload.TYPE, OpenRapGodConfigPayload.STREAM_CODEC, MusicBattleNetworking::handleOpenRapGodConfig);
         registrar.playToClient(OpenCameraEditorPayload.TYPE, OpenCameraEditorPayload.STREAM_CODEC, MusicBattleNetworking::handleOpenCameraEditor);
         registrar.playToClient(CameraEditorClosedPayload.TYPE, CameraEditorClosedPayload.STREAM_CODEC, MusicBattleNetworking::handleCameraEditorClosed);
+        registrar.playToClient(CameraFollowStatePayload.TYPE, CameraFollowStatePayload.STREAM_CODEC,
+                (payload, context) -> context.enqueueWork(() -> ClientPayloadBridge.acceptCameraFollowState(payload)));
         registrar.playToClient(OpenSpeakerConfigPayload.TYPE, OpenSpeakerConfigPayload.STREAM_CODEC, MusicBattleNetworking::handleOpenSpeakerConfig);
         registrar.playToClient(OpenDjPanelPayload.TYPE, OpenDjPanelPayload.STREAM_CODEC, MusicBattleNetworking::handleOpenDjPanel);
         registrar.playToClient(DjCameraPreviewPayload.TYPE, DjCameraPreviewPayload.STREAM_CODEC, MusicBattleNetworking::handleDjCameraPreview);
@@ -62,6 +66,8 @@ public final class MusicBattleNetworking {
         registrar.playToServer(TrackReadyPayload.TYPE, TrackReadyPayload.STREAM_CODEC, MusicBattleNetworking::handleTrackReady);
         registrar.playToServer(TrackPreviewRequestPayload.TYPE, TrackPreviewRequestPayload.STREAM_CODEC, MusicBattleNetworking::handleTrackPreviewRequest);
         registrar.playToServer(ConfigureRapGodPayload.TYPE, ConfigureRapGodPayload.STREAM_CODEC, MusicBattleNetworking::handleConfigureRapGod);
+        registrar.playToServer(RapGodSkinUploadPayload.TYPE, RapGodSkinUploadPayload.STREAM_CODEC, (payload, context) ->
+                context.enqueueWork(() -> { if (context.player() instanceof ServerPlayer player) RapGodConfigHandler.uploadSkin(player, payload); }));
         registrar.playToServer(ConfigureSpeakerPayload.TYPE, ConfigureSpeakerPayload.STREAM_CODEC, MusicBattleNetworking::handleConfigureSpeaker);
         registrar.playToServer(ConfigureDjPanelPayload.TYPE, ConfigureDjPanelPayload.STREAM_CODEC, MusicBattleNetworking::handleConfigureDjPanel);
         registrar.playToServer(ConfigureDjPlaylistPayload.TYPE, ConfigureDjPlaylistPayload.STREAM_CODEC, MusicBattleNetworking::handleConfigureDjPlaylist);
@@ -80,13 +86,15 @@ public final class MusicBattleNetworking {
         registrar.playToServer(DjPreloadAnswerPayload.TYPE, DjPreloadAnswerPayload.STREAM_CODEC, MusicBattleNetworking::handleDjPreloadAnswer);
         registrar.playToServer(UpdateCameraEditorPayload.TYPE, UpdateCameraEditorPayload.STREAM_CODEC, MusicBattleNetworking::handleUpdateCameraEditor);
         registrar.playToServer(CloseCameraEditorPayload.TYPE, CloseCameraEditorPayload.STREAM_CODEC, MusicBattleNetworking::handleCloseCameraEditor);
+        registrar.playToServer(CameraFollowModePayload.TYPE, CameraFollowModePayload.STREAM_CODEC,
+                (payload, context) -> context.enqueueWork(() -> CameraEditorManager.setFollowMode(context.player(), payload)));
         registrar.playToServer(PublishTrackBeginPayload.TYPE, PublishTrackBeginPayload.STREAM_CODEC, MusicBattleNetworking::handlePublishTrackBegin);
         registrar.playToServer(PublishTrackChunkPayload.TYPE, PublishTrackChunkPayload.STREAM_CODEC, MusicBattleNetworking::handlePublishTrackChunk);
         registrar.playToServer(PublishTrackFinishPayload.TYPE, PublishTrackFinishPayload.STREAM_CODEC, MusicBattleNetworking::handlePublishTrackFinish);
         registrar.playToServer(DeletePublishedTrackPayload.TYPE, DeletePublishedTrackPayload.STREAM_CODEC, MusicBattleNetworking::handleDeletePublishedTrack);
         registrar.playToServer(RequestPublishedTracksPayload.TYPE, RequestPublishedTracksPayload.STREAM_CODEC, MusicBattleNetworking::handleRequestPublishedTracks);
 
-        // Wave M3: server beatmaps, server comments and the installed-set vote (spec 06 sections 9 and 10).
+        // The server's Workshop features: server beatmaps, server comments and the installed-set vote.
         registrar.playToClient(WorkshopServerInfoPayload.TYPE, WorkshopServerInfoPayload.STREAM_CODEC,
                 (payload, context) -> context.enqueueWork(() -> ClientPayloadBridge.workshopServerInfo(payload)));
         registrar.playToClient(ServerBeatmapsPagePayload.TYPE, ServerBeatmapsPagePayload.STREAM_CODEC,

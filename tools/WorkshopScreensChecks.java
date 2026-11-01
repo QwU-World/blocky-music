@@ -35,7 +35,7 @@ import ru.gora.musicbattle.client.workshop.layout.Tr;
 import ru.gora.musicbattle.client.workshop.layout.WorkshopStrings;
 
 /**
- * The `workshop-screens` regression (spec 06 section 12): the production layout of the Workshop's listing, set page,
+ * The `workshop-screens` regression: the production layout of the Workshop's listing, set page,
  * comments and account view at 320x240, 426x240, 640x360, 854x480 and 1280x720, in English and
  * Russian, with no overlapping boxes, nothing leaving its parent and no text wider than the box it sits in.
  *
@@ -300,7 +300,7 @@ public final class WorkshopScreensChecks {
             check(signedIn != layout.rect("comments.composer.replying.cancel").empty(),
                     context + " reply mode has no way out of it");
         }
-        // The server's own comments (spec 06 section 9.2): the count belongs to the tab that is open, the line saying
+        // The server's own comments: the count belongs to the tab that is open, the line saying
         // where they live is a sentence under the composer, and a closed composer is not a Workshop sign-in button.
         for (boolean canPost : new boolean[] {false, true}) {
             CommentsLayout.State state = new CommentsLayout.State(12, "new", canPost,
@@ -333,6 +333,7 @@ public final class WorkshopScreensChecks {
                         new Form.Stat("96", tr.get(WorkshopStrings.KEY + "account.stat.comments"))),
                 true);
         for (AccountForm.Mode mode : AccountForm.Mode.values()) {
+          for (boolean network : new boolean[] {true, false}) {
             AccountForm.State state = new AccountForm.State(mode, true, true, "BDFG-HJKL",
                     tr.get(WorkshopStrings.KEY + "account.waiting"), tr.get(WorkshopStrings.KEY + "account.not_linked"),
                     "dragon4ik", "Dragon4ik the mapper",
@@ -344,10 +345,27 @@ public final class WorkshopScreensChecks {
                             WorkshopStrings.relative(tr, "2026-09-10T10:00:00Z", 1_760_000_000_000L)),
                     tr.get(WorkshopStrings.KEY + "account.rules.changed_with",
                             "Version 2 spells out what happens after a takedown."),
-                    true, card);
+                    true, card, network);
             Layout layout = FormLayout.compute(content, measurer, tr, AccountForm.build(tr, state));
-            verify(layout, measurer, new Rect(0, 0, content.w(), Math.max(content.h(), layout.contentHeight())),
-                    context + " account " + mode, false);
+            String where = context + " account " + mode + " network=" + network;
+            verify(layout, measurer, new Rect(0, 0, content.w(), Math.max(content.h(), layout.contentHeight())), where, false);
+            // The Network access switch (claims-vs-code F1): after Allow it is the way to turn access off again, so it is
+            // on the page signed in and signed out, in both states, with its whole label and its note.
+            boolean offered = mode == AccountForm.Mode.SIGNED_OUT || mode == AccountForm.Mode.SIGNED_IN;
+            check(layout.has(AccountForm.NETWORK) == offered, where + " the Network access switch "
+                    + (offered ? "is missing" : "shows during a code or link wait"));
+            if (offered) {
+                Rect toggle = layout.rect(AccountForm.NETWORK);
+                check(!toggle.empty() && toggle.w() > 40, where + " the Network access switch has no room: " + toggle);
+                check(!layout.rect("account.network.heading.0").empty() && !layout.rect("account.network.note.0").empty(),
+                        where + " the Network access heading or note is gone");
+                String label = tr.get(WorkshopStrings.KEY + "account.network.toggle");
+                float room = layout.rect(AccountForm.NETWORK).w() - layout.rect(AccountForm.NETWORK + ".box").w() - 4;
+                int lines = layout.group(AccountForm.NETWORK + ".label").size();
+                check(lines >= 1 && lines <= 2, where + " the switch label takes " + lines + " lines");
+                check(measurer.width(label, TextStyle.CAPTION) <= room * lines + SLACK, where + " the switch label does not fit");
+            }
+          }
         }
     }
 
@@ -455,7 +473,7 @@ public final class WorkshopScreensChecks {
         return out;
     }
 
-    /** Spec 06 section 11: no Cyrillic in Java literals. */
+    /** No Cyrillic in Java literals. */
     private static void noCyrillicInJava() throws Exception {
         List<Path> roots = List.of(root.resolve("src/main/java/ru/gora/musicbattle/client/workshop"),
                 root.resolve("src/main/java/ru/gora/musicbattle/client/ui"),

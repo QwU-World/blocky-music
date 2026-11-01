@@ -5,7 +5,6 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Queue;
 import java.util.Set;
@@ -32,17 +31,18 @@ import ru.gora.musicbattle.workshop.api.WorkshopApiException;
 import ru.gora.musicbattle.workshop.api.WorkshopDtos;
 
 /**
- * The comments of a set inside the set page (spec 06 section 6.3): the counter header with the Workshop and Server
+ * The comments of a set inside the set page: the counter header with the Workshop and Server
  * comments buttons, the composer for signed-in players (Ctrl/Cmd+Enter posts), the New / Old / Top sort, the rows with
  * vote pill, avatar, badges, plain-text body with its links, replies to depth two and "Show more".
  *
- * <p>Server comments are a wave M3 feature: the button is drawn disabled until {@link WorkshopServerHooks} has one.
+ * <p>Server comments come from the Minecraft server: the button is drawn disabled until {@link WorkshopServerHooks}
+ * has one.
  */
 public final class CommentsSection implements ServerWorkshopClient.ServerCommentsView {
     private static final int MAX_BODY = 5000;
-    /** The server's own comments are 1 to 500 characters (spec 06 section 9.2). */
+    /** The server's own comments are 1 to 500 characters. */
     private static final int MAX_SERVER_BODY = 500;
-    /** Bumping this shows the disclaimer again (owner decision D7, review of 06 section 6.3). */
+    /** Bumping this shows the disclaimer again (owner's decision). */
     private static final int SERVER_NOTICE_VERSION = 1;
     private static final String SERVER_NOTICE_KEY = "serverCommentsNoticeVersion";
     /** Give up on a page the Minecraft server never sends; its hook has no failure path of its own. */
@@ -98,7 +98,7 @@ public final class CommentsSection implements ServerWorkshopClient.ServerComment
     private Runnable onResize = () -> {
     };
 
-    /** Wave M3: the same section can show the Workshop's comments or the ones stored on this Minecraft server. */
+    /** The same section can show the Workshop's comments or the ones stored on this Minecraft server. */
     private boolean serverMode;
     private final String serverKey;
     private List<ru.gora.musicbattle.network.ServerCommentsPagePayload.Row> serverRows = List.of();
@@ -202,7 +202,7 @@ public final class CommentsSection implements ServerWorkshopClient.ServerComment
 
     /**
      * The composer follows the list it posts to. The field took 5000 characters whichever list was open, and the
-     * server takes 500, so a long comment was accepted, sent and cut in half on the way (spec 06 section 9.2).
+     * server takes 500, so a long comment was accepted, sent and cut in half on the way.
      */
     private void applyComposerMode() {
         // A post left in flight on the other list will never be answered to this view, and its flag would otherwise
@@ -241,7 +241,7 @@ public final class CommentsSection implements ServerWorkshopClient.ServerComment
                 WorkshopTr.INSTANCE.get(WorkshopStrings.KEY + (serverMode ? "comments.server_placeholder" : "comments.placeholder")),
                 composer.preferredHeight(20F, 60F), rulesPending(), serverMode ? serverNoteText() : null,
                 replyTo == null ? null : replyToAuthor, composer.value().length(),
-                serverMode ? MAX_SERVER_BODY : MAX_BODY);
+                serverMode ? MAX_SERVER_BODY : MAX_BODY, hasWorkshopComments());
         layout = CommentsLayout.compute(new Rect(0, 0, area.w(), area.h()), TextStyles.measurer(), WorkshopTr.INSTANCE, state);
         return layout.contentHeight();
     }
@@ -310,11 +310,13 @@ public final class CommentsSection implements ServerWorkshopClient.ServerComment
         // Which tab is filled in says which list is on screen; it used to be the Workshop one whichever was open.
         Rect workshopTab = shift(layout.rect("comments.tab.workshop"), baseY);
         boolean workshopEnabled = hasWorkshopComments();
-        boolean workshopHovered = workshopEnabled && serverMode && WorkshopDraw.hot(workshopTab, mouseX, mouseY);
-        WorkshopDraw.button(g, workshopTab, serverMode ? WorkshopDraw.ButtonStyle.QUIET : WorkshopDraw.ButtonStyle.SECONDARY,
-                workshopHovered, workshopEnabled);
-        drawText(g, "comments.tab.workshop.text", baseY,
-                !workshopEnabled ? Palette.TEXT_MUTE : serverMode ? Palette.TEXT_2 : Palette.TEXT_1);
+        if (!workshopTab.empty()) {
+            boolean workshopHovered = workshopEnabled && serverMode && WorkshopDraw.hot(workshopTab, mouseX, mouseY);
+            WorkshopDraw.button(g, workshopTab, serverMode ? WorkshopDraw.ButtonStyle.QUIET : WorkshopDraw.ButtonStyle.SECONDARY,
+                    workshopHovered, workshopEnabled);
+            drawText(g, "comments.tab.workshop.text", baseY,
+                    !workshopEnabled ? Palette.TEXT_MUTE : serverMode ? Palette.TEXT_2 : Palette.TEXT_1);
+        }
         Rect serverTab = shift(layout.rect("comments.tab.server"), baseY);
         boolean serverEnabled = WorkshopServerHooks.serverCommentsAvailable();
         boolean serverHovered = serverEnabled && !serverMode && WorkshopDraw.hot(serverTab, mouseX, mouseY);
@@ -410,7 +412,7 @@ public final class CommentsSection implements ServerWorkshopClient.ServerComment
         drawText(g, id + ".vote.text", baseY, voted ? Palette.ON_PILL : Palette.TEXT_2);
         Rect avatar = shift(layout.rect(id + ".avatar"), baseY);
         if (serverMode) {
-            // Spec 06 section 9.3: a signed skin when the server had one, otherwise by name, otherwise Steve.
+            // A signed skin when the server had one, otherwise by name, otherwise Steve.
             ru.gora.musicbattle.client.ui.SkinHead.draw(g, serverAuthors.get(row.id()), client.networkAllowed(),
                     avatar.x(), avatar.y(), avatar.w(), avatar.w() * 0.25F);
         } else {
@@ -787,7 +789,7 @@ public final class CommentsSection implements ServerWorkshopClient.ServerComment
         loadPage(null);
     }
 
-    // ---------------------------------------------------------------- server comments (spec 06 section 9.2)
+    // ---------------------------------------------------------------- server comments
 
     /**
      * Opens the server's own comments. The first time on this client it shows the disclaimer the owner asked for
@@ -876,16 +878,14 @@ public final class CommentsSection implements ServerWorkshopClient.ServerComment
         serverRequestedMs = 0L;
         serverPageSeen = true;
         serverTotal = payload.total();
-        serverBeforeId = payload.nextBeforeId();
+        serverBeforeId = ServerCommentRows.nextBeforeId(serverRows, payload.comments(), payload.nextBeforeId(), serverBeforeId);
         serverCanPost = payload.canPost();
         serverCanModerate = payload.canModerate();
         serverOnlineMode = payload.onlineMode();
         serverNote = payload.note();
-        List<ru.gora.musicbattle.network.ServerCommentsPagePayload.Row> merged =
-                new ArrayList<>(serverRows.size() + payload.comments().size());
-        merged.addAll(serverRows);
-        merged.addAll(payload.comments());
-        serverRows = List.copyOf(merged);
+        // Two answers to the first page (a Workshop set's page asks twice when it is reopened) used to list every
+        // comment twice; rows are kept once by id, newest first.
+        serverRows = ServerCommentRows.merge(serverRows, payload.comments());
         rebuildServerRows();
     }
 
@@ -1061,7 +1061,11 @@ public final class CommentsSection implements ServerWorkshopClient.ServerComment
         }
         if (user != null && user.badges() != null) {
             for (String badge : user.badges()) {
-                badges.add(badge.toUpperCase(Locale.ROOT));
+                // In the player's language; a role the site adds later is left out rather than shown as its code.
+                String role = WorkshopStrings.roleBadge(WorkshopTr.INSTANCE, badge);
+                if (role != null) {
+                    badges.add(role);
+                }
             }
         }
         WorkshopDtos.CommentCan can = comment.can();

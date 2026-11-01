@@ -11,8 +11,8 @@ import ru.gora.musicbattle.workshop.api.WorkshopDtos.Upload;
 import ru.gora.musicbattle.workshop.api.WorkshopDtos.UploadResult;
 
 /**
- * Publishes a map from the game (spec 06 section 6.5, 02 section 3), the way lazer's submission screen runs its stage
- * rows (research {@code osu-lazer-ui.md} section 5.3):
+ * Publishes a map from the game, the way lazer's submission screen runs its stage
+ * rows:
  *
  * <ol>
  *   <li><b>Preparing</b>: {@code POST /uploads} (with {@code setId} for an update) and {@code PATCH} the metadata.</li>

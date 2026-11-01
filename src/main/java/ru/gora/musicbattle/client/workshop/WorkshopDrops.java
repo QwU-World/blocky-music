@@ -27,7 +27,7 @@ import ru.gora.musicbattle.workshop.WorkshopLayout;
 import ru.gora.musicbattle.workshop.api.WorkshopDownloader;
 
 /**
- * Install from a file (spec 06 sections 5 and 8.3): {@code .blockymap} files dropped on the game window and packages
+ * Install from a file: {@code .blockymap} files dropped on the game window and packages
  * in {@code music_battle_tracks/workshop_inbox/}. One install point for both.
  *
  * <ul>

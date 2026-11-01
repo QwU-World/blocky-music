@@ -7,7 +7,7 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import ru.gora.musicbattle.MusicBattleMod;
 
 /**
- * Before a battle pushes a file, it asks whether the player already has exactly these bytes (spec 06 section 9.4).
+ * Before a battle pushes a file, it asks whether the player already has exactly these bytes.
  * A player who owns the set from the Workshop answers {@code have} and the audio is never sent again.
  */
 public record TrackAssetOfferPayload(UUID battleId, String trackId, String assetKind, String fileName, String sha256)

@@ -15,8 +15,8 @@ import ru.gora.musicbattle.workshop.api.WorkshopDtos.DeviceCodes;
 import ru.gora.musicbattle.workshop.api.WorkshopDtos.MinecraftRef;
 
 /**
- * Minecraft proof, automatic sign-in and account linking (spec 02 section 4.3, 06 section 7.2, research section
- * 1.5 and 3.2). Pure protocol; the only Minecraft-specific step, {@code joinServer}, sits behind {@link Joiner}, which
+ * Minecraft proof, automatic sign-in and account linking.
+ * Pure protocol; the only Minecraft-specific step, {@code joinServer}, sits behind {@link Joiner}, which
  * the client implements in {@code client.workshop.MinecraftProof}, the one class that touches the game's access token.
  *
  * <p>The {@code serverId} is always computed here from the backend nonce plus 32 fresh random bytes of our own
@@ -24,6 +24,10 @@ import ru.gora.musicbattle.workshop.api.WorkshopDtos.MinecraftRef;
  * on its own: after the website approval it waits in {@link LinkPhase#AWAITING_CONFIRMATION} until the player
  * confirms "Link Minecraft name to QwU World @username?" ({@link #confirmLink}). Blocking network calls; callers
  * serialise proofs on one executor.
+ *
+ * <p>The automatic sign-in when the Workshop opens is only for a Minecraft account this computer remembers
+ * ({@link Memory}): one that signed in here with its Minecraft proof before, and has not signed out since. For any
+ * other account {@link #autoDecision} says {@link AutoSignInGate.Decision#NOT_REMEMBERED} and nothing is sent.
  */
 public final class MinecraftSignIn {
     public static final String PURPOSE_SESSION = "session";
@@ -37,6 +41,33 @@ public final class MinecraftSignIn {
     @FunctionalInterface
     public interface Joiner {
         void join(UUID profileId, String serverId) throws JoinFailure;
+    }
+
+    /**
+     * The Minecraft accounts that signed in to the Workshop on this computer (the game keeps them in
+     * {@code config/music_battle-workshop.json}, see {@link WorkshopConfig}).
+     */
+    public interface Memory {
+        Memory NONE = new Memory() {
+            @Override
+            public boolean remembered(UUID account) {
+                return false;
+            }
+
+            @Override
+            public void remember(UUID account) {
+            }
+
+            @Override
+            public void forget(UUID account) {
+            }
+        };
+
+        boolean remembered(UUID account);
+
+        void remember(UUID account) throws java.io.IOException;
+
+        void forget(UUID account) throws java.io.IOException;
     }
 
     /** Why {@code joinServer} failed, mapped from authlib's exceptions. */
@@ -110,6 +141,7 @@ public final class MinecraftSignIn {
     private final SecureRandom random;
     private final LongSupplier clock;
     private final String deviceLabel;
+    private final Memory memory;
 
     private String reusableProofId;
     private UUID reusableProofUuid;
@@ -126,15 +158,64 @@ public final class MinecraftSignIn {
     private String linkedTo;
     private String linkError;
     private int linkGeneration;
+    /** The Minecraft account the running link proved, remembered once the link signs it in. */
+    private UUID linkPlayer;
 
+    /** Without a memory: nothing is remembered, so the automatic sign-in never starts. */
     public MinecraftSignIn(WorkshopApi api, WorkshopSession session, Joiner joiner, SecureRandom random, LongSupplier clock,
                            String deviceLabel) {
+        this(api, session, joiner, random, clock, deviceLabel, Memory.NONE);
+    }
+
+    public MinecraftSignIn(WorkshopApi api, WorkshopSession session, Joiner joiner, SecureRandom random, LongSupplier clock,
+                           String deviceLabel, Memory memory) {
+        this.memory = memory == null ? Memory.NONE : memory;
         this.api = api;
         this.session = session;
         this.joiner = joiner;
         this.random = random;
         this.clock = clock;
         this.deviceLabel = ClientLabels.sanitize(deviceLabel);
+    }
+
+    /**
+     * Whether the automatic sign-in of this launch may start for {@code player} (null when the game's account name is
+     * not one Mojang accepts). Checked before anything is sent: an account this computer does not remember, or none at
+     * all, is {@link AutoSignInGate.Decision#NOT_REMEMBERED}. Only {@link AutoSignInGate.Decision#STARTED} spends the
+     * attempt, and the caller then runs {@link #prove} with {@link #PURPOSE_SESSION}.
+     */
+    public AutoSignInGate.Decision autoDecision(AutoSignInGate gate, Player player, boolean consent, boolean microsoftAccount,
+                                                boolean loginInProgress) {
+        boolean known = player != null && memory.remembered(player.uuid());
+        return gate.tryStart(consent, microsoftAccount, loginInProgress, session.signedIn(), known);
+    }
+
+    /** True when this Minecraft account signed in here before and has not signed out since. */
+    public boolean remembered(UUID account) {
+        return account != null && memory.remembered(account);
+    }
+
+    /**
+     * An explicit sign-out: the next launch no longer signs this Minecraft account in by itself. Turning network
+     * access off is not a sign-out and keeps it.
+     */
+    public void forget(UUID account) {
+        try {
+            memory.forget(account);
+        } catch (java.io.IOException exception) {
+            // The file could not be written. The entry stays on disk; the session itself is signed out regardless.
+        }
+    }
+
+    private void rememberAccount(UUID account) {
+        if (account == null) {
+            return;
+        }
+        try {
+            memory.remember(account);
+        } catch (java.io.IOException exception) {
+            // Not remembered means only that the next launch asks the player to sign in again.
+        }
     }
 
     /**
@@ -181,6 +262,7 @@ public final class MinecraftSignIn {
                 } catch (WorkshopApiException exception) {
                     return ProofResult.failed(exception.code(), -1);
                 }
+                rememberAccount(player.uuid());
                 return new ProofResult(Outcome.SIGNED_IN, null, null, null, -1);
             }
             case "not_linked", "auto_sign_in_disabled", "proven" -> {
@@ -223,6 +305,7 @@ public final class MinecraftSignIn {
         synchronized (this) {
             generation = ++linkGeneration;
             resetLink();
+            linkPlayer = player.uuid();
             linkPhase = LinkPhase.PROVING;
             proofId = reusableProofId(player.uuid());
             // A proof id is single use: a link request consumes it.
@@ -351,10 +434,16 @@ public final class MinecraftSignIn {
                 return finishLink(LinkPhase.FAILED, exception.code());
             }
         }
+        UUID proven;
         synchronized (this) {
             linkedMinecraft = result.minecraft();
             linkDeviceCode = null;
             linkPhase = LinkPhase.LINKED;
+            proven = linkPlayer;
+        }
+        // Linking ends signed in with this Minecraft account's proof, the same as a Minecraft sign-in.
+        rememberAccount(proven);
+        synchronized (this) {
             return linkPhase;
         }
     }

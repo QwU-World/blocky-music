@@ -38,7 +38,7 @@ import ru.gora.musicbattle.MusicBattleMod;
 import ru.gora.musicbattle.server.MusicBattleTracks;
 
 /**
- * Session-wide cache of cover textures (research section 5).
+ * Session-wide cache of cover textures.
  *
  * <ol>
  *   <li>Render thread: {@link #get} returns a live texture id, or null until one is ready. Never a released id.</li>
@@ -85,7 +85,8 @@ public final class CoverCache {
      * {@code /files/covers/<sha>/card@1x.jpg}. Only this cache turned them into requests, and it could not,
      * because a fetch needs an absolute address - so every cover in the Workshop screens stayed blank while
      * installed maps, which are read from disk, drew fine. The Workshop client hands the origin over when it
-     * starts; an address that is already absolute is passed through untouched.
+     * starts; an address that is already absolute is fetched only when it is https on qwu.world (or a subdomain) or on
+     * this origin, and anything else draws the placeholder ({@code MediaUrl.absolute}).
      */
     private static volatile String origin;
 

@@ -13,20 +13,22 @@ public final class ClientDefaultsChecks {
     private static int checks;
     // Approved settings copied from the test profile's General Settings menu, excluding calibration; the owner later
     // raised the default note speed to 5, moved the lane colours onto the Workshop palette and made the panel the
-    // settings screen's dark background.
+    // settings screen's dark background. The backdrop settings came after, defaulting to the battle's look before them.
     private static final String DEFAULTS="""
         {"noteSpeed":5.0,"musicVolume":0.35,"audioOffsetMs":0,"inputOffsetMs":0,
          "spectatorEffects":true,"panelColor":-15659244,"noteSkin":1,
          "laneColors":[-4288513,-11950,-4288513,-11950],"panelOpacity":0.0,
          "laneOpacity":0.35555556,"panelWidthScale":0.64308643,"panelHeightScale":1.5999999,
-         "noteWidthScale":2.2,"noteHeightScale":0.7793827}
+         "noteWidthScale":2.2,"noteHeightScale":0.7793827,
+         "worldDimming":0.27450982,"stageBars":true,"stageBarOpacity":0.7254902}
         """;
     private static final String CUSTOM="""
         {"noteSpeed":7.5,"musicVolume":0.72,"audioOffsetMs":93,"inputOffsetMs":-47,
          "spectatorEffects":false,"hideUserTrackWarning":true,"panelColor":-15654349,"noteSkin":2,
          "laneColors":[-65536,-16711936,-16776961,-256],"panelOpacity":0.42,
          "laneOpacity":0.83,"panelWidthScale":1.21,"panelHeightScale":0.91,
-         "noteWidthScale":1.34,"noteHeightScale":1.17}
+         "noteWidthScale":1.34,"noteHeightScale":1.17,
+         "worldDimming":0.6,"stageBars":false,"stageBarOpacity":0.4}
         """;
     public static void main(String[] args)throws Exception {
         boolean existing=args.length>0&&args[0].equals("existing");
@@ -72,6 +74,13 @@ public final class ClientDefaultsChecks {
         number(ClientBattleSettings.panelHeightScale(),want,"panelHeightScale");
         number(ClientBattleSettings.noteWidthScale(),want,"noteWidthScale");
         number(ClientBattleSettings.noteHeightScale(),want,"noteHeightScale");
+        // The battle's backdrop: a new player gets the old argb(70, 0, 0, 0) and bars of alpha 185, exactly.
+        number(ClientBattleSettings.worldDimming(),want,"worldDimming");
+        require(ClientBattleSettings.stageBars()==want.get("stageBars").getAsBoolean(),"black bars default/override lost");
+        number(ClientBattleSettings.stageBarOpacity(),want,"stageBarOpacity");
+        require(ClientBattleSettings.worldDimmingAlpha()==Math.round(want.get("worldDimming").getAsFloat()*255F),"dimming alpha differs from the setting");
+        require(ClientBattleSettings.stageBarAlpha()==(want.get("stageBars").getAsBoolean()?Math.round(want.get("stageBarOpacity").getAsFloat()*255F):0),
+                "bar alpha differs from the setting");
     }
     private static void number(float actual,JsonObject want,String key){require(Float.compare(actual,want.get(key).getAsFloat())==0,key+" default/override lost: "+actual);}
     private static void verifyServerFallback()throws Exception {
@@ -101,7 +110,8 @@ public final class ClientDefaultsChecks {
     private static void verifySaved(JsonObject actual,JsonObject want){
         for(var entry:want.entrySet()) {
             String key=entry.getKey();JsonElement value=actual.get(key);
-            boolean floating=key.endsWith("Scale")||key.endsWith("Opacity")||key.equals("noteSpeed")||key.equals("musicVolume");
+            boolean floating=key.endsWith("Scale")||key.endsWith("Opacity")||key.equals("noteSpeed")||key.equals("musicVolume")
+                    ||key.equals("worldDimming");
             require(value!=null&&(floating?Float.compare(entry.getValue().getAsFloat(),value.getAsFloat())==0:entry.getValue().equals(value)),
                     "saved "+key+" differs from chosen settings");
         }

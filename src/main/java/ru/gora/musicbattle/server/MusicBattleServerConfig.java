@@ -8,14 +8,14 @@ public final class MusicBattleServerConfig {
     public static final ModConfigSpec SPEC;
     private static final ModConfigSpec.BooleanValue WAIT_FOR_SPECTATOR_DOWNLOADS;
 
-    // Workshop (spec 06 section 9, defaults per 08 A5.3).
+    // Workshop.
     private static final ModConfigSpec.BooleanValue ALLOW_SERVER_DOWNLOADS;
     private static final ModConfigSpec.BooleanValue ALLOW_PLAYER_MAPS;
     private static final ModConfigSpec.LongValue CACHE_QUOTA_BYTES;
     private static final ModConfigSpec.IntValue SERVER_BEATMAP_LIMIT;
     private static final ModConfigSpec.LongValue SERVER_BEATMAP_QUOTA_BYTES;
 
-    // Server comments (spec 06 section 9.2).
+    // Server comments.
     private static final ModConfigSpec.BooleanValue COMMENTS_ENABLED;
     private static final ModConfigSpec.IntValue COMMENTS_RETENTION_DAYS;
     private static final ModConfigSpec.IntValue COMMENTS_MIN_PERMISSION_LEVEL;
@@ -29,7 +29,7 @@ public final class MusicBattleServerConfig {
         builder.push("battle_sync");
         WAIT_FOR_SPECTATOR_DOWNLOADS = builder
                 .comment(
-                        "Wait for every player currently inside the audible battle area to download the track before starting.",
+                        "Wait for every player currently inside the audible battle area to download the beatmap before starting.",
                         "Connected speaker chains are included. Participants are always synchronized even when this option is false."
                 )
                 .define("waitForSpectatorDownloads", true);
@@ -38,9 +38,13 @@ public final class MusicBattleServerConfig {
         builder.push("workshop");
         ALLOW_SERVER_DOWNLOADS = builder
                 .comment(
-                        "Download beatmap packages from the Workshop on the server instead of accepting bytes from a player.",
-                        "Needs outbound HTTPS to blocky-music.qwu.world. With this on, the server also verifies every set it",
-                        "holds against the Workshop once a day and hides withdrawn sets from votes."
+                        "Reserved for a later build. This build never downloads beatmaps on the server and never contacts the",
+                        "Workshop from the server, whatever this is set to: it only changes which refusal",
+                        "'/musicbattle workshop add <setId>' answers with. Beatmaps reach this server from a player's game",
+                        "(Add to server in the Workshop) or from a player who brings one to a battle or a DJ booth.",
+                        "(The one web service the mod's server side can reach is Mojang's: giving the test NPC the skin of a",
+                        "player who is not online asks Mojang's profile service for that name, unless Minecraft's own",
+                        "profile cache already knows it.)"
                 )
                 .define("allowServerDownloads", false);
         ALLOW_PLAYER_MAPS = builder

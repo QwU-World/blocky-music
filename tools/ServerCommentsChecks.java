@@ -13,7 +13,7 @@ import java.util.concurrent.TimeUnit;
 import net.neoforged.fml.loading.FMLPaths;
 
 /**
- * The {@code server-comments} check of spec 06 section 12: the key grammar and path checks of 08 A5.2
+ * The {@code server-comments} check: the key grammar and path checks
  * ({@code track_../..}, backslashes, colons, over-long keys and player names like {@code ../x}), paging cursors,
  * rate limits, the per-player and per-world document quotas, author and moderator deletes, {@code §} and control
  * stripping, atomic writes, ordered writes under concurrency and crash recovery.
@@ -50,12 +50,49 @@ public final class ServerCommentsChecks {
         concurrentPosts();
         crashRecovery();
         retention();
+        clientPageMerge();
 
         if (!failures.isEmpty()) {
             throw new AssertionError(failures.size() + " / " + checks + " server-comment failures: " + failures);
         }
         System.out.println("Server comments checks passed: " + checks);
         System.out.println("NOT COVERED: the payload round trip, skin heads and a real dedicated server");
+    }
+
+    // ---------------------------------------------------------------- the comments section's page merge
+
+    private static ru.gora.musicbattle.network.ServerCommentsPagePayload.Row row(long id, boolean deleted) {
+        return new ru.gora.musicbattle.network.ServerCommentsPagePayload.Row(id, ALICE, "Notch", "", "", 1000L + id,
+                deleted, deleted ? "" : "comment " + id, false);
+    }
+
+    /**
+     * A Workshop set's server page asks for the first page twice when it is reopened, and the answers do not say which
+     * request they answer. Both used to be appended: the tab said one comment and the page drew it twice.
+     */
+    private static void clientPageMerge() {
+        var first = List.of(row(1, false));
+        var once = ru.gora.musicbattle.client.workshop.ServerCommentRows.merge(List.of(), first);
+        var twice = ru.gora.musicbattle.client.workshop.ServerCommentRows.merge(once, first);
+        check("two answers to the first page list the comment once", twice.size() == 1 && twice.get(0).id() == 1);
+        var newest = List.of(row(30, false), row(29, false), row(28, false));
+        var older = List.of(row(27, false), row(26, false));
+        var paged = ru.gora.musicbattle.client.workshop.ServerCommentRows.merge(
+                ru.gora.musicbattle.client.workshop.ServerCommentRows.merge(newest, older), newest);
+        check("a first page answered again after an older page keeps five rows, newest first",
+                paged.stream().map(r -> r.id()).toList().equals(List.of(30L, 29L, 28L, 27L, 26L)));
+        var deleted = ru.gora.musicbattle.client.workshop.ServerCommentRows.merge(newest, List.of(row(29, true)));
+        check("a later copy of a row replaces the shown one (a delete keeps its place)",
+                deleted.size() == 3 && deleted.get(1).deleted());
+        long cursor = ru.gora.musicbattle.client.workshop.ServerCommentRows.nextBeforeId(List.of(), newest, 28, 0);
+        check("the first page sets the cursor", cursor == 28);
+        cursor = ru.gora.musicbattle.client.workshop.ServerCommentRows.nextBeforeId(newest, older, 26, cursor);
+        check("an older page moves the cursor back", cursor == 26);
+        cursor = ru.gora.musicbattle.client.workshop.ServerCommentRows.nextBeforeId(
+                ru.gora.musicbattle.client.workshop.ServerCommentRows.merge(newest, older), newest, 28, cursor);
+        check("a late second answer to the first page does not move the cursor forward again", cursor == 26);
+        check("an empty page ends the list",
+                ru.gora.musicbattle.client.workshop.ServerCommentRows.nextBeforeId(newest, List.of(), 0, 28) == 0);
     }
 
     // ---------------------------------------------------------------- keys and paths
@@ -87,7 +124,7 @@ public final class ServerCommentsChecks {
                 "track_" + "a".repeat(129), "ws_0")) {
             check("no path for " + shorten(key), ServerComments.fileOf(key).isEmpty());
         }
-        // A read never creates a file (08 A5.2).
+        // A read never creates a file.
         ServerComments.page(ALICE, false, Optional.empty(), "ws_4242", 0, 20);
         check("reading an unknown map creates no file",
                 !Files.exists(comments.resolve("ws_4242.json")));

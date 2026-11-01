@@ -43,7 +43,7 @@ import ru.gora.musicbattle.client.ui.UiShaderGuard;
  * Proves: the SDF shader's parameter packing and the Java copy of its coverage maths (rounded rects,
  * strokes, shadows and the ring wedge on a CPU grid against plain geometry), the shader files' names and
  * constants agree with the Java side (plus glslangValidator when installed); spectrum and palette colours
- * equal the website table and tokens (and the website repository's files when it sits next to this one);
+ * equal the website table and tokens (and the Workshop website's own source files when BLOCKY_WEBSITE_DIR names them);
  * TTF tier selection and one font JSON per style and tier; the fonts are TrueType with glyf outlines,
  * Cyrillic, the added symbols and an OFL text; icon atlases match the enum and have no dark or bleeding
  * pixels; Tween and SmoothScroll are deterministic and frame-rate independent; CardGrid's visible range and
@@ -370,7 +370,7 @@ public final class UiToolkitChecks {
 
     // ---- colours ------------------------------------------------------------------------------------------
 
-    /** Spec 03 section 3.3, "Difficulty spectrum (our stops, linear-light interpolation)". */
+    /** The website's "Difficulty spectrum (our stops, linear-light interpolation)". */
     static final double[] WEBSITE_STOPS = {0.0, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 8.5, 10.0};
     static final int[] WEBSITE_COLOURS = {0x7fb2ff, 0x56d6ff, 0x52efc0, 0xa8ee5c, 0xffe25e, 0xffa25a, 0xff6470, 0xd65ad8, 0x8363ff, 0x2a1a66};
 
@@ -414,27 +414,10 @@ public final class UiToolkitChecks {
                 "star values floor to two decimals");
         near(Spectrum.contrast(0xFFFFFFFF, 0xFF000000), 21.0, 1e-9, "contrast of white on black");
 
-        Path website = root.resolveSibling("blocky-music-workshop");
-        Path spec = website.resolve("docs/spec/03-website.md");
-        if (!Files.isRegularFile(spec)) {
-            System.out.println("NOTE website repository not found next to this one: spectrum compared with the embedded table");
+        Path website = websiteSource();
+        if (website == null) {
+            System.out.println("NOTE " + WEBSITE_ENV + " not set: spectrum compared with the embedded table only");
             return;
-        }
-        String text = Files.readString(spec, StandardCharsets.UTF_8);
-        Matcher starsRow = Pattern.compile("\\| Stars \\|([^\\n]+)").matcher(text);
-        Matcher colourRow = Pattern.compile("\\| Colour \\|([^\\n]+)").matcher(text);
-        boolean found = starsRow.find() && colourRow.find();
-        check(found, "03-website.md still has the spectrum table");
-        if (found) {
-            List<String> stars = cells(starsRow.group(1));
-            List<String> colours = cells(colourRow.group(1));
-            check(stars.size() == WEBSITE_STOPS.length && colours.size() == WEBSITE_COLOURS.length, "website table has 10 stops");
-            for (int i = 0; i < Math.min(stars.size(), WEBSITE_STOPS.length); i++) {
-                double value = Double.parseDouble(stars.get(i).replace("+", ""));
-                int colour = Integer.parseInt(colours.get(i).replace("`", "").replace("#", ""), 16);
-                check(value == WEBSITE_STOPS[i] && colour == WEBSITE_COLOURS[i],
-                        "website spec stop " + i + " (" + stars.get(i) + ", " + colours.get(i) + ") equals the mod");
-            }
         }
         Path module = website.resolve("client/spectrum.ts");
         if (Files.isRegularFile(module)) {
@@ -451,7 +434,7 @@ public final class UiToolkitChecks {
             check(ts.contains("hslToRgb(265, 20, 12), alpha: 0.85") && ts.contains("s >= 9.5 || contrast(") && ts.contains("< 3"),
                     "client/spectrum.ts still uses the pill capsule, ring threshold and contrast the mod mirrors");
         } else {
-            System.out.println("NOTE website client/spectrum.ts not found: compared with the spec table only");
+            System.out.println("NOTE " + WEBSITE_ENV + " has no client/spectrum.ts: spectrum stops not cross-checked");
         }
         Path css = website.resolve("public/css/modules/spectrum.css");
         if (Files.isRegularFile(css)) {
@@ -475,18 +458,21 @@ public final class UiToolkitChecks {
             check(rows == Spectrum.MAX_BUCKET + 1 && wrong == 0,
                     "every bucket of the website's spectrum.css (" + rows + ") has the mod's colour, glyph and ring, " + wrong + " differ");
         } else {
-            System.out.println("NOTE website spectrum.css not generated yet: bucket colours not cross-checked");
+            System.out.println("NOTE " + WEBSITE_ENV + " has no public/css/modules/spectrum.css: bucket colours not cross-checked");
         }
     }
 
-    static List<String> cells(String row) {
-        List<String> result = new ArrayList<>();
-        for (String cell : row.split("\\|")) {
-            if (!cell.isBlank()) {
-                result.add(cell.trim());
-            }
+    /** Optional: the folder of the Workshop website's own source, which is not part of this repository. */
+    static final String WEBSITE_ENV = "BLOCKY_WEBSITE_DIR";
+
+    /** The folder BLOCKY_WEBSITE_DIR names, or null when it is not set or is not a folder. */
+    static Path websiteSource() {
+        String value = System.getenv(WEBSITE_ENV);
+        if (value == null || value.isBlank()) {
+            return null;
         }
-        return result;
+        Path folder = Path.of(value).toAbsolutePath().normalize();
+        return Files.isDirectory(folder) ? folder : null;
     }
 
     static int independentSpectrum(double stars) {
@@ -551,9 +537,10 @@ public final class UiToolkitChecks {
         check(Palette.fade(0xFF123456, 0.5F) == 0x80123456 && Palette.withAlpha(0x00ABCDEF, 1.0F) == 0xFFABCDEF, "fade and withAlpha");
         check(Palette.mix(0xFF000000, 0xFFFFFFFF, 0.5F) == 0xFF808080, "mix halves each channel");
 
-        Path tokens = root.resolveSibling("blocky-music-workshop").resolve("public/css/tokens.css");
-        if (!Files.isRegularFile(tokens)) {
-            System.out.println("NOTE website tokens.css not found next to this repository: palette compared with the embedded table");
+        Path website = websiteSource();
+        Path tokens = website == null ? null : website.resolve("public/css/tokens.css");
+        if (tokens == null || !Files.isRegularFile(tokens)) {
+            System.out.println("NOTE " + WEBSITE_ENV + " not set or without public/css/tokens.css: palette compared with the embedded table only");
             return;
         }
         String css = Files.readString(tokens, StandardCharsets.UTF_8);

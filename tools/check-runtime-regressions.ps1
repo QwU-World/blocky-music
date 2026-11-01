@@ -15,7 +15,7 @@ $sources = @(
     'tools/CameraCollisionChecks.java',
     'tools/BattleAnimationInputChecks.java'
 ) | ForEach-Object { Join-Path $projectRoot $_ }
-$jdk = 'C:/Program Files/Eclipse Adoptium/jdk-21.0.11.10-hotspot/bin'
+$jdk = & (Join-Path $PSScriptRoot 'find-jdk.ps1')
 & "$jdk/javac.exe" -proc:none -encoding UTF-8 -cp $cp -d $outputDir @sources
 if ($LASTEXITCODE) { throw 'Runtime regression test compilation failed' }
 foreach ($main in @('ru.gora.musicbattle.client.DjAudioEffectsChecks','ru.gora.musicbattle.data.CameraCollisionChecks','ru.gora.musicbattle.data.BattleAnimationInputChecks')) {

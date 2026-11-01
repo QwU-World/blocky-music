@@ -16,7 +16,11 @@ public final class BattleSpeakerRoutingChecks {
     static int checks;
 
     public static void main(String[] args) throws Exception {
-        if (args.length == 2) { isolate(Path.of(args[0]), Path.of(args[1])); return; }
+        // With the compiled classes and an output folder: isolate first, then run the checks in this same JVM. No
+        // BattleManager has been loaded yet, and the output folder comes first on the class path, so the checks load
+        // the isolated copy. tools/run-check.py runs only a script's first java line, and with the isolation as a run
+        // of its own the checks themselves never ran there.
+        if (args.length == 2) isolate(Path.of(args[0]), Path.of(args[1]));
         Class<?> manager = Class.forName(MANAGER.replace('/', '.'));
         Class<?> keyType = Class.forName(MANAGER.replace('/', '.') + "$BattleAudioSourceKey");
         Method selector;

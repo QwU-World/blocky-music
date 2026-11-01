@@ -7,7 +7,7 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import ru.gora.musicbattle.MusicBattleMod;
 
 /**
- * One 24 KiB slice of a {@code .blockymap} travelling from a player to the server (spec 06 section 9.1), the same
+ * One 24 KiB slice of a {@code .blockymap} travelling from a player to the server, the same
  * shape as the existing publish upload. Both ends read and write the file off the main thread.
  */
 public record ServerBeatmapChunkPayload(UUID transferId, int chunkIndex, byte[] data) implements CustomPacketPayload {

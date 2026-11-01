@@ -9,7 +9,6 @@
  * {@code client.workshop}. Installed sets are client-only state and are never loaded into {@code MusicBattleTracks}
  * ({@code workshop-catalog-isolation}).
  *
- * <p>The design, the package format and the phases are in {@code docs/WORKSHOP.md}; the binding spec is the
- * blocky-music-workshop repository, {@code docs/spec/06-mod.md} with {@code 08-amendments.md}.
+ * <p>The design, the package format and the phases are in {@code docs/WORKSHOP.md}.
  */
 package ru.gora.musicbattle.workshop;

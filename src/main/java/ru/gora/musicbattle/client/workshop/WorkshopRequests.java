@@ -17,7 +17,7 @@ import ru.gora.musicbattle.workshop.api.WorkshopDownloader;
 import ru.gora.musicbattle.workshop.api.WorkshopRequest;
 
 /**
- * Install requests from the QwU Workshop Helper (spec 07 section 8, wave I1): {@code <setId>.blockymap-request} files
+ * Install requests from the QwU Workshop Helper: {@code <setId>.blockymap-request} files
  * in {@code music_battle_tracks/workshop_inbox/}, written when the player clicks "Install in game" on the site or
  * opens a {@code blockymusic://install/<id>} link.
  *

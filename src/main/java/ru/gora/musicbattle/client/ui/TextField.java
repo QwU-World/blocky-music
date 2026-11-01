@@ -12,7 +12,7 @@ import org.lwjgl.glfw.GLFW;
 /**
  * The Workshop's own text field: TrueType text in a {@link TextStyle}, a caret, a selection, placeholder text,
  * clipboard keys and multi-line editing. Vanilla's {@code EditBox} measures everything with the bitmap font and
- * cannot draw our fonts, so the Workshop brings its own (spec 06 section 1, toolkit list).
+ * cannot draw our fonts, so the Workshop brings its own.
  *
  * <p>The owning screen positions it, renders it and forwards {@code charTyped}, {@code keyPressed} and mouse events.
  * Render thread only.

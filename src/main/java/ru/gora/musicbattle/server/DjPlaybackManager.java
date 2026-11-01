@@ -43,9 +43,11 @@ import ru.gora.musicbattle.MusicBattleMod;
 import ru.gora.musicbattle.block.entity.BattleCameraBlockEntity;
 import ru.gora.musicbattle.block.entity.DjPanelBlockEntity;
 import ru.gora.musicbattle.block.entity.SpeakerBlockEntity;
+import ru.gora.musicbattle.data.ChartBeat;
 import ru.gora.musicbattle.data.DjVisualEffects;
 import ru.gora.musicbattle.data.DjVisualEffectConfig;
 import ru.gora.musicbattle.data.DjPlaylistEntry;
+import ru.gora.musicbattle.data.DjQueueContinuity;
 import ru.gora.musicbattle.data.TrackEffect;
 import ru.gora.musicbattle.network.BattleAudiencePayload;
 import ru.gora.musicbattle.network.ConfigureDjPanelPayload;
@@ -101,13 +103,6 @@ public final class DjPlaybackManager {
      */
     private static final long WORKSHOP_ADD_TIMEOUT_TICKS = 20L * 60L * 10L;
 
-    /**
-     * Charts of sets a DJ brought into the server's cache, by chart id. Like a vote's cached set they stay out of the
-     * catalogue that battles and other players browse, but a DJ panel has to find them by id for as long as they
-     * are in a playlist, so they are remembered here until the server stops ({@link #trackById}).
-     */
-    private static final Map<String, MusicBattleTracks.Track> CACHED_WORKSHOP_TRACKS = new HashMap<>();
-
     private record PendingWorkshopAdd(ResourceKey<Level> dimension, BlockPos panelPos, long setId,
                                       String contentSha256, String chartKey, long expiresAtTick) {
     }
@@ -119,8 +114,7 @@ public final class DjPlaybackManager {
     static void appendMusicMobSources(ServerLevel level, List<MusicMobRhythm.Source> sources) {
         for (Map.Entry<UUID, SessionAudience> entry : AUDIENCES.entrySet()) {
             SessionAudience session = entry.getValue();
-            if (session.level != level || !level.hasChunkAt(session.panelPos)
-                    || !(level.getBlockEntity(session.panelPos) instanceof DjPanelBlockEntity panel)
+            if (session.level != level || !(loadedBlockEntity(level, session.panelPos) instanceof DjPanelBlockEntity panel)
                     || !panel.isPlaying() || !entry.getKey().equals(panel.getPlaybackId())) {
                 continue;
             }
@@ -134,11 +128,14 @@ public final class DjPlaybackManager {
             if (elapsed >= scaledTick(track.durationTicks(), speed)) {
                 continue;
             }
-            MusicMobRhythm.Beat beat = new MusicMobRhythm.Beat(
-                    entry.getKey(), elapsed, track.bpm() * (double) speed);
+            // Counted from beat 1, as a battle's mobs and smileys count theirs (BattleManager), so a song with a lead-in
+            // moves them on its beat and not on beats counted from the start of the file.
+            MusicMobRhythm.Beat beat = new MusicMobRhythm.Beat(entry.getKey(),
+                    ChartBeat.beatTicks(elapsed, ChartBeat.effectiveOffsetMs(track.offsetMs(), speed)),
+                    track.bpm() * (double) speed);
             for (BlockPos speakerPos : panel.getLinkedSpeakers()) {
                 if (validLinkedSpeaker(level, panel, speakerPos)
-                        && level.getBlockEntity(speakerPos) instanceof SpeakerBlockEntity speaker) {
+                        && loadedBlockEntity(level, speakerPos) instanceof SpeakerBlockEntity speaker) {
                     MusicMobRhythm.addSource(sources, beat,
                             Vec3.atCenterOf(speakerPos).add(0.0D, 0.65D, 0.0D),
                             speaker.getSoundRadius(), track.volume() * speaker.getVolume());
@@ -147,6 +144,10 @@ public final class DjPlaybackManager {
         }
     }
 
+    /**
+     * A booth's block entity has loaded. It stays registered until {@link #unregister}, through any time its chunk
+     * spends demoted below full status; the audience pass only skips it then (see loadedPanelPositions).
+     */
     public static void register(ServerLevel level, BlockPos pos) {
         LOADED_PANELS.computeIfAbsent(level, ignored -> new HashSet<>()).add(pos.immutable());
     }
@@ -154,7 +155,10 @@ public final class DjPlaybackManager {
     public static void unregister(ServerLevel level, BlockPos pos) {
         var cameraSelections = EXPLICIT_CAMERAS.get(level);
         if (cameraSelections != null) cameraSelections.remove(pos);
-        invalidateAudioIntent(level, pos);
+        // A start still waiting for its audio outlives the chunk: the booth may already be paused at the end of the
+        // previous song for it, and dropping it here left that booth silent for good once its DJ flew off at the
+        // wrong moment. It parks and goes ahead when the booth is loaded again (DjQueueContinuity.preparedStart).
+        // Breaking the booth drops it in destroyPanel.
         SPEED_REQUEST_REVISIONS.keySet().removeIf(key -> key.dimension.equals(level.dimension())
                 && key.panelPos == pos.asLong());
         Set<BlockPos> panels = LOADED_PANELS.get(level);
@@ -175,15 +179,16 @@ public final class DjPlaybackManager {
                 stopAudience(level.getServer(), playbackId);
             }
             for (BlockPos speakerPos : panel.getLinkedSpeakers()) {
-                if (level.hasChunkAt(speakerPos)
-                        && level.getBlockEntity(speakerPos) instanceof SpeakerBlockEntity speaker
+                if (loadedBlockEntity(level, speakerPos) instanceof SpeakerBlockEntity speaker
                         && speaker.isControlledBy(pos)) {
                     speaker.setDjController(null);
                 }
             }
             panel.stopPlayback();
         }
+        invalidateAudioIntent(level, pos);
         unregister(level, pos);
+        DjWorkshopCache.forgetBooth(level, pos);
     }
 
     public static void openPanel(ServerPlayer player, BlockPos panelPos) {
@@ -200,7 +205,12 @@ public final class DjPlaybackManager {
                                 entry.startSourceTicks(), entry.fxMode(), entry.effects(), entry.mixer(), track.effects(), true)));
             }
         }
-        trackById(panel.getSelectedTrackId()).ifPresent(DjPlaybackManager::warmSpeedVariants);
+        String selectedTrackId = panel.getSelectedTrackId();
+        if (trackById(selectedTrackId).isEmpty()) {
+            selectedTrackId = fallbackSelection(panel);
+            panel.selectTrack(selectedTrackId);
+        }
+        trackById(selectedTrackId).ifPresent(DjPlaybackManager::warmSpeedVariants);
         List<OpenDjPanelPayload.SpeakerEntry> speakers = panel.getLinkedSpeakers().stream()
                 .filter(player.serverLevel()::hasChunkAt)
                 .map(pos -> player.serverLevel().getBlockEntity(pos) instanceof SpeakerBlockEntity speaker
@@ -247,13 +257,13 @@ public final class DjPlaybackManager {
             }
         }
         List<MusicBattleTracks.Track> availableTracks = djTracks();
-        String selectedTrackId = panel.getSelectedTrackId();
-        if (trackById(selectedTrackId).isEmpty()) {
-            selectedTrackId = trackById(panel.getActiveTrackId()).isPresent()
-                    ? panel.getActiveTrackId()
-                    : availableTracks.isEmpty() ? "" : availableTracks.getFirst().id();
-            panel.selectTrack(selectedTrackId);
-        }
+        List<String> library = panel.getLibrary();
+        // The booth's list, its queue and its deck are named first, so a server with more maps than the payload
+        // carries still describes every map this panel actually shows.
+        Set<String> shown = new HashSet<>(library);
+        panel.getPlaylist().forEach(entry -> shown.add(entry.trackId()));
+        shown.add(panel.getActiveTrackId());
+        shown.add(selectedTrackId);
         float speed = normalizeSpeed(panel.getPlaybackSpeed());
         PendingAudioIntent pendingAudio = PENDING_AUDIO_INTENTS.get(panelKey(player.serverLevel(), panelPos));
         boolean validPendingAudio = pendingAudio != null && pendingAudio.matches(panel);
@@ -295,7 +305,8 @@ public final class DjPlaybackManager {
         }
         PacketDistributor.sendToPlayer(player, new OpenDjPanelPayload(
                 panelPos,
-                djSummaries(availableTracks),
+                djSummaries(availableTracks, shown),
+                library,
                 speakers,
                 activeSpeakerIndex,
                 panel.isEditingAllSpeakers(),
@@ -323,26 +334,71 @@ public final class DjPlaybackManager {
                 panel.getPlaybackId(), speed,
                 Math.max(0, panel.getPlaybackPositionTicks(player.level().getGameTime())),
                 monitorTargets.playerEntityIds(), monitorTargets.mobEntityIds(),
-                availableTracks.size() > OpenDjPanelPayload.MAX_TRACKS
+                availableTracks.size() > OpenDjPanelPayload.MAX_TRACKS,
+                loadedTrack.map(track -> ChartBeat.effectiveOffsetMs(track.offsetMs(), speed)).orElse(0)
         ));
     }
 
     /**
-     * The picker's rows with the workshop identity filled in (spec 06 section 9.4), withdrawn server beatmaps left
-     * out, capped at what the payload carries.
+     * The picker's rows with the workshop identity filled in, withdrawn server beatmaps left
+     * out, capped at what the payload carries. Tracks in {@code first} lead, in catalogue order, then the rest.
      */
-    private static List<ru.gora.musicbattle.data.TrackSummary> djSummaries(List<MusicBattleTracks.Track> tracks) {
+    private static List<ru.gora.musicbattle.data.TrackSummary> djSummaries(List<MusicBattleTracks.Track> tracks,
+                                                                          Set<String> first) {
         List<ru.gora.musicbattle.data.TrackSummary> summaries = new ArrayList<>();
-        for (MusicBattleTracks.Track track : tracks) {
-            if (summaries.size() >= OpenDjPanelPayload.MAX_TRACKS) {
-                break;
+        for (boolean leading : new boolean[] {true, false}) {
+            for (MusicBattleTracks.Track track : tracks) {
+                if (summaries.size() >= OpenDjPanelPayload.MAX_TRACKS) {
+                    break;
+                }
+                if (first.contains(track.id()) != leading
+                        || ru.gora.musicbattle.server.workshop.ServerBeatmaps.hiddenFromVotes(track)) {
+                    continue;
+                }
+                summaries.add(ru.gora.musicbattle.server.workshop.ServerBeatmaps.summary(track));
             }
-            if (ru.gora.musicbattle.server.workshop.ServerBeatmaps.hiddenFromVotes(track)) {
-                continue;
-            }
-            summaries.add(ru.gora.musicbattle.server.workshop.ServerBeatmaps.summary(track));
         }
         return List.copyOf(summaries);
+    }
+
+    /**
+     * What the panel's transport works on when its selection is gone: the song on the deck, else the first playable
+     * map on the booth's list, else nothing. It used to be the first map on the whole server, which with a list of
+     * the DJ's own would be a song the panel does not show - and Play would start it.
+     */
+    private static String fallbackSelection(DjPanelBlockEntity panel) {
+        if (trackById(panel.getActiveTrackId()).isPresent()) {
+            return panel.getActiveTrackId();
+        }
+        for (String trackId : panel.getLibrary()) {
+            if (trackById(trackId).isPresent()) {
+                return trackId;
+            }
+        }
+        return "";
+    }
+
+    /**
+     * Points the transport at a map that has just joined the booth's list when the panel had nothing selected, so
+     * the first map a DJ adds to an empty booth is ready on Play. A working selection is left alone: moving it would
+     * turn the timeline into the cue of another song under a DJ's hands.
+     */
+    private static void selectAddedTrack(ServerLevel level, DjPanelBlockEntity panel, MusicBattleTracks.Track track) {
+        if (trackById(panel.getSelectedTrackId()).isEmpty()) {
+            invalidatePlaybackStartIntent(level, panel.getBlockPos());
+            panel.selectTrack(track.id());
+            warmSpeedVariants(track);
+        }
+    }
+
+    /** A selection that pointed at a map just taken off the list moves on, unless that map is the one playing. */
+    private static void reselectAfterLibraryRemoval(ServerLevel level, DjPanelBlockEntity panel, String removedId) {
+        if (removedId == null || !removedId.equals(panel.getSelectedTrackId())
+                || removedId.equals(panel.getActiveTrackId())) {
+            return;
+        }
+        invalidatePlaybackStartIntent(level, panel.getBlockPos());
+        panel.selectTrack(fallbackSelection(panel));
     }
 
     /** Returns a transform only for a camera explicitly linked to this nearby panel. */
@@ -506,6 +562,25 @@ public final class DjPlaybackManager {
                 discardDeferredLiveControl(player, panelPos, false);
                 resetSpeakers(player, panel, payload);
             }
+            case LIBRARY_ADD -> {
+                // Only the booth's list changes. The playlist is filled from it by the playlist's own Add button.
+                Optional<MusicBattleTracks.Track> track = trackById(payload.trackId())
+                        .filter(found -> !ru.gora.musicbattle.server.workshop.ServerBeatmaps.hiddenFromVotes(found));
+                if (track.isEmpty()) {
+                    player.displayClientMessage(Component.translatable("message.music_battle.dj_panel.track_missing")
+                            .withStyle(ChatFormatting.RED), true);
+                } else if (panel.isInLibrary(track.get().id()) || panel.addToLibrary(track.get().id())) {
+                    selectAddedTrack(level, panel, track.get());
+                } else {
+                    player.displayClientMessage(Component.translatable("screen.music_battle.dj_panel.library_full")
+                            .withStyle(ChatFormatting.YELLOW), true);
+                }
+            }
+            case LIBRARY_REMOVE -> {
+                if (panel.removeFromLibrary(payload.trackId())) {
+                    reselectAfterLibraryRemoval(level, panel, payload.trackId());
+                }
+            }
         }
         if (refreshScreen) {
             openPanel(player, panelPos);
@@ -593,21 +668,24 @@ public final class DjPlaybackManager {
 
     /**
      * A track a DJ panel may play: the server catalogue first, then a Workshop chart a DJ brought into the cache. The
-     * catalogue wins, so a set that has since been added to the server plays from its listed copy.
+     * catalogue wins, so a set that has since been added to the server plays from its listed copy. A cached chart
+     * this run has not read yet is read from the set its booth names ({@link DjWorkshopCache}), so a booth's row
+     * still plays after a restart.
      */
     public static Optional<MusicBattleTracks.Track> trackById(String id) {
         Optional<MusicBattleTracks.Track> listed = MusicBattleTracks.byId(id);
-        return listed.isPresent() || id == null ? listed : Optional.ofNullable(CACHED_WORKSHOP_TRACKS.get(id));
+        return listed.isPresent() || id == null ? listed
+                : DjWorkshopCache.track(net.neoforged.neoforge.server.ServerLifecycleHooks.getCurrentServer(), id);
     }
 
     /** The panel's track list: the catalogue, then the cached Workshop charts the catalogue does not already hold. */
     private static List<MusicBattleTracks.Track> djTracks() {
         List<MusicBattleTracks.Track> listed = MusicBattleTracks.availableTracks();
-        if (CACHED_WORKSHOP_TRACKS.isEmpty()) {
+        if (DjWorkshopCache.tracks().isEmpty()) {
             return listed;
         }
         List<MusicBattleTracks.Track> tracks = new ArrayList<>(listed);
-        for (MusicBattleTracks.Track cached : CACHED_WORKSHOP_TRACKS.values()) {
+        for (MusicBattleTracks.Track cached : DjWorkshopCache.tracks()) {
             if (MusicBattleTracks.byId(cached.id()).isEmpty()) {
                 tracks.add(cached);
             }
@@ -616,12 +694,12 @@ public final class DjPlaybackManager {
     }
 
     /**
-     * A chart of a Workshop set chosen in the DJ's Workshop picker. A set this server already holds joins the playlist
-     * at once, exactly as a server track would, because it is one: its charts are in the catalogue. A set it does not
-     * hold comes through "Add to server" when the DJ has map rights, so it is listed for everyone afterwards; anyone
-     * else brings their installed copy into the cache the way a battle vote does, under the same server setting.
-     * A refusal names its reason. Either way the chart is added once the set is here ({@link #tickPendingWorkshopAdds},
-     * {@link #workshopCached}).
+     * A chart of a Workshop set chosen in the Workshop picker behind the panel's "+". A set this server already holds
+     * joins the booth's list at once, exactly as a server track would, because it is one: its charts are in the
+     * catalogue. A set it does not hold comes through "Add to server" when the DJ has map rights, so it is listed for
+     * everyone afterwards; anyone else brings their installed copy into the cache the way a battle vote does, under the
+     * same server setting. A refusal names its reason. Either way the chart joins the list once the set is here
+     * ({@link #tickPendingWorkshopAdds}, {@link #workshopCached}); it never goes into the playlist by itself.
      */
     public static void handleWorkshopAdd(ServerPlayer player, ru.gora.musicbattle.network.DjWorkshopAddPayload payload) {
         BlockPos panelPos = payload.panelPos();
@@ -636,9 +714,9 @@ public final class DjPlaybackManager {
                     Component.translatable("music_battle.l10n.server.track_unavailable"));
             return;
         }
-        if (panel.getPlaylist().size() >= DjPlaylistEntry.MAX_ENTRIES) {
+        if (libraryFull(panel, ru.gora.musicbattle.workshop.WorkshopLayout.chartId(setId, chartKey))) {
             refuseWorkshopAdd(player, panelPos, setId,
-                    Component.translatable("screen.music_battle.dj_playlist.workshop.full"));
+                    Component.translatable("screen.music_battle.dj_panel.library_full"));
             return;
         }
         Optional<ru.gora.musicbattle.server.workshop.ServerBeatmaps.Entry> held =
@@ -651,7 +729,7 @@ public final class DjPlaybackManager {
         if (chart.isPresent()) {
             // The server's copy plays even when the DJ picked another revision of the set: it is the copy every
             // listener can be sent, and swapping it would need the same rights as adding it.
-            addWorkshopChart(player, panel, panelPos, chart.get());
+            addWorkshopChart(player, player.serverLevel(), panel, panelPos, chart.get());
             openPanel(player, panelPos);
             return;
         }
@@ -676,7 +754,7 @@ public final class DjPlaybackManager {
             if (cached.isPresent()) {
                 // Cached earlier for a battle vote or another DJ: no transfer at all, as a vote would do.
                 rememberCachedCharts(setId, contentSha256);
-                addWorkshopChart(player, panel, panelPos, cached.get());
+                addWorkshopChart(player, player.serverLevel(), panel, panelPos, cached.get());
                 openPanel(player, panelPos);
                 return;
             }
@@ -705,8 +783,8 @@ public final class DjPlaybackManager {
     }
 
     /**
-     * A DJ's set arrived in the cache: its charts become playable on DJ panels and the chosen one joins the playlist.
-     * Called by {@code ServerBeatmapTransfers} on the server thread.
+     * A DJ's set arrived in the cache: its charts become playable on DJ panels and the chosen one joins the booth's
+     * list. Called by {@code ServerBeatmapTransfers} on the server thread.
      */
     public static void workshopCached(ServerPlayer player, long setId, String contentSha256) {
         rememberCachedCharts(setId, contentSha256);
@@ -719,9 +797,10 @@ public final class DjPlaybackManager {
     }
 
     /**
-     * The transfer of a set a DJ is waiting for was refused or given up. Without this the playlist line kept saying
-     * the map was on its way until it faded, and the DJ could neither retry nor tell what went wrong. Called by
-     * {@code ServerBeatmapTransfers} for every refusal; one about a set no DJ pick waits for is ignored.
+     * The transfer of a set a DJ is waiting for was refused or given up. Without this the line above the panel's
+     * library kept saying the map was on its way until it faded, and the DJ could neither retry nor tell what went
+     * wrong. Called by {@code ServerBeatmapTransfers} for every refusal; one about a set no DJ pick waits for is
+     * ignored.
      */
     public static void workshopTransferFailed(ServerPlayer player, long setId, Component reason) {
         PendingWorkshopAdd wish = player == null ? null : PENDING_WORKSHOP_ADDS.get(player.getUUID());
@@ -733,10 +812,7 @@ public final class DjPlaybackManager {
     }
 
     private static void rememberCachedCharts(long setId, String contentSha256) {
-        for (MusicBattleTracks.Track track
-                : ru.gora.musicbattle.server.workshop.ServerBeatmapTransfers.cachedCharts(setId, contentSha256)) {
-            CACHED_WORKSHOP_TRACKS.put(track.id(), track);
-        }
+        DjWorkshopCache.remember(setId, contentSha256);
     }
 
     /**
@@ -764,7 +840,7 @@ public final class DjPlaybackManager {
         }
     }
 
-    /** Puts the chosen chart of a set that has just arrived into the playlist it was picked for. */
+    /** Puts the chosen chart of a set that has just arrived on the list of the booth it was picked at. */
     private static void completeWorkshopAdd(MinecraftServer server, ServerPlayer player, PendingWorkshopAdd wish) {
         ServerLevel level = server.getLevel(wish.dimension());
         Optional<MusicBattleTracks.Track> chart = workshopChart(wish.setId(), wish.chartKey());
@@ -777,18 +853,17 @@ public final class DjPlaybackManager {
             return;
         }
         // The panel's chunk is not loaded again for this: a DJ who walked so far away that it unloaded hears why.
-        if (!level.hasChunkAt(wish.panelPos())
-                || !(level.getBlockEntity(wish.panelPos()) instanceof DjPanelBlockEntity panel)) {
+        if (!(loadedBlockEntity(level, wish.panelPos()) instanceof DjPanelBlockEntity panel)) {
             refuseWorkshopAdd(player, wish.panelPos(), wish.setId(),
-                    Component.translatable("screen.music_battle.dj_playlist.workshop.panel_gone"));
+                    Component.translatable("screen.music_battle.dj_panel.library_panel_gone"));
             return;
         }
-        if (panel.getPlaylist().size() >= DjPlaylistEntry.MAX_ENTRIES) {
-            refuseWorkshopAdd(player, wish.panelPos(), wish.setId(),
-                    Component.translatable("screen.music_battle.dj_playlist.workshop.full"));
-            return;
-        }
-        addWorkshopChart(player, panel, wish.panelPos(), chart.get());
+        addWorkshopChart(player, level, panel, wish.panelPos(), chart.get());
+    }
+
+    /** The list is full for this chart unless the chart is already on it. */
+    private static boolean libraryFull(DjPanelBlockEntity panel, String trackId) {
+        return !panel.isInLibrary(trackId) && panel.getLibrary().size() >= DjPanelBlockEntity.MAX_LIBRARY_TRACKS;
     }
 
     /** A Workshop chart in the server catalogue or a DJ's cache, unless its set is withdrawn. */
@@ -798,13 +873,24 @@ public final class DjPlaybackManager {
                 .filter(track -> !ru.gora.musicbattle.server.workshop.ServerBeatmaps.hiddenFromVotes(track));
     }
 
-    /** The same row the playlist's own Add makes, so the chart behaves as any server track from here on. */
-    private static void addWorkshopChart(ServerPlayer player, DjPanelBlockEntity panel, BlockPos panelPos,
-                                         MusicBattleTracks.Track track) {
-        panel.addPlaylistEntry(track.id(), 0);
+    /**
+     * The chart joins the booth's list as a server map picked with "+" would, and behaves as any server track from
+     * here on. It used to go straight into the playlist, which put songs in the queue that the DJ had only meant to
+     * have at hand; the playlist is filled by its own Add button now.
+     */
+    private static void addWorkshopChart(ServerPlayer player, ServerLevel level, DjPanelBlockEntity panel,
+                                         BlockPos panelPos, MusicBattleTracks.Track track) {
+        boolean already = panel.isInLibrary(track.id());
+        if (!already && !panel.addToLibrary(track.id())) {
+            refuseWorkshopAdd(player, panelPos, track.workshopSetId(),
+                    Component.translatable("screen.music_battle.dj_panel.library_full"));
+            return;
+        }
+        selectAddedTrack(level, panel, track);
         PacketDistributor.sendToPlayer(player, new ru.gora.musicbattle.network.DjWorkshopAddResultPayload(panelPos,
                 track.workshopSetId(), ru.gora.musicbattle.network.DjWorkshopAddResultPayload.ADDED,
-                Component.translatable("screen.music_battle.dj_playlist.workshop.added", track.title())));
+                Component.translatable(already ? "screen.music_battle.dj_panel.library_already"
+                        : "screen.music_battle.dj_panel.library_added", track.title())));
     }
 
     private static void refuseWorkshopAdd(ServerPlayer player, BlockPos panelPos, long setId, Component reason) {
@@ -876,14 +962,16 @@ public final class DjPlaybackManager {
         }
         for (ServerLevel level : server.getAllLevels()) {
             Map<BlockPos, Integer> activeSpeakers = new HashMap<>();
+            Map<BlockPos, Long> speakerBeats = new HashMap<>();
             List<ActiveDjSession> sessions = new ArrayList<>();
             for (BlockPos panelPos : loadedPanelPositions(level).stream()
                     .sorted(Comparator.comparingLong(BlockPos::asLong)).toList()) {
-                if (!(level.getBlockEntity(panelPos) instanceof DjPanelBlockEntity panel)) {
+                if (!(loadedBlockEntity(level, panelPos) instanceof DjPanelBlockEntity panel)) {
                     continue;
                 }
                 pruneConnections(level, panel);
-                ActiveDjSession session = preparePlayback(level, panel, activeSpeakers);
+                resumeParkedStart(level, panel);
+                ActiveDjSession session = preparePlayback(level, panel, activeSpeakers, speakerBeats);
                 if (session != null) {
                     sessions.add(session);
                 }
@@ -947,7 +1035,7 @@ public final class DjPlaybackManager {
                 }
                 updateAudience(level, session, listeners);
             }
-            SpeakerNetwork.setDjActiveStates(level, activeSpeakers);
+            SpeakerNetwork.setDjActiveStates(level, activeSpeakers, speakerBeats);
         }
     }
 
@@ -956,7 +1044,9 @@ public final class DjPlaybackManager {
             UUID playbackId = entry.getKey();
             SessionAudience session = entry.getValue();
             ServerLevel level = session.level;
-            if (!(level.getBlockEntity(session.panelPos) instanceof DjPanelBlockEntity panel)
+            // Like the other per-tick passes over sessions, this reads the booth only from a chunk that is already
+            // loaded (loadedBlockEntity): getBlockEntity would renew the chunk's ticket on every pass.
+            if (!(loadedBlockEntity(level, session.panelPos) instanceof DjPanelBlockEntity panel)
                     || !panel.isPlaying()
                     || !playbackId.equals(panel.getPlaybackId())) {
                 continue;
@@ -986,8 +1076,7 @@ public final class DjPlaybackManager {
             UUID playbackId = entry.getKey();
             SessionAudience session = entry.getValue();
             ServerLevel level = session.level;
-            if (level.getServer() != server || !level.hasChunkAt(session.panelPos)
-                    || !(level.getBlockEntity(session.panelPos) instanceof DjPanelBlockEntity panel)
+            if (level.getServer() != server || !(loadedBlockEntity(level, session.panelPos) instanceof DjPanelBlockEntity panel)
                     || !panel.isPlaying() || !playbackId.equals(panel.getPlaybackId())) {
                 continue;
             }
@@ -995,7 +1084,7 @@ public final class DjPlaybackManager {
             Set<Integer> moved = null;
             for (BlockPos speakerPos : panel.getLinkedSpeakers()) {
                 if (!validLinkedSpeaker(level, panel, speakerPos)
-                        || !(level.getBlockEntity(speakerPos) instanceof SpeakerBlockEntity speaker)) {
+                        || !(loadedBlockEntity(level, speakerPos) instanceof SpeakerBlockEntity speaker)) {
                     continue;
                 }
                 Vec3 center = Vec3.atCenterOf(speakerPos).add(0.0D, 0.65D, 0.0D);
@@ -1030,8 +1119,7 @@ public final class DjPlaybackManager {
             UUID playbackId = entry.getKey();
             SessionAudience session = entry.getValue();
             ServerLevel level = session.level;
-            if (level.getServer() != server || !level.hasChunkAt(session.panelPos)
-                    || !(level.getBlockEntity(session.panelPos) instanceof DjPanelBlockEntity panel)
+            if (level.getServer() != server || !(loadedBlockEntity(level, session.panelPos) instanceof DjPanelBlockEntity panel)
                     || !panel.isPlaying() || !playbackId.equals(panel.getPlaybackId())) {
                 continue;
             }
@@ -1234,7 +1322,7 @@ public final class DjPlaybackManager {
         SPEED_REQUEST_REVISIONS.clear();
         PRELOAD_PLANS.clear();
         PENDING_WORKSHOP_ADDS.clear();
-        CACHED_WORKSHOP_TRACKS.clear();
+        DjWorkshopCache.onServerStopping();
         DjAudioPreparation.cleanup();
         for (UUID playbackId : new ArrayList<>(AUDIENCES.keySet())) {
             stopAudience(event.getServer(), playbackId);
@@ -1286,17 +1374,23 @@ public final class DjPlaybackManager {
     }
 
     private static ActiveDjSession preparePlayback(ServerLevel level, DjPanelBlockEntity panel,
-                                                   Map<BlockPos, Integer> activeSpeakers) {
+                                                   Map<BlockPos, Integer> activeSpeakers,
+                                                   Map<BlockPos, Long> speakerBeats) {
         if (!panel.isPlaying() || panel.getPlaybackId() == null) {
             return null;
         }
+        // Wired speakers, loaded or not, decide whether the queue may move on by itself; the loaded ones only decide
+        // who hears it. Counting loaded ones here is what left a booth silent when its chunk came back before its
+        // speakers' chunk did (DjQueueContinuity).
+        int wiredSpeakers = panel.getLinkedSpeakers().size();
         Optional<MusicBattleTracks.Track> selected = trackById(panel.getActiveTrackId());
         if (selected.isEmpty()) {
             // A published/local track can disappear while its queue row is the current cursor.
             // Preserve that cursor long enough to advance to the next still-available row instead
             // of stopPlayback() clearing it and stranding every valid song after the stale one.
             PlaylistFollowUp missingTrackFollowUp = nextPlaybackTarget(panel);
-            if (missingTrackFollowUp != null && !validSpeakers(level, panel).isEmpty()) {
+            if (DjQueueContinuity.afterSong(missingTrackFollowUp != null, wiredSpeakers)
+                    == DjQueueContinuity.AfterSong.PLAY_NEXT) {
                 startFollowUp(level, panel, missingTrackFollowUp,
                         normalizeSpeed(panel.getPlaybackSpeed()), Integer.MAX_VALUE);
                 return null;
@@ -1312,7 +1406,7 @@ public final class DjPlaybackManager {
         // Skip unavailable entries instead of letting one stale id block every valid song after it.
         PlaylistFollowUp followUp = nextPlaybackTarget(panel);
         // The audience transfer itself is driven by the ordered preload plan, one asset at a
-        // time. Only the tempo conversion is warmed here, so the swap is not stalled by ffmpeg.
+        // time. Only the tempo conversion is warmed here, so the swap is not stalled by the conversion.
         if (followUp != null && elapsed >= Math.max(0, runtimeDuration - 200)) {
             DjAudioPreparation.prepare(followUp.track(), speed).exceptionally(exception -> {
                 MusicBattleMod.LOGGER.debug("Unable to prewarm next DJ playlist entry '{}'.",
@@ -1323,7 +1417,7 @@ public final class DjPlaybackManager {
         if (DjAudioPreparation.ready(track, speed).isEmpty()) {
             // This is mainly a recovery guard for a persisted DJ session after
             // server restart. Normal user actions prepare the variant before
-            // changing the panel state, so updateAudience never runs ffmpeg.
+            // changing the panel state, so updateAudience never converts audio itself.
             int resumeTick = Mth.clamp(elapsed, 0, Math.max(0, runtimeDuration));
             pausePlayback(level, panel, runtimeDuration);
             queuePlaybackStart(level, panel, track, false, resumeTick,
@@ -1336,7 +1430,8 @@ public final class DjPlaybackManager {
                 pausePlaybackPreservingPendingStart(level, panel, runtimeDuration);
                 return null;
             }
-            if (followUp != null && !validSpeakers(level, panel).isEmpty()) {
+            if (DjQueueContinuity.afterSong(followUp != null, wiredSpeakers)
+                    == DjQueueContinuity.AfterSong.PLAY_NEXT) {
                 startFollowUp(level, panel, followUp, speed, runtimeDuration);
                 return null;
             }
@@ -1345,8 +1440,12 @@ public final class DjPlaybackManager {
         }
 
         List<BlockPos> speakers = validSpeakers(level, panel);
+        int bpm = effectiveBpm(track.bpm(), speed);
+        // The game tick of the song's beat 1, its offset at this speed included, for the speakers' cones.
+        long beatOne = SpeakerNetwork.beatOneGameTick(level.getGameTime(), elapsed,
+                ChartBeat.effectiveOffsetMs(track.offsetMs(), speed));
         for (BlockPos speakerPos : speakers) {
-            activeSpeakers.merge(speakerPos, effectiveBpm(track.bpm(), speed), Math::max);
+            SpeakerNetwork.claim(activeSpeakers, speakerBeats, speakerPos, bpm, beatOne);
         }
         return new ActiveDjSession(panel, track, speakers, elapsed);
     }
@@ -1679,7 +1778,8 @@ public final class DjPlaybackManager {
                 1.0F, 1.0F,
                 0, 0, 0, 0, 0, 0,
                 List.of(),
-                effects
+                effects,
+                ChartBeat.effectiveOffsetMs(track.offsetMs(), speed)
         ));
     }
 
@@ -1749,7 +1849,7 @@ public final class DjPlaybackManager {
         AudioSource loudest = null;
         AudioSource current = null;
         for (BlockPos speakerPos : speakers) {
-            if (!(level.getBlockEntity(speakerPos) instanceof SpeakerBlockEntity speaker)) {
+            if (!(loadedBlockEntity(level, speakerPos) instanceof SpeakerBlockEntity speaker)) {
                 continue;
             }
             Vec3 position = Vec3.atCenterOf(speakerPos).add(0.0D, 0.65D, 0.0D);
@@ -1826,9 +1926,10 @@ public final class DjPlaybackManager {
             }
         }
         if (payload.applyToAll()) {
-            // "Reset the speakers" is read as "put the rig back to how it was": the rack's reverb, echo and low
-            // pass, and the DJ's own effect stack, go with them. Resetting one speaker stays about that speaker.
-            panel.resetSoundAndEffects(panel.getPlaybackPositionTicks(player.serverLevel().getGameTime()));
+            // Resetting every speaker puts the rig's sound back too: the rack's reverb, echo and low pass go with
+            // them. The Visual FX tab is not sound and is left exactly as it was; resetting one speaker stays about
+            // that speaker.
+            panel.resetSound();
         }
         if (!targets.isEmpty() || payload.applyToAll()) {
             requestAudienceRefresh();
@@ -1950,8 +2051,7 @@ public final class DjPlaybackManager {
     static BlockPos selectedBattleCamera(ServerLevel level, java.util.function.Predicate<BlockPos> boothInBattleArea) {
         var selections = EXPLICIT_CAMERAS.get(level);
         if (selections == null) return null;
-        return selections.latest(boothInBattleArea, (panelPos, cameraPos) -> level.hasChunkAt(panelPos)
-                && level.getBlockEntity(panelPos) instanceof DjPanelBlockEntity panel
+        return selections.latest(boothInBattleArea, (panelPos, cameraPos) -> loadedBlockEntity(level, panelPos) instanceof DjPanelBlockEntity panel
                 && cameraPos.equals(panel.getSelectedCameraPos())
                 && validLinkedCamera(level, panel, cameraPos));
     }
@@ -2037,7 +2137,8 @@ public final class DjPlaybackManager {
             int currentRuntimeTicks = panel.getPlaybackPositionTicks(player.level().getGameTime());
             int currentSourceTicks = Math.max(0, Math.round(currentRuntimeTicks
                     * normalizeSpeed(panel.getPlaybackSpeed())));
-            startTicks = Math.max(0, Math.round(currentSourceTicks / speed));
+            startTicks = ru.gora.musicbattle.data.DjQueueContinuity.resumeTicks(
+                    Math.round(currentSourceTicks / speed), scaledTick(selected.get().durationTicks(), speed));
         }
         if (DjAudioPreparation.ready(selected.get(), speed).isPresent()) {
             invalidateAudioIntent(player.serverLevel(), panel.getBlockPos());
@@ -2059,8 +2160,8 @@ public final class DjPlaybackManager {
         float speed = normalizeSpeed(requestedSpeed);
         PendingAudioIntent intent = new PendingAudioIntent(token,
                 requester == null ? null : requester.getUUID(), panelState(panel),
-                AudioIntentKind.PLAYBACK_START, track.id(), playlistEntryId, restart,
-                Math.max(0, Math.round(requestedStartTicks * speed)), speed);
+                AudioIntentKind.PLAYBACK_START, track, track.id(), playlistEntryId, restart, requestedStartTicks,
+                Math.max(0, Math.round(requestedStartTicks * speed)), speed, false);
         PENDING_AUDIO_INTENTS.put(key, intent);
         if (requester != null && !recovery) {
             requester.displayClientMessage(Component.translatable(
@@ -2070,34 +2171,64 @@ public final class DjPlaybackManager {
 
         MinecraftServer server = level.getServer();
         DjAudioPreparation.prepare(track, speed).whenComplete((asset, exception) ->
-                server.execute(() -> {
-                    PendingAudioIntent current = PENDING_AUDIO_INTENTS.get(key);
-                    if (current == null || !token.equals(current.token)) {
-                        return;
-                    }
-                    ServerLevel currentLevel = server.getLevel(key.dimension);
-                    if (currentLevel == null || !currentLevel.hasChunkAt(key.pos)
-                            || !(currentLevel.getBlockEntity(key.pos) instanceof DjPanelBlockEntity currentPanel)
-                            || !current.matches(currentPanel)
-                            || trackById(track.id()).filter(track::equals).isEmpty()) {
-                        PENDING_AUDIO_INTENTS.remove(key, current);
-                        return;
-                    }
-                    ServerPlayer currentRequester = current.requesterId == null ? null
-                            : server.getPlayerList().getPlayer(current.requesterId);
-                    if (exception != null || asset == null
-                            || DjAudioPreparation.ready(track, speed).isEmpty()
-                            || validSpeakers(currentLevel, currentPanel).isEmpty()) {
-                        PENDING_AUDIO_INTENTS.remove(key, current);
-                        reportAudioPreparationFailure(currentRequester, track, speed, exception);
-                        refreshPanelIfOpen(currentRequester, key.pos);
-                        return;
-                    }
-                    PENDING_AUDIO_INTENTS.remove(key, current);
-                    applyPlaybackStart(currentLevel, currentPanel, track, restart,
-                            requestedStartTicks, speed, currentRequester, playlistEntryId);
-                    refreshPanelIfOpen(currentRequester, key.pos);
-                }));
+                server.execute(() -> settlePreparedStart(server, key, token,
+                        exception != null ? exception : asset == null ? new IOException("No DJ audio") : null)));
+    }
+
+    /**
+     * Decides what becomes of a waiting start or tempo change once its audio work is over: when the preparation
+     * completes, and again on an audience pass after its booth comes back if it had to wait (see
+     * {@link DjQueueContinuity#preparedStart}).
+     */
+    private static void settlePreparedStart(MinecraftServer server, PanelKey key, UUID token, Throwable failure) {
+        PendingAudioIntent current = PENDING_AUDIO_INTENTS.get(key);
+        if (current == null || !token.equals(current.token)) {
+            return;
+        }
+        ServerLevel level = server.getLevel(key.dimension);
+        boolean boothLoaded = level != null && level.hasChunkAt(key.pos);
+        // A loaded chunk with no booth in it any more is not a booth that is away: the start is dropped, not parked.
+        DjPanelBlockEntity panel = boothLoaded
+                && level.getBlockEntity(key.pos) instanceof DjPanelBlockEntity loaded ? loaded : null;
+        MusicBattleTracks.Track track = current.track;
+        float speed = current.requestedSpeed;
+        boolean stillWanted = panel != null && current.matches(panel)
+                && trackById(track.id()).filter(track::equals).isPresent();
+        boolean audioReady = failure == null && DjAudioPreparation.ready(track, speed).isPresent();
+        // A tempo change keeps the song that is already playing, so it never asked about speakers.
+        boolean speakers = current.kind == AudioIntentKind.SPEED_CHANGE || panel != null
+                && DjQueueContinuity.startHasSpeakers(current.automatic(), panel.getLinkedSpeakers().size(),
+                        validSpeakers(level, panel).size());
+        ServerPlayer requester = current.requesterId == null ? null
+                : server.getPlayerList().getPlayer(current.requesterId);
+        switch (DjQueueContinuity.preparedStart(boothLoaded, stillWanted, audioReady, speakers)) {
+            case PARK -> PENDING_AUDIO_INTENTS.put(key, current.parkUntilLoaded());
+            case DROP -> PENDING_AUDIO_INTENTS.remove(key, current);
+            case FAIL -> {
+                PENDING_AUDIO_INTENTS.remove(key, current);
+                reportAudioPreparationFailure(requester, track, speed, failure);
+                refreshPanelIfOpen(requester, key.pos);
+            }
+            case APPLY -> {
+                PENDING_AUDIO_INTENTS.remove(key, current);
+                if (current.kind == AudioIntentKind.SPEED_CHANGE) {
+                    applyPlaybackSpeed(level, panel, speed);
+                } else {
+                    applyPlaybackStart(level, panel, track, current.restart, current.requestedStartTicks, speed,
+                            requester, current.playlistEntryId);
+                }
+                refreshPanelIfOpen(requester, key.pos);
+            }
+        }
+    }
+
+    /** A start whose audio was ready while its booth was away goes ahead, or is settled, now that the booth is back. */
+    private static void resumeParkedStart(ServerLevel level, DjPanelBlockEntity panel) {
+        PanelKey key = panelKey(level, panel.getBlockPos());
+        PendingAudioIntent waiting = PENDING_AUDIO_INTENTS.get(key);
+        if (waiting != null && waiting.parked) {
+            settlePreparedStart(level.getServer(), key, waiting.token, null);
+        }
     }
 
     private static void applyPlaybackStart(ServerLevel level, DjPanelBlockEntity panel,
@@ -2142,7 +2273,8 @@ public final class DjPlaybackManager {
         PanelKey key = panelKey(level, panel.getBlockPos());
         UUID token = UUID.randomUUID();
         PendingAudioIntent intent = new PendingAudioIntent(token, requester.getUUID(), panelState(panel),
-                AudioIntentKind.SPEED_CHANGE, track.id(), panel.getActivePlaylistEntryId(), false, 0, speed);
+                AudioIntentKind.SPEED_CHANGE, track, track.id(), panel.getActivePlaylistEntryId(), false, 0, 0,
+                speed, false);
         PENDING_AUDIO_INTENTS.put(key, intent);
         // Acknowledge the latest requested value immediately. openPanel exposes
         // pending.requestedSpeed while the prepared audio remains unchanged.
@@ -2153,31 +2285,8 @@ public final class DjPlaybackManager {
 
         MinecraftServer server = level.getServer();
         DjAudioPreparation.prepare(track, speed).whenComplete((asset, exception) ->
-                server.execute(() -> {
-                    PendingAudioIntent current = PENDING_AUDIO_INTENTS.get(key);
-                    if (current == null || !token.equals(current.token)) {
-                        return;
-                    }
-                    ServerLevel currentLevel = server.getLevel(key.dimension);
-                    if (currentLevel == null || !currentLevel.hasChunkAt(key.pos)
-                            || !(currentLevel.getBlockEntity(key.pos) instanceof DjPanelBlockEntity currentPanel)
-                            || !current.matches(currentPanel)
-                            || trackById(track.id()).filter(track::equals).isEmpty()) {
-                        PENDING_AUDIO_INTENTS.remove(key, current);
-                        return;
-                    }
-                    ServerPlayer currentRequester = server.getPlayerList().getPlayer(current.requesterId);
-                    if (exception != null || asset == null
-                            || DjAudioPreparation.ready(track, speed).isEmpty()) {
-                        PENDING_AUDIO_INTENTS.remove(key, current);
-                        reportAudioPreparationFailure(currentRequester, track, speed, exception);
-                        refreshPanelIfOpen(currentRequester, key.pos);
-                        return;
-                    }
-                    PENDING_AUDIO_INTENTS.remove(key, current);
-                    applyPlaybackSpeed(currentLevel, currentPanel, speed);
-                    refreshPanelIfOpen(currentRequester, key.pos);
-                }));
+                server.execute(() -> settlePreparedStart(server, key, token,
+                        exception != null ? exception : asset == null ? new IOException("No DJ audio") : null)));
     }
 
     private static void reportAudioPreparationFailure(ServerPlayer player,
@@ -2333,11 +2442,33 @@ public final class DjPlaybackManager {
                 && player.level().getBlockEntity(panelPos) instanceof DjPanelBlockEntity;
     }
 
+    /**
+     * The block entity at {@code pos} if its chunk is loaded at full status, read without loading anything. The passes
+     * that run every tick asked {@code hasChunkAt} and then {@code getBlockEntity}, which goes through
+     * {@code getChunk(..., load = true)}: on the server thread that adds a ticket to the chunk on every call. Read every
+     * tick, a playing booth's chunk - and its speakers' - could never unload, so a booth left playing kept them loaded
+     * with nobody near (a hidden dedicated-server run held chunk 0,0 for minutes with both players 4000 blocks away,
+     * an "unknown" ticket renewed by tickDjCrowd). Reading the chunk that is already there leaves its lifetime to the
+     * players, as the continuity rules expect (DjQueueContinuity).
+     */
+    static net.minecraft.world.level.block.entity.BlockEntity loadedBlockEntity(ServerLevel level, BlockPos pos) {
+        net.minecraft.world.level.chunk.LevelChunk chunk = loadedChunk(level, pos);
+        return chunk == null ? null : chunk.getBlockEntity(pos);
+    }
+
+    /** The chunk holding {@code pos} if it is loaded at full status, without loading it or adding a ticket. */
+    private static net.minecraft.world.level.chunk.LevelChunk loadedChunk(ServerLevel level, BlockPos pos) {
+        if (level == null || pos == null) {
+            return null;
+        }
+        return level.getChunkSource().getChunkNow(net.minecraft.core.SectionPos.blockToSectionCoord(pos.getX()),
+                net.minecraft.core.SectionPos.blockToSectionCoord(pos.getZ()));
+    }
+
     private static boolean validLinkedSpeaker(ServerLevel level, DjPanelBlockEntity panel, BlockPos speakerPos) {
         return speakerPos != null
                 && panel.getLinkedSpeakers().contains(speakerPos)
-                && level.hasChunkAt(speakerPos)
-                && level.getBlockEntity(speakerPos) instanceof SpeakerBlockEntity speaker
+                && loadedBlockEntity(level, speakerPos) instanceof SpeakerBlockEntity speaker
                 && speaker.isControlledBy(panel.getBlockPos());
     }
 
@@ -2351,16 +2482,16 @@ public final class DjPlaybackManager {
     private static boolean validLinkedCamera(ServerLevel level, DjPanelBlockEntity panel, BlockPos cameraPos) {
         return cameraPos != null
                 && panel.getLinkedCameras().contains(cameraPos)
-                && level.hasChunkAt(cameraPos)
-                && level.getBlockEntity(cameraPos) instanceof BattleCameraBlockEntity;
+                && loadedBlockEntity(level, cameraPos) instanceof BattleCameraBlockEntity;
     }
 
     private static void pruneConnections(ServerLevel level, DjPanelBlockEntity panel) {
         for (BlockPos speakerPos : panel.getLinkedSpeakers()) {
-            if (!level.hasChunkAt(speakerPos)) {
+            net.minecraft.world.level.chunk.LevelChunk speakerChunk = loadedChunk(level, speakerPos);
+            if (speakerChunk == null) {
                 continue;
             }
-            if (!(level.getBlockEntity(speakerPos) instanceof SpeakerBlockEntity speaker)) {
+            if (!(speakerChunk.getBlockEntity(speakerPos) instanceof SpeakerBlockEntity speaker)) {
                 panel.unlinkSpeaker(speakerPos);
                 continue;
             }
@@ -2372,8 +2503,8 @@ public final class DjPlaybackManager {
             }
         }
         for (BlockPos cameraPos : panel.getLinkedCameras()) {
-            if (level.hasChunkAt(cameraPos)
-                    && !(level.getBlockEntity(cameraPos) instanceof BattleCameraBlockEntity)) {
+            net.minecraft.world.level.chunk.LevelChunk cameraChunk = loadedChunk(level, cameraPos);
+            if (cameraChunk != null && !(cameraChunk.getBlockEntity(cameraPos) instanceof BattleCameraBlockEntity)) {
                 panel.unlinkCamera(cameraPos);
             }
         }
@@ -2381,7 +2512,7 @@ public final class DjPlaybackManager {
 
     /**
      * Whether a loaded DJ panel is playing or has queued this track. Removing a server beatmap is refused while it
-     * is (spec 06 section 9.1): the audience is already downloading its audio.
+     * is: the audience is already downloading its audio.
      */
     public static boolean isTrackInUse(String trackId) {
         if (trackId == null || trackId.isEmpty()) {
@@ -2393,7 +2524,7 @@ public final class DjPlaybackManager {
                 continue;
             }
             for (BlockPos pos : List.copyOf(entry.getValue())) {
-                if (!level.hasChunkAt(pos) || !(level.getBlockEntity(pos) instanceof DjPanelBlockEntity panel)) {
+                if (!(loadedBlockEntity(level, pos) instanceof DjPanelBlockEntity panel)) {
                     continue;
                 }
                 if (trackId.equals(panel.getActiveTrackId()) || trackId.equals(panel.getSelectedTrackId())) {
@@ -2404,14 +2535,19 @@ public final class DjPlaybackManager {
         return false;
     }
 
+    /**
+     * The registered booths whose chunks are full right now. A booth in a demoted chunk stays registered and waits:
+     * striking it off here, as this used to, lost it for good once the player came back before the chunk unloaded,
+     * because the promoted chunk hands back the same block entity without calling onLoad again. That is the booth
+     * that went silent after its DJ flew off and came back (DjQueueContinuity).
+     */
     private static List<BlockPos> loadedPanelPositions(ServerLevel level) {
         Set<BlockPos> positions = LOADED_PANELS.get(level);
         if (positions == null || positions.isEmpty()) {
             return List.of();
         }
-        positions.removeIf(pos -> !level.hasChunkAt(pos)
-                || !(level.getBlockEntity(pos) instanceof DjPanelBlockEntity));
-        return List.copyOf(positions);
+        return DjQueueContinuity.boothsToVisit(positions, level::hasChunkAt,
+                pos -> loadedBlockEntity(level, pos) instanceof DjPanelBlockEntity);
     }
 
     private static void stopAudienceForPanel(ServerLevel level, BlockPos panelPos) {
@@ -2851,13 +2987,29 @@ public final class DjPlaybackManager {
     private record LiveControlKey(UUID playerId, ResourceKey<Level> dimension, long panelPos, boolean panelFx) { }
     private record SpeedRequestKey(UUID playerId, ResourceKey<Level> dimension, long panelPos) { }
     private record PanelKey(ResourceKey<Level> dimension, BlockPos pos) { }
+    /**
+     * A start or tempo change waiting for its audio. {@code track} is the track as it was when the wait began, so a
+     * song replaced on disk meanwhile is not started in its old form; {@code requestedStartTicks} is the start in
+     * runtime ticks at {@code requestedSpeed}. {@code parked} marks one whose audio work ended while its booth's chunk
+     * was unloaded: it waits for the booth to come back instead of being thrown away with the chunk.
+     */
     private record PendingAudioIntent(UUID token, UUID requesterId, PanelState expectedState,
-                                      AudioIntentKind kind, String targetTrackId, UUID playlistEntryId,
-                                       boolean restart, int requestedStartSourceTicks,
-                                       float requestedSpeed) {
+                                      AudioIntentKind kind, MusicBattleTracks.Track track, String targetTrackId,
+                                      UUID playlistEntryId, boolean restart, int requestedStartTicks,
+                                      int requestedStartSourceTicks, float requestedSpeed, boolean parked) {
         private PendingAudioIntent withExpectedState(PanelState state) {
-            return new PendingAudioIntent(token, requesterId, state, kind, targetTrackId,
-                    playlistEntryId, restart, requestedStartSourceTicks, requestedSpeed);
+            return new PendingAudioIntent(token, requesterId, state, kind, track, targetTrackId,
+                    playlistEntryId, restart, requestedStartTicks, requestedStartSourceTicks, requestedSpeed, parked);
+        }
+
+        private PendingAudioIntent parkUntilLoaded() {
+            return new PendingAudioIntent(token, requesterId, expectedState, kind, track, targetTrackId,
+                    playlistEntryId, restart, requestedStartTicks, requestedStartSourceTicks, requestedSpeed, true);
+        }
+
+        /** The booth asked for it itself - the next song, or a song resumed after a restart - not a DJ. */
+        private boolean automatic() {
+            return requesterId == null;
         }
 
         private boolean matches(DjPanelBlockEntity panel) {

@@ -14,7 +14,7 @@ import ru.gora.musicbattle.workshop.api.WorkshopDtos;
 
 /**
  * One card's data, from the API ({@code SetCard}) or from an installed set (its {@code workshop-card.json} sidecar,
- * spec 08 A5.5, falling back to the manifest). The listing, the Installed tab and the set page header all read this,
+ * falling back to the manifest). The listing, the Installed tab and the set page header all read this,
  * so an offline card and an online card are drawn by the same code.
  */
 public final class CardModel {
@@ -102,17 +102,6 @@ public final class CardModel {
         return stars.isEmpty() ? 0 : stars.get(stars.size() - 1);
     }
 
-    /** "by Artist" and "mapped by name" style lines are built by the card layout; this is the hover stats row. */
-    public String statsLine(Tr tr, long nowMillis) {
-        StringBuilder out = new StringBuilder();
-        out.append(tr.get(WorkshopStrings.KEY + "card.downloads", WorkshopStrings.count(downloads)));
-        out.append("  ").append(tr.get(WorkshopStrings.KEY + "card.favourites", WorkshopStrings.count(favourites)));
-        if (updatedAt != null && !updatedAt.isEmpty()) {
-            out.append("  ").append(WorkshopStrings.relative(tr, updatedAt, nowMillis));
-        }
-        return out.toString();
-    }
-
     public List<String> badges(Tr tr) {
         List<String> badges = new ArrayList<>();
         if (explicit) {
@@ -171,7 +160,7 @@ public final class CardModel {
     }
 
     /**
-     * A set installed on the Minecraft server (spec 06 section 9.1 with 08 A5.5): the page carries the charts, the
+     * A set installed on the Minecraft server: the page carries the charts, the
      * explicit flag and whether a cover exists, so the tab draws the same card as Browse without asking the site.
      * A withdrawn or long-unverified set keeps its row but says so through its availability.
      */

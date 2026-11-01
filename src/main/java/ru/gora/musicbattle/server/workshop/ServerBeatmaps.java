@@ -33,7 +33,7 @@ import ru.gora.musicbattle.workshop.WorkshopLayout;
 import ru.gora.musicbattle.workshop.WorkshopSignature;
 
 /**
- * The Workshop sets installed on this server (spec 06 section 9.1).
+ * The Workshop sets installed on this server.
  *
  * <p>Sets live in {@code <world>/blocky_music/workshop/ws_<setId>/}, written by
  * {@link BeatmapPackage#install(Path, Path)}, and become part of the server catalogue through
@@ -45,7 +45,7 @@ import ru.gora.musicbattle.workshop.WorkshopSignature;
  * in {@code .json}, because the track loader reads every {@code *.json} at depth two under {@code workshop/} as a
  * chart and would otherwise turn the index into a bogus track named "index".
  *
- * <p>Threading (review of 06 section 9.2, applied to the index as well): every field here is owned by the server
+ * <p>Threading: every field here is owned by the server
  * thread. A change builds an immutable snapshot with a version and hands it to one dedicated single-thread
  * executor, which writes {@code <file>.<uuid>.tmp}, fsyncs and moves it atomically; a snapshot older than the last
  * written version is skipped, so two writes can never land out of order. {@link #shutdown} drains it.
@@ -93,7 +93,7 @@ public final class ServerBeatmaps {
             return WorkshopLayout.setFolderName(setId);
         }
 
-        /** A set no client has confirmed for seven days is shown as unverified (spec 08 A5.1). */
+        /** A set no client has confirmed for seven days is shown as unverified. */
         public boolean unverified(long nowMillis) {
             return verifiedAt <= 0 || nowMillis - verifiedAt > 7L * 24 * 60 * 60 * 1000L;
         }
@@ -248,8 +248,8 @@ public final class ServerBeatmaps {
     }
 
     /**
-     * A catalogue row for the vote screen and the DJ picker, with the workshop identity filled in from the index
-     * (spec 06 section 9.4): the set id, its content hash and the mapper's name, so the row can carry a source chip
+     * A catalogue row for the vote screen and the DJ picker, with the workshop identity filled in from the index:
+     * the set id, its content hash and the mapper's name, so the row can carry a source chip
      * and a client can answer a battle asset offer from what it already owns.
      */
     public static ru.gora.musicbattle.data.TrackSummary summary(MusicBattleTracks.Track track) {
@@ -261,7 +261,7 @@ public final class ServerBeatmaps {
         return entry == null ? track.summary() : track.summary(entry.contentSha256(), entry.mapper());
     }
 
-    /** Withdrawn server beatmaps are kept on disk but never offered in a vote (spec 08 A5.1). */
+    /** Withdrawn server beatmaps are kept on disk but never offered in a vote. */
     public static boolean hiddenFromVotes(MusicBattleTracks.Track track) {
         long setId = track.workshopSetId();
         return setId > 0 && bySetId(setId).map(Entry::withdrawn).orElse(false);
@@ -299,7 +299,7 @@ public final class ServerBeatmaps {
     /**
      * Installs package bytes into the world (blocking: call it off the server thread).
      *
-     * <p>Spec 08 A5.3 in full: the archive carries a workshop signature over exactly the offered
+     * <p>The archive carries a workshop signature over exactly the offered
      * {@code (setId, revision, contentSha256)}; the manifest agrees with the offer; the package validates and
      * unpacks through {@link BeatmapPackage}, which stages into a temporary root and swaps the finished folder in
      * with one rename; sets with {@code external} audio are refused, because the server has no audio to play.
@@ -378,7 +378,7 @@ public final class ServerBeatmaps {
     }
 
     /**
-     * A client told the server this content is gone from the workshop (spec 08 A5.1). Advisory: the set stays on
+     * A client told the server this content is gone from the workshop. Advisory: the set stays on
      * disk, is hidden from votes and is shown as withdrawn until an operator removes or keeps it.
      */
     public static synchronized boolean markWithdrawn(long setId, String contentSha256, boolean withdrawn) {

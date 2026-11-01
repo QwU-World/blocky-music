@@ -10,8 +10,8 @@ import ru.gora.musicbattle.workshop.BeatmapManifest;
 import ru.gora.musicbattle.workshop.WorkshopCatalog;
 
 /**
- * "Install this beatmap?" for a dropped file or an inbox package that would replace another revision (spec 06
- * section 8.3): title, artist, mapper, charts, size, and whether it is already installed or replaces revision N.
+ * "Install this beatmap?" for a dropped file or an inbox package that would replace another revision:
+ * title, artist, mapper, charts, size, and whether it is already installed or replaces revision N.
  */
 public final class WorkshopInstallConfirmScreen extends WorkshopDialogScreen {
     private final WorkshopDrops.Pending pending;

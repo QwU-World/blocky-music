@@ -43,6 +43,11 @@ public final class ClientBattleSettings {
     private static float panelHeightScale = PlayerPanelDefaults.PANEL_HEIGHT_SCALE;
     private static float noteWidthScale = PlayerPanelDefaults.NOTE_WIDTH_SCALE;
     private static float noteHeightScale = PlayerPanelDefaults.NOTE_HEIGHT_SCALE;
+    // How dark the battle is behind the panels (BattleBackdrop). Local only: no other player sees this client's
+    // backdrop, so none of it is sent to the server, and the defaults are the battle's look from before these existed.
+    private static float worldDimming = BattleBackdrop.DEFAULT_DIMMING;
+    private static boolean stageBars = true;
+    private static float stageBarOpacity = BattleBackdrop.DEFAULT_BAR_OPACITY;
     private static boolean loaded;
 
     private ClientBattleSettings() {
@@ -248,6 +253,53 @@ public final class ClientBattleSettings {
         save();
     }
 
+    /** How dark the world is behind a battle's panels, 0 to {@link BattleBackdrop#MAX_DIMMING} of opaque black. */
+    public static float worldDimming() {
+        load();
+        return worldDimming;
+    }
+
+    /** {@link #worldDimming()} as the alpha the battle draws; 0 draws nothing at all. */
+    public static int worldDimmingAlpha() {
+        return BattleBackdrop.dimmingAlpha(worldDimming());
+    }
+
+    public static void setWorldDimming(float dimming) {
+        load();
+        worldDimming = BattleBackdrop.clampDimming(dimming);
+        save();
+    }
+
+    /** Whether the standard black bars along the top and bottom of a battle are drawn at all. */
+    public static boolean stageBars() {
+        load();
+        return stageBars;
+    }
+
+    public static void setStageBars(boolean shown) {
+        load();
+        stageBars = shown;
+        save();
+    }
+
+    /** The standard bars' opacity, 0 to 1 of opaque black, kept while they are switched off. */
+    public static float stageBarOpacity() {
+        load();
+        return stageBarOpacity;
+    }
+
+    public static void setStageBarOpacity(float opacity) {
+        load();
+        stageBarOpacity = BattleBackdrop.clampOpacity(opacity);
+        save();
+    }
+
+    /** The bars as the battle draws them: their alpha, or 0 when they are off or at 0%. */
+    public static int stageBarAlpha() {
+        load();
+        return BattleBackdrop.barAlpha(stageBars, stageBarOpacity);
+    }
+
     public static void sendToServer() {
         try {
             PacketDistributor.sendToServer(new SettingsPayload(
@@ -354,12 +406,43 @@ public final class ClientBattleSettings {
             if (object.has("noteHeightScale")) {
                 noteHeightScale = Mth.clamp(object.get("noteHeightScale").getAsFloat(), 0.35F, 2.2F);
             }
+            // A file from before these settings has none of them and keeps the old look, without being rewritten.
+            worldDimming = BattleBackdrop.clampDimming(readFraction(object, "worldDimming", BattleBackdrop.DEFAULT_DIMMING));
+            stageBars = readFlag(object, "stageBars", true);
+            stageBarOpacity = BattleBackdrop.clampOpacity(readFraction(object, "stageBarOpacity",
+                    BattleBackdrop.DEFAULT_BAR_OPACITY));
             // A file that needed no migration is left byte for byte; its next ordinary save stamps the version.
             if (migrated) {
                 save();
             }
         } catch (Exception exception) {
             MusicBattleMod.LOGGER.warn("Unable to read Blocky Music client settings '{}'.", path, exception);
+        }
+    }
+
+    /**
+     * A number from the file, or {@code fallback} when it is missing, not a number or not finite: a hand-edited NaN, an
+     * infinity or a word then means the battle's usual look, rather than no dimming or bars at all.
+     */
+    private static float readFraction(JsonObject object, String key, float fallback) {
+        try {
+            if (!object.has(key) || !object.get(key).isJsonPrimitive() || !object.get(key).getAsJsonPrimitive().isNumber()) {
+                return fallback;
+            }
+            float value = object.get(key).getAsFloat();
+            return Float.isFinite(value) ? value : fallback;
+        } catch (RuntimeException ignored) {
+            return fallback;
+        }
+    }
+
+    /** A true or false from the file, or {@code fallback} for anything else ("yes", 1, a missing key). */
+    private static boolean readFlag(JsonObject object, String key, boolean fallback) {
+        try {
+            return object.has(key) && object.get(key).isJsonPrimitive() && object.get(key).getAsJsonPrimitive().isBoolean()
+                    ? object.get(key).getAsBoolean() : fallback;
+        } catch (RuntimeException ignored) {
+            return fallback;
         }
     }
 
@@ -393,6 +476,9 @@ public final class ClientBattleSettings {
             object.addProperty("panelHeightScale", panelHeightScale);
             object.addProperty("noteWidthScale", noteWidthScale);
             object.addProperty("noteHeightScale", noteHeightScale);
+            object.addProperty("worldDimming", worldDimming);
+            object.addProperty("stageBars", stageBars);
+            object.addProperty("stageBarOpacity", stageBarOpacity);
             Files.writeString(path, GSON.toJson(object));
         } catch (IOException exception) {
             MusicBattleMod.LOGGER.warn("Unable to save Blocky Music client settings '{}'.", path, exception);

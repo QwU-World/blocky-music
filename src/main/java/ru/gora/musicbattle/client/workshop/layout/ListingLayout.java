@@ -6,7 +6,7 @@ import ru.gora.musicbattle.client.ui.TextMeasurer;
 import ru.gora.musicbattle.client.ui.TextStyle;
 
 /**
- * The listing (spec 06 section 6.1, lazer's {@code BeatmapListingOverlay}): the search panel with its filter rows, the
+ * The listing (lazer's {@code BeatmapListingOverlay}): the search panel with its filter rows, the
  * sort bar with the card-size toggle, and the card grid area. Everything is laid out in the scroll container's own
  * coordinates (y = 0 is the top of the content), so the screen only adds its scroll offset.
  *
@@ -133,7 +133,7 @@ public final class ListingLayout {
         }
         y = sortArea.bottom() + Metrics.GAP_SM;
 
-        // ── "Open set #42" row (a bare number stays a normal search, review of 06 section 6.1) ───────────────
+        // ── "Open set #42" row (a bare number stays a normal search) ───────────────
         if (state.directSetId() != null) {
             float buttonH = compact ? Metrics.BUTTON_H_SM : Metrics.BUTTON_H;
             Rect direct = new Rect(0, y, width, buttonH);
@@ -219,9 +219,18 @@ public final class ListingLayout {
     private static float filterRows(Layout layout, Tr tr, TextMeasurer measurer, State state, float pad, float inner, float y,
                                     boolean compact) {
         float labelColumn = compact ? Metrics.FILTER_LABEL_W_COMPACT : Metrics.FILTER_LABEL_W;
+        List<Filters.Row> rows = Filters.rows(tr, state.serverFilter());
+        // The column is at least as wide as the longest word of any row's label, hidden rows too so it does not move
+        // when "More filters" opens: a label wraps between its words and never inside one. At 46 units Russian broke
+        // "Откровенный контент" into "Откровенн" / "ый контент" and "Дополнительно" into "Дополните" / "льно". Never
+        // more than two fifths of the panel, which only a window narrower than the game allows would reach.
+        for (Filters.Row row : rows) {
+            labelColumn = Math.max(labelColumn, (float) Math.ceil(TextFit.widestWord(measurer, row.label(), TextStyle.CAPTION)));
+        }
+        labelColumn = Math.min(labelColumn, Math.max(Metrics.FILTER_LABEL_W_COMPACT, inner * 0.4F));
         float optionsX = pad + labelColumn + Metrics.GAP_SM;
         float optionsWidth = Math.max(40F, inner + pad - optionsX);
-        for (Filters.Row row : Filters.rows(tr, state.serverFilter())) {
+        for (Filters.Row row : rows) {
             if (row.advanced() && !state.moreFilters()) {
                 continue;
             }

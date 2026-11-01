@@ -16,7 +16,7 @@ $testClasspath = (@($outputDir, "$projectRoot/build/moddev/artifacts/neoforge-21
 $sources = @((Join-Path $PSScriptRoot 'UiForegroundChecks.java'))
 $helper = Join-Path $projectRoot 'src/main/java/ru/gora/musicbattle/client/ClientUiForeground.java'
 if (Test-Path -LiteralPath $helper) { $sources += $helper }
-$javaDir = 'C:/Program Files/Eclipse Adoptium/jdk-21.0.11.10-hotspot/bin'
+$javaDir = & (Join-Path $PSScriptRoot 'find-jdk.ps1')
 & "$javaDir/javac.exe" -proc:none -encoding UTF-8 -cp $testClasspath -d $outputDir @sources
 if ($LASTEXITCODE -ne 0) { throw 'UI foreground test compilation failed' }
 & "$javaDir/java.exe" -cp $testClasspath UiForegroundChecks

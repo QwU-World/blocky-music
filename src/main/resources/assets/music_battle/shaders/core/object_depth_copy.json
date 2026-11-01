@@ -1,8 +1,0 @@
-{
-  "vertex": "minecraft:blit_screen",
-  "fragment": "music_battle:object_depth_copy",
-  "samplers": [
-    { "name": "DepthSampler" }
-  ],
-  "uniforms": []
-}

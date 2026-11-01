@@ -21,7 +21,7 @@ import ru.gora.musicbattle.workshop.api.CancelToken;
 import ru.gora.musicbattle.workshop.api.MinecraftSignIn;
 
 /**
- * The Minecraft side of the workshop proof (spec 06 section 7.2, research sections 1.4 to 1.6, 2.4).
+ * The Minecraft side of the workshop proof.
  *
  * <p><b>This is the only class in the mod that reads {@code User.getAccessToken()}.</b> The token goes straight into
  * {@code MinecraftSessionService.joinServer} (authlib posts it to Mojang's session server) and nowhere else: never
@@ -31,7 +31,8 @@ import ru.gora.musicbattle.workshop.api.MinecraftSignIn;
  * <p>All proofs run on one single-thread executor, so our joins never overlap. No proof starts while a server
  * connection is being set up ({@code ConnectScreen} or a pending login connection), because a join landing between
  * vanilla's join and the server's {@code hasJoined} would kick the player. At most one automatic attempt per launch,
- * made lazily when the Workshop first opens; one automatic retry after 5 s when the join was superseded. Server
+ * made lazily when the Workshop first opens, and only for a Minecraft account that signed in to the Workshop on this
+ * computer before ({@link MinecraftSignIn.Memory}); one automatic retry after 5 s when the join was superseded. Server
  * packets never start any of this.
  */
 public final class MinecraftProof implements MinecraftSignIn.Joiner {
@@ -107,19 +108,15 @@ public final class MinecraftProof implements MinecraftSignIn.Joiner {
     }
 
     /**
-     * The one automatic sign-in of this launch, when the Workshop opens (render thread). {@code done} runs on the
-     * sign-in executor with the result, or not at all when no attempt started.
+     * The one automatic sign-in of this launch, when the Workshop opens (render thread), for a remembered Minecraft
+     * account only. {@code done} runs on the sign-in executor with the result, or not at all when no attempt started.
      */
     static void autoSignInOnce(WorkshopClient client, Consumer<MinecraftSignIn.ProofResult> done) {
-        AutoSignInGate.Decision decision = AUTO_GATE.tryStart(client.networkAllowed(), microsoftAccount(), loginInProgress(),
-                client.session().signedIn());
-        if (decision != AutoSignInGate.Decision.STARTED) {
-            return;
-        }
-        MinecraftSignIn.Player player;
-        try {
-            player = player();
-        } catch (IllegalArgumentException invalidName) {
+        // Only an account that signed in here before is signed in again; for any other nothing is sent at all.
+        MinecraftSignIn.Player player = playerOrNull();
+        AutoSignInGate.Decision decision = client.signIn().autoDecision(AUTO_GATE, player, client.networkAllowed(),
+                microsoftAccount(), loginInProgress());
+        if (decision != AutoSignInGate.Decision.STARTED || player == null) {
             return;
         }
         CompletableFuture.runAsync(() -> {

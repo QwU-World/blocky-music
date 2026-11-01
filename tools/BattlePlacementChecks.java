@@ -1,6 +1,7 @@
 import java.util.List;
 import java.util.ArrayList;
 import java.util.Random;
+import ru.gora.musicbattle.data.BattleCameraShot;
 import ru.gora.musicbattle.data.BattlePlacementMath;
 import ru.gora.musicbattle.data.BattlePlacementMath.Bounds;
 import ru.gora.musicbattle.data.BattlePlacementMath.Candidate;
@@ -60,7 +61,9 @@ public final class BattlePlacementChecks {
             }
         }
         automaticCameraStaysCentredBetweenFighters();
+        crampedRoomTriesTheBisectorCloserBeforeADiagonal();
         cameraBlockOpensFromTheCentre();
+        openingFrameShowsBothFightersWhole();
         System.out.println("Battle placement checks passed: " + checks);
     }
 
@@ -92,6 +95,73 @@ public final class BattlePlacementChecks {
                 }
             }
         }
+    }
+
+    /**
+     * A cramped room: when neither side of the bisector has room at the usual distances, the camera tries the bisector
+     * closer in before any diagonal. A hidden game measured the old order in a closed 7 by 7 room: a diagonal 3.6 blocks
+     * out, 1.8 to 2.7 blocks from the player, who filled the left third of the picture under their own lane panel while
+     * the other fighter stood small at the back. An open stage must still take the very same first spot.
+     */
+    private static void crampedRoomTriesTheBisectorCloserBeforeADiagonal() {
+        double[] distances = BattleCameraShot.DISTANCES;
+        double[] close = BattleCameraShot.CLOSE_DISTANCES;
+        double[] heights = BattleCameraShot.LENS_HEIGHTS;
+        for (double angle = 0; angle < Math.PI * 2; angle += Math.PI / 7) {
+            double axisX = Math.cos(angle), axisZ = Math.sin(angle);
+            double leftX = -1.75 * axisX, leftZ = -1.75 * axisZ, rightX = 1.75 * axisX, rightZ = 1.75 * axisZ;
+            var directions = BattlePlacementMath.cameraDirections(-axisZ, axisX);
+            var spots = BattlePlacementMath.automaticCameraSpots(-axisZ, axisX, distances, close, heights);
+            int usual = 2 * distances.length * heights.length;
+            int closer = 2 * close.length * heights.length;
+            check(spots.size() == directions.size() * distances.length * heights.length + closer,
+                    "every usual spot is still offered, and the closer ones besides");
+            var first = spots.get(0);
+            check(first.direction().equals(directions.get(0)) && first.distance() == distances[0]
+                            && first.height() == heights[0],
+                    "an open stage takes the same first spot as before: the bisector, 3.6 out, at eye level");
+            for (int i = 0; i < usual; i++) {
+                var spot = spots.get(i);
+                int side = i / (distances.length * heights.length);
+                int within = i % (distances.length * heights.length);
+                check(spot.direction().equals(directions.get(side))
+                                && spot.distance() == distances[within / heights.length]
+                                && spot.height() == heights[within % heights.length],
+                        "the bisector at the usual distances comes first, in the old order");
+            }
+            double previousDistance = Double.POSITIVE_INFINITY;
+            for (int i = usual; i < usual + closer; i++) {
+                var spot = spots.get(i);
+                check(spot.direction().equals(directions.get(0)) || spot.direction().equals(directions.get(1)),
+                        "the closer spots are on the bisector");
+                check(spot.distance() < distances[0] && spot.distance() <= previousDistance,
+                        "closer than the usual distances, and never further out than the spot before");
+                previousDistance = spot.distance();
+                double x = spot.direction().x() * spot.distance(), z = spot.direction().z() * spot.distance();
+                double toLeft = Math.hypot(x - leftX, z - leftZ), toRight = Math.hypot(x - rightX, z - rightZ);
+                check(Math.abs(toLeft - toRight) < 1e-9, "both fighters are the same distance from a closer spot");
+                check(toLeft > 2.5, "and still more than 2.5 blocks from either: " + toLeft);
+            }
+            for (int i = usual + closer; i < spots.size(); i++) {
+                double alongFighterLine = Math.abs(spots.get(i).direction().x() * axisX + spots.get(i).direction().z() * axisZ);
+                check(alongFighterLine > 0.5, "every diagonal and side spot comes after every bisector spot");
+            }
+        }
+    }
+
+    /**
+     * The count-in's first frame, one intro step out on the bisector at head height, shows both fighters whole. At the
+     * old step of 1.2 two players 3.5 blocks apart stood about 56 degrees off the axis, outside the 51 degrees a
+     * 16:9 picture shows to each side at Minecraft's default field of view, and were cut in half for about a second.
+     */
+    private static void openingFrameShowsBothFightersWhole() {
+        double halfWidth = Math.toDegrees(Math.atan(Math.tan(Math.toRadians(70.0 / 2.0)) * 16.0 / 9.0));
+        // The far edge of a fighter's body: half the spacing plus half a player's width.
+        double edge = 1.75 + 0.3;
+        double old = Math.toDegrees(Math.atan2(edge, 1.2));
+        check(old > halfWidth, "reproduced: at the old step the fighters reached " + old + " degrees, the frame " + halfWidth);
+        double now = Math.toDegrees(Math.atan2(edge, BattlePlacementMath.CAMERA_INTRO_DISTANCE));
+        check(now < halfWidth - 5.0, "the opening frame holds both fighters with room to spare: " + now + " of " + halfWidth);
     }
 
     /**

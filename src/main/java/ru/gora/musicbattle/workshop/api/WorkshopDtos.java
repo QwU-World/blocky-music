@@ -8,7 +8,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Records mirroring the workshop HTTP API v1 (spec 02, 04 section 2 and 5, 08 A5/A7) as the mod reads it. Gson maps
+ * Records mirroring the workshop HTTP API v1 as the mod reads it. Gson maps
  * them by component name; unknown fields are ignored and missing ones are null (or 0/false for primitives), so an
  * additive API change never breaks an older mod. Strings stay strings (ISO timestamps, enum-like values), and the
  * screens map them. Records that can hold a token redact it in {@code toString()}.
@@ -22,7 +22,7 @@ public final class WorkshopDtos {
     /** Maps a JSON object (as returned by {@link WorkshopApi}) into a record. */
     public static <T> T read(JsonElement json, Class<T> type) throws WorkshopApiException {
         try {
-            T value = GSON.fromJson(json, type);
+            T value = GSON.fromJson(withoutNullObjects(json, type), type);
             if (value == null) {
                 throw new WorkshopApiException(WorkshopApiException.BAD_RESPONSE, "empty " + type.getSimpleName());
             }
@@ -32,7 +32,42 @@ public final class WorkshopDtos {
         }
     }
 
-    // ---------------------------------------------------------------- catalogue (02 section 2)
+    /**
+     * The answer with every JSON {@code null} left out where a record has a {@code JsonObject} component, at any depth
+     * of records and lists of records. Gson reads a missing member as null, but refuses a JSON null for a
+     * {@code JsonObject} ("Expected a JsonObject but was JsonNull"), and its own adapter for JSON trees cannot be
+     * replaced. The server sends exactly that for an upload of a new set ({@code "current": null}), so every first
+     * upload from the game failed with "unexpected answer" before this. Only those members change; the input is not
+     * modified.
+     */
+    static JsonElement withoutNullObjects(JsonElement json, java.lang.reflect.Type type) {
+        if (json == null || !json.isJsonObject() || !(type instanceof Class<?> record) || !record.isRecord()) {
+            if (json != null && json.isJsonArray() && type instanceof java.lang.reflect.ParameterizedType list
+                    && List.class.isAssignableFrom((Class<?>) list.getRawType())) {
+                com.google.gson.JsonArray copy = new com.google.gson.JsonArray();
+                for (JsonElement element : json.getAsJsonArray()) {
+                    copy.add(withoutNullObjects(element, list.getActualTypeArguments()[0]));
+                }
+                return copy;
+            }
+            return json;
+        }
+        JsonObject copy = json.getAsJsonObject().deepCopy();
+        for (java.lang.reflect.RecordComponent component : record.getRecordComponents()) {
+            JsonElement value = copy.get(component.getName());
+            if (value == null) {
+                continue;
+            }
+            if (value.isJsonNull() && component.getType() == JsonObject.class) {
+                copy.remove(component.getName());
+            } else {
+                copy.add(component.getName(), withoutNullObjects(value, component.getGenericType()));
+            }
+        }
+        return copy;
+    }
+
+    // ---------------------------------------------------------------- catalogue
 
     public record UserRef(long id, String username, String displayName, String avatarUrl) {
     }
@@ -59,7 +94,7 @@ public final class WorkshopDtos {
     public record LibraryRef(long id, String artist, String title) {
     }
 
-    /** {@code SetCard}, 02 section 2.1. {@code viewer} is null for guests; {@code covers}/{@code preview} may be null. */
+    /** {@code SetCard}. {@code viewer} is null for guests; {@code covers}/{@code preview} may be null. */
     public record SetCard(
             long id, int revision, String contentSha256,
             String title, String titleUnicode, String artist, String artistUnicode, String source,
@@ -98,7 +133,7 @@ public final class WorkshopDtos {
     public record MapperProfile(int sets, int featured) {
     }
 
-    /** {@code GET /api/v1/beatmapsets/{id}}: the card fields plus the detail (02 section 2.2). */
+    /** {@code GET /api/v1/beatmapsets/{id}}: the card fields plus the detail. */
     public record SetDetail(
             long id, int revision, String contentSha256,
             String title, String titleUnicode, String artist, String artistUnicode, String source,
@@ -120,7 +155,7 @@ public final class WorkshopDtos {
     public record SetHistory(List<RevisionInfo> revisions, List<JsonObject> events) {
     }
 
-    /** {@code POST /api/v1/beatmapsets/{id}/download} (02 section 2.3). {@code url} is relative to the workshop origin. */
+    /** {@code POST /api/v1/beatmapsets/{id}/download}. {@code url} is relative to the workshop origin. */
     public record DownloadTicket(String url, long size, String packageSha256, String contentSha256, int revision,
                                  String fileName, String expiresAt) {
     }
@@ -128,7 +163,7 @@ public final class WorkshopDtos {
     public record InstalledEntry(long setId, int revision, String contentSha256) {
     }
 
-    /** {@code state}: current, update_available, withdrawn, audio_removed, unknown (02 section 2.4). */
+    /** {@code state}: current, update_available, withdrawn, audio_removed, unknown. */
     public record InstalledResult(long setId, String state, Integer latestRevision, String availability, String reason) {
     }
 
@@ -141,7 +176,7 @@ public final class WorkshopDtos {
     public record RatingSummary(Double average, int count, List<Integer> hist, Integer mine) {
     }
 
-    /** {@code GET /api/v1/meta}. {@code reportReasons} maps a target type to its reason codes (04 section 6.2). */
+    /** {@code GET /api/v1/meta}. {@code reportReasons} maps a target type to its reason codes. */
     public record Meta(List<JsonObject> genres, List<JsonObject> languages, List<String> statuses, List<String> availability,
                        JsonObject limits, String termsVersion, String rulesVersion, String communityRulesVersion,
                        String uploadRulesVersion, JsonObject reportReasons) {
@@ -201,7 +236,7 @@ public final class WorkshopDtos {
     public record NotificationCount(int unread) {
     }
 
-    // ---------------------------------------------------------------- account (02 section 4.5)
+    // ---------------------------------------------------------------- account
 
     public record Account(long id, String username, String displayName, String avatarUrl, String role, boolean curator,
                           String lang) {
@@ -251,7 +286,7 @@ public final class WorkshopDtos {
     public record AccountSummary(long id, String username, String displayName, String avatarUrl) {
     }
 
-    // ---------------------------------------------------------------- public profile (02 section 2.7)
+    // ---------------------------------------------------------------- public profile
 
     /** {@code GET /api/v1/users/{user}}: what the Workshop shows about one person, for anyone who can see them. */
     public record Profile(ProfileUser user, ProfileCounts counts, Covers headerCovers, List<ProfileMinecraft> minecraft) {
@@ -307,7 +342,7 @@ public final class WorkshopDtos {
         }
     }
 
-    // ---------------------------------------------------------------- uploads (02 section 3)
+    // ---------------------------------------------------------------- uploads
 
     public record UploadLimits(long audioBytes, long coverBytes, long chartBytes, int charts, List<Long> durationMs) {
     }

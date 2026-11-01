@@ -56,6 +56,15 @@ public final class WorkshopButton {
         label = value;
     }
 
+    public Component label() {
+        return label;
+    }
+
+    /** Whether the button draws an icon before its label. */
+    public boolean hasIcon() {
+        return icon != null;
+    }
+
     public void setEnabled(boolean value) {
         enabled = value;
     }

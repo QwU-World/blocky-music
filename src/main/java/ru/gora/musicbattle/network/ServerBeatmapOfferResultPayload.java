@@ -7,7 +7,7 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import ru.gora.musicbattle.MusicBattleMod;
 
 /**
- * The server's answer to an offer (spec 06 section 9.1): {@link #HAVE} when it already holds that content,
+ * The server's answer to an offer: {@link #HAVE} when it already holds that content,
  * {@link #NEED} to ask for the bytes, {@link #DENIED} with a reason the client renders as
  * {@code music_battle.workshop.error.<reason>}.
  */

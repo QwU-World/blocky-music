@@ -26,6 +26,13 @@ public final class SpeakerBlockEntity extends BlockEntity {
     private float midGainDb = DEFAULT_EQ_GAIN_DB;
     private float highGainDb = DEFAULT_EQ_GAIN_DB;
     private int activeBpm = 120;
+    /** No beat known: the cone pumps at the tempo from the world's tick 0, as it always did. */
+    public static final long NO_BEAT = Long.MIN_VALUE;
+    /**
+     * A game tick a beat of what this speaker plays falls on (SpeakerNetwork works it out from beat 1 of the chart, its
+     * offset included), so the cone pumps on the song's beats.
+     */
+    private long beatGameTick = NO_BEAT;
     private BlockPos djControllerPos;
 
     public SpeakerBlockEntity(BlockPos pos, BlockState state) {
@@ -38,6 +45,7 @@ public final class SpeakerBlockEntity extends BlockEntity {
     public float getMidGainDb() { return midGainDb; }
     public float getHighGainDb() { return highGainDb; }
     public int getActiveBpm() { return activeBpm; }
+    public long getBeatGameTick() { return beatGameTick; }
     public boolean isDjControlled() { return djControllerPos != null; }
     public BlockPos getDjControllerPos() { return djControllerPos; }
 
@@ -81,9 +89,20 @@ public final class SpeakerBlockEntity extends BlockEntity {
     }
 
     public void setActiveBpm(int bpm) {
+        setActiveBeat(bpm, beatGameTick);
+    }
+
+    /**
+     * The tempo and a game tick one of its beats falls on. A beat that moved by a tick or less is the same beat, rounded
+     * the other way: it is not sent again, or a battle's speakers would update every tick.
+     */
+    public void setActiveBeat(int bpm, long beatTick) {
         int clamped = Mth.clamp(bpm, 20, 600);
-        if (activeBpm != clamped) {
+        boolean beatMoved = (beatTick == NO_BEAT) != (beatGameTick == NO_BEAT)
+                || beatTick != NO_BEAT && Math.abs(beatTick - beatGameTick) > 1L;
+        if (activeBpm != clamped || beatMoved) {
             activeBpm = clamped;
+            beatGameTick = beatTick;
             sync();
         }
     }
@@ -105,6 +124,9 @@ public final class SpeakerBlockEntity extends BlockEntity {
         tag.putFloat("EqMidDb", midGainDb);
         tag.putFloat("EqHighDb", highGainDb);
         tag.putInt("ActiveBpm", activeBpm);
+        if (beatGameTick != NO_BEAT) {
+            tag.putLong("ActiveBeatTick", beatGameTick);
+        }
         if (djControllerPos != null) {
             tag.putLong("DjController", djControllerPos.asLong());
         }
@@ -121,6 +143,7 @@ public final class SpeakerBlockEntity extends BlockEntity {
         midGainDb = validEqGain(tag.contains("EqMidDb") ? tag.getFloat("EqMidDb") : DEFAULT_EQ_GAIN_DB);
         highGainDb = validEqGain(tag.contains("EqHighDb") ? tag.getFloat("EqHighDb") : DEFAULT_EQ_GAIN_DB);
         activeBpm = Mth.clamp(tag.contains("ActiveBpm") ? tag.getInt("ActiveBpm") : 120, 20, 600);
+        beatGameTick = tag.contains("ActiveBeatTick") ? tag.getLong("ActiveBeatTick") : NO_BEAT;
         djControllerPos = tag.contains("DjController") ? BlockPos.of(tag.getLong("DjController")) : null;
     }
 

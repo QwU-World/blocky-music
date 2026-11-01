@@ -12,10 +12,10 @@ $jars = @($jars | Where-Object { [IO.Path]::GetFileName($_) -ne 'fastutil-8.3.1.
 $jars += @(rg --files (Join-Path $env:USERPROFILE '.gradle/caches/modules-2/files-2.1/org.lwjgl') -g '*-3.3.3-natives-windows.jar')
 $cp = (@($out, "$root/build/classes/java/main", "$root/build/moddev/artifacts/neoforge-21.1.230-merged.jar", "$root/build/moddev/artifacts/neoforge-21.1.230-client-extra-aka-minecraft-resources.jar") + @($jars)) -join [IO.Path]::PathSeparator
 $sources = @("$root/tools/NoteSettingsPersistenceChecks.java")
-foreach ($name in @('client/ClientBattleSettings','client/ClientNoteAppearanceConfig','data/NoteAppearance','data/NoteSpeed','network/SettingsPayload','network/NoteAppearanceCodec')) {
+foreach ($name in @('client/ClientBattleSettings','client/BattleBackdrop','client/ClientNoteAppearanceConfig','data/NoteAppearance','data/NoteSpeed','network/SettingsPayload','network/NoteAppearanceCodec')) {
     $sources += "$root/src/main/java/ru/gora/musicbattle/$name.java"
 }
-$jdk = 'C:/Program Files/Eclipse Adoptium/jdk-21.0.11.10-hotspot/bin'
+$jdk = & (Join-Path $PSScriptRoot 'find-jdk.ps1')
 & "$jdk/javac.exe" -proc:none -encoding UTF-8 -cp $cp -d $out @sources
 if ($LASTEXITCODE) { throw 'Settings persistence test compilation failed' }
 & "$jdk/java.exe" -cp $cp NoteSettingsPersistenceChecks

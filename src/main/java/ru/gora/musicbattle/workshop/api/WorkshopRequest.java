@@ -15,7 +15,7 @@ import java.util.regex.Pattern;
 import ru.gora.musicbattle.workshop.WorkshopLayout;
 
 /**
- * A {@code <setId>.blockymap-request} file in {@code music_battle_tracks/workshop_inbox/} (spec 07 section 8, wave I1).
+ * A {@code <setId>.blockymap-request} file in {@code music_battle_tracks/workshop_inbox/}.
  *
  * <p>The QwU Workshop Helper writes one when the player clicks "Install in game" on the site or opens a
  * {@code blockymusic://install/<setId>} link. The helper downloads nothing and needs no account: all it says is

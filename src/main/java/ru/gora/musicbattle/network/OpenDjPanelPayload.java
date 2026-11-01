@@ -8,6 +8,7 @@ import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import ru.gora.musicbattle.MusicBattleMod;
+import ru.gora.musicbattle.block.entity.DjPanelBlockEntity;
 import ru.gora.musicbattle.data.DjVisualEffectConfig;
 import ru.gora.musicbattle.data.DjPlaylistEntry;
 import ru.gora.musicbattle.data.TrackSummary;
@@ -15,7 +16,13 @@ import ru.gora.musicbattle.data.TrackEffect;
 
 public record OpenDjPanelPayload(
         BlockPos panelPos,
+        /** Every map the panel may name: the picker's Server tab, the playlist's titles, the deck. */
         List<TrackSummary> tracks,
+        /**
+         * The ids on the booth's own list, in its order: what the panel's library shows. An id without a row in
+         * {@link #tracks} is a map the server does not have right now.
+         */
+        List<String> library,
         List<SpeakerEntry> speakers,
         int activeSpeakerIndex,
         boolean editAllSpeakers,
@@ -55,8 +62,10 @@ public record OpenDjPanelPayload(
         int activeVisualPositionTicks,
         List<Integer> activePlayerEntityIds,
         List<Integer> activeMobEntityIds,
-        /** True when the server had more tracks than the list carries (spec 06 section 9.4). */
-        boolean tracksTruncated
+        /** True when the server had more tracks than the list carries. */
+        boolean tracksTruncated,
+        /** Beat 1 of the monitored song on the monitor's clock, in ms at its speed ({@code ChartBeat}); 0 without one. */
+        int activeVisualOffsetMs
 ) implements CustomPacketPayload {
     public static final int MAX_TRACKS = 512;
     private static final int MAX_SPEAKERS = 64;
@@ -68,6 +77,7 @@ public record OpenDjPanelPayload(
     public static final Type<OpenDjPanelPayload> TYPE = new Type<>(MusicBattleMod.id("open_dj_panel"));
 
     public OpenDjPanelPayload {
+        library = library == null ? List.of() : List.copyOf(library);
         activePlayerEntityIds = playing || paused ? List.copyOf(activePlayerEntityIds) : List.of();
         activeMobEntityIds = playing || paused ? List.copyOf(activeMobEntityIds) : List.of();
     }
@@ -80,6 +90,11 @@ public record OpenDjPanelPayload(
             List<TrackSummary> tracks = new ArrayList<>(trackCount);
             for (int index = 0; index < trackCount; index++) {
                 tracks.add(TrackSummary.read(buffer));
+            }
+            int libraryCount = readCount(buffer, DjPanelBlockEntity.MAX_LIBRARY_TRACKS, "library");
+            List<String> library = new ArrayList<>(libraryCount);
+            for (int index = 0; index < libraryCount; index++) {
+                library.add(buffer.readUtf(DjPlaylistEntry.MAX_TRACK_ID_LENGTH));
             }
             int speakerCount = readCount(buffer, MAX_SPEAKERS, "speakers");
             List<SpeakerEntry> speakers = new ArrayList<>(speakerCount);
@@ -154,7 +169,7 @@ public record OpenDjPanelPayload(
                     || playlistRepeat < 0 || playlistRepeat > MAX_REPEAT_MODE) {
                 throw new IllegalArgumentException("Invalid DJ panel state bounds");
             }
-            return new OpenDjPanelPayload(panelPos, List.copyOf(tracks), List.copyOf(speakers),
+            return new OpenDjPanelPayload(panelPos, List.copyOf(tracks), library, List.copyOf(speakers),
                     activeSpeakerIndex, editAllSpeakers, List.copyOf(cameras), activeCameraIndex,
                     playing, activeTrackId, selectedTrackId, playbackSpeed, speedResponseRevision, paused,
                     playbackPositionTicks, trackDurationTicks, dspEnabled, reverbEnabled,
@@ -165,7 +180,8 @@ public record OpenDjPanelPayload(
                     List.copyOf(playlist), activePlaylistEntryId, playlistAutoAdvance, playlistRepeat,
                     playlistRevision,
                     List.copyOf(activeEffects), activeVisualBpm, playbackId, activeVisualSpeed, activeVisualPositionTicks,
-                    activePlayerEntityIds, activeMobEntityIds, buffer.readBoolean());
+                    activePlayerEntityIds, activeMobEntityIds, buffer.readBoolean(),
+                    ru.gora.musicbattle.data.ChartBeat.clampOffsetMs(buffer.readVarInt()));
         }
 
         @Override
@@ -175,6 +191,11 @@ public record OpenDjPanelPayload(
             buffer.writeVarInt(trackCount);
             for (int index = 0; index < trackCount; index++) {
                 payload.tracks().get(index).write(buffer);
+            }
+            int libraryCount = Math.min(payload.library().size(), DjPanelBlockEntity.MAX_LIBRARY_TRACKS);
+            buffer.writeVarInt(libraryCount);
+            for (int index = 0; index < libraryCount; index++) {
+                buffer.writeUtf(payload.library().get(index), DjPlaylistEntry.MAX_TRACK_ID_LENGTH);
             }
             int speakerCount = Math.min(payload.speakers().size(), MAX_SPEAKERS);
             buffer.writeVarInt(speakerCount);
@@ -261,6 +282,7 @@ public record OpenDjPanelPayload(
             writeEntityIds(buffer, payload.activePlayerEntityIds(), MAX_ACTIVE_PLAYERS);
             writeEntityIds(buffer, payload.activeMobEntityIds(), MAX_ACTIVE_MOBS);
             buffer.writeBoolean(payload.tracksTruncated() || trackCount < payload.tracks().size());
+            buffer.writeVarInt(ru.gora.musicbattle.data.ChartBeat.clampOffsetMs(payload.activeVisualOffsetMs()));
         }
     };
 

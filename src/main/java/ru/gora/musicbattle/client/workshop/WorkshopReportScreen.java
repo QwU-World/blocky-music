@@ -14,12 +14,12 @@ import ru.gora.musicbattle.workshop.api.CancelToken;
 import ru.gora.musicbattle.workshop.api.WorkshopApiException;
 
 /**
- * The report dialog (spec 04 section 6.1 and 6.2): the reasons of the target type, a details field that some reasons
+ * The report dialog: the reasons of the target type, a details field that some reasons
  * require, and "I own the rights / legal complaint", which files no report but opens
  * {@code /legal/notice?url=…} through the trusted confirm-link dialog.
  */
 public final class WorkshopReportScreen extends WorkshopDialogScreen {
-    /** Beatmap-set reasons, in the order of 04 section 6.2. */
+    /** Beatmap-set reasons, in the website's order. */
     public static final List<String> SET_REASONS = List.of("rights_concern", "plagiarism", "inappropriate_cover",
             "inappropriate_audio", "explicit_unmarked", "photosensitivity_unmarked", "metadata_misleading", "impersonation",
             "malicious_or_broken", "spam_or_duplicate", "ai_undisclosed", "personal_data", "illegal_other", "other");
@@ -67,7 +67,7 @@ public final class WorkshopReportScreen extends WorkshopDialogScreen {
         return new WorkshopReportScreen(screen, client, "comment", commentId, author, COMMENT_REASONS);
     }
 
-    /** "I own the rights / legal complaint" never files a report (04 section 6.1). */
+    /** "I own the rights / legal complaint" never files a report. */
     private void openLegalNotice() {
         String target = client.api().pageUrl(targetType.equals("comment") ? "/comments/" + targetId : "/beatmapsets/" + targetId);
         String url = client.api().pageUrl("/legal/notice?url=" + URLEncoder.encode(target, StandardCharsets.UTF_8));

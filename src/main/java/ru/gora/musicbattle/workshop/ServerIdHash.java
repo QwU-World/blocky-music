@@ -10,7 +10,7 @@ import java.util.UUID;
 
 /**
  * {@code bmw-join-v1}: the Minecraft-style {@code serverId} the mod passes to {@code joinServer} and the workshop
- * backend recomputes for {@code hasJoined} (research minecraft-account-link.md section 1.5, spec 02 section 4.3).
+ * backend recomputes for {@code hasJoined}.
  *
  * <pre>
  * serverId = mcHex( SHA1( "blocky-music-workshop/mc-join/v1" || 0x00 || nonce(32) || clientSalt(32) || uuid(16) ) )

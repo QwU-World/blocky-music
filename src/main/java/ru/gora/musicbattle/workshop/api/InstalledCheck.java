@@ -22,11 +22,11 @@ import ru.gora.musicbattle.workshop.api.WorkshopDtos.InstalledEntry;
 import ru.gora.musicbattle.workshop.api.WorkshopDtos.InstalledResult;
 
 /**
- * Asks the workshop which installed sets have updates or were withdrawn (spec 02 section 2.4, 06 section 8.5) and
+ * Asks the workshop which installed sets have updates or were withdrawn and
  * remembers the last answer per set in {@code music_battle_tracks/.workshop_state.json}. Automatic runs happen at most
  * once per 10 minutes; local files are never deleted because of an answer.
  *
- * <p>The remembered state also decides transfers (spec 08 A5.1): a set may be offered to a server or other players
+ * <p>The remembered state also decides transfers: a set may be offered to a server or other players
  * only when its last successful check is at most 7 days old and says {@code current} or {@code update_available}
  * for exactly the installed content.
  */
@@ -181,7 +181,7 @@ public final class InstalledCheck {
         return entries;
     }
 
-    /** Spec 08 A5.1. */
+    /** Whether a set with this content may be handed to a server or another player, by its last installed-check. */
     public TransferVerdict transferVerdict(long setId, String contentSha256) {
         Entry entry = entry(setId).orElse(null);
         if (entry == null || !entry.contentSha256().equals(contentSha256)) {

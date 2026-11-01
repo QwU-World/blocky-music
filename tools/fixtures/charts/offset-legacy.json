@@ -1,0 +1,171 @@
+{
+  "id": "offset_fixture_legacy",
+  "title": "Chart offset fixture (legacy format)",
+  "description": "Imported from FNF chart: hand-written test beatmap for tools/ChartOffsetChecks. No song.",
+  "fnfPartiesSwapped": true,
+  "bpm": 96,
+  "offsetMs": 437,
+  "notes": [
+    {
+      "owner": 0,
+      "lane": 0,
+      "tick": 30,
+      "durationTicks": 0
+    },
+    {
+      "owner": 1,
+      "lane": 3,
+      "tick": 42,
+      "durationTicks": 0
+    },
+    {
+      "owner": 0,
+      "lane": 2,
+      "tick": 54,
+      "durationTicks": 0
+    },
+    {
+      "owner": 1,
+      "lane": 1,
+      "tick": 66,
+      "durationTicks": 25
+    },
+    {
+      "owner": 0,
+      "lane": 0,
+      "tick": 78,
+      "durationTicks": 0
+    },
+    {
+      "owner": 1,
+      "lane": 3,
+      "tick": 90,
+      "durationTicks": 0
+    },
+    {
+      "owner": 0,
+      "lane": 2,
+      "tick": 102,
+      "durationTicks": 0
+    },
+    {
+      "owner": 1,
+      "lane": 1,
+      "tick": 114,
+      "durationTicks": 25
+    },
+    {
+      "owner": 0,
+      "lane": 0,
+      "tick": 126,
+      "durationTicks": 0
+    },
+    {
+      "owner": 1,
+      "lane": 3,
+      "tick": 138,
+      "durationTicks": 0
+    },
+    {
+      "owner": 0,
+      "lane": 2,
+      "tick": 150,
+      "durationTicks": 0
+    },
+    {
+      "owner": 1,
+      "lane": 1,
+      "tick": 162,
+      "durationTicks": 25
+    },
+    {
+      "owner": 0,
+      "lane": 0,
+      "tick": 174,
+      "durationTicks": 0
+    },
+    {
+      "owner": 1,
+      "lane": 3,
+      "tick": 186,
+      "durationTicks": 0
+    },
+    {
+      "owner": 0,
+      "lane": 2,
+      "tick": 198,
+      "durationTicks": 0
+    },
+    {
+      "owner": 1,
+      "lane": 1,
+      "tick": 210,
+      "durationTicks": 25
+    },
+    {
+      "owner": 0,
+      "lane": 0,
+      "tick": 222,
+      "durationTicks": 0
+    },
+    {
+      "owner": 1,
+      "lane": 3,
+      "tick": 234,
+      "durationTicks": 0
+    },
+    {
+      "owner": 0,
+      "lane": 2,
+      "tick": 246,
+      "durationTicks": 0
+    },
+    {
+      "owner": 1,
+      "lane": 1,
+      "tick": 258,
+      "durationTicks": 25
+    }
+  ],
+  "effects": [
+    {
+      "type": "flash",
+      "lane": 3,
+      "layer": 1,
+      "tick": 30,
+      "durationTicks": 8,
+      "intensity": 1.0
+    },
+    {
+      "type": "pulse",
+      "lane": 2,
+      "layer": 0,
+      "tick": 30,
+      "durationTicks": 240,
+      "beatReactive": true
+    },
+    {
+      "type": "glitch",
+      "lane": 1,
+      "layer": 0,
+      "tick": 60,
+      "durationTicks": 20
+    },
+    {
+      "type": "color",
+      "lane": 0,
+      "layer": 1,
+      "tick": 90,
+      "durationTicks": 40,
+      "colorA": -43576
+    },
+    {
+      "type": "old_tv",
+      "lane": 1,
+      "layer": 1,
+      "tick": 120,
+      "durationTicks": 60,
+      "intensity": 0.7
+    }
+  ]
+}

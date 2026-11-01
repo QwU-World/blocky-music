@@ -24,7 +24,7 @@ import net.neoforged.neoforge.server.permission.nodes.PermissionTypes;
 import ru.gora.musicbattle.MusicBattleMod;
 
 /**
- * The server's allow-list, replacing {@code TrackPublishPermissions} (spec 06 section 9.1).
+ * The server's allow-list, replacing {@code TrackPublishPermissions}.
  *
  * <p>One entry per player: {@code {uuid, lastKnownName, grantedBy, grantedAt, rights}} with rights out of
  * {@link Right}. The old {@code blocky_music_publish_permissions} SavedData (a bare list of UUIDs) is migrated on

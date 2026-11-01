@@ -13,13 +13,17 @@ import java.util.List;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import javax.imageio.ImageIO;
+import ru.gora.musicbattle.audio.NativeAudio;
+import ru.gora.musicbattle.audio.codec.AudioDecoders;
+import ru.gora.musicbattle.audio.codec.UnsupportedFormatException;
 import ru.gora.musicbattle.server.MusicBattleTracks;
 import ru.gora.musicbattle.data.BattleNote;
 
 public final class ClientOsuManiaImporter {
     /**
-     * An imported map. {@code audioLeftBehind} is set when the map had a song that could not be made into OGG: the
-     * notes are still here, {@code audioFile} is empty, and the editor tells the player what to do about the song.
+     * An imported map. {@code audioLeftBehind} is set when the map had a song that could not be made into OGG (a
+     * format the mod does not read, or a damaged file): the notes are still here, {@code audioFile} is empty, and the
+     * editor tells the player what to do about the song.
      * {@code pendingSong} is set instead when the song still has to be converted, which only
      * {@link #importChartDeferringSong} leaves to its caller.
      */
@@ -27,38 +31,50 @@ public final class ClientOsuManiaImporter {
                                    AudioLeftBehind audioLeftBehind, PendingSong pendingSong) {
     }
 
-    /** How long one song may take to convert. Generous, because it no longer holds up anything the player sees. */
+    /**
+     * How long one song may take to convert. A four-minute MP3 takes about a second; this only stops a conversion that
+     * has gone badly wrong, and it holds up nothing the player sees.
+     */
     private static final int SONG_CONVERSION_TIMEOUT_SECONDS = 120;
 
     /**
-     * A map's song that is not OGG, already copied into music_battle_raw as it was, and still to be converted.
+     * A map's song that is not Ogg Vorbis, already copied into music_battle_raw, and still to be converted.
      *
      * <p>The conversion used to run inside the Import click, on the render thread, so the game froze for as long as
-     * ffmpeg took - up to its 30-second timeout. The notes do not need the song, so the import now hands this back
-     * and the editor converts it on a worker while the player already edits the notes.
+     * it took. The notes do not need the song, so the import hands this back and the editor converts it on a worker
+     * while the player already edits the notes.
      *
-     * @param original the song as the map shipped it, in music_battle_raw
+     * @param original the song as the map shipped it, in music_battle_raw; the import keeps it under a hidden
+     *     temporary name until it is converted, so it can never be taken for the converted song or collide with it
      * @param target where the OGG goes, next to it
-     * @param sourceExtension what the song was, such as {@code .mp3}
+     * @param sourceExtension what the song is by its content, such as {@code .mp3}, for the editor's messages
+     * @param keptName the name the original is given in music_battle_raw when it cannot be converted, so the player
+     *     finds it there; never the target's name
      */
-    public record PendingSong(Path original, Path target, String sourceExtension) {
+    public record PendingSong(Path original, Path target, String sourceExtension, String keptName) {
+        /** A song whose original already sits under the name it should be kept under. */
+        public PendingSong(Path original, Path target, String sourceExtension) {
+            this(original, target, sourceExtension, original.getFileName().toString());
+        }
+
         /**
-         * Runs ffmpeg and waits for it, so never on the render thread. On success the original is removed, as it
-         * was when the conversion happened during the import; on failure it stays where the Audio button finds it.
+         * Converts the song with the mod's own converter, on the calling thread, so never on the render thread. On
+         * success the original is removed, as it was when the conversion happened during the import; on failure it
+         * is kept under {@link #keptName}, where the Audio button finds it. It never throws: the notes are imported
+         * already, and the editor waits for this answer to say what became of the song.
          */
         public SongResult convert() {
             try {
-                ClientFfmpeg.convertToVorbis(original, target, null, SONG_CONVERSION_TIMEOUT_SECONDS);
-            } catch (IOException exception) {
-                // Almost every osu! map ships MP3, and most players have no ffmpeg. The notes are what the import is
-                // for, so they stay; the song is kept as it was, where the Audio button will find it.
-                boolean missing = exception instanceof ClientFfmpeg.MissingException;
-                if (!missing) {
+                NativeAudio.convertToVorbis(original, target, 1.0F, SONG_CONVERSION_TIMEOUT_SECONDS);
+            } catch (IOException | RuntimeException exception) {
+                // The notes are what the import is for, so they stay; the song is kept for the player to convert some
+                // other way. A format the mod does not read is the player's to convert, not a fault to log.
+                boolean unsupported = exception instanceof UnsupportedFormatException;
+                if (!unsupported) {
                     ru.gora.musicbattle.MusicBattleMod.LOGGER.warn("Blocky Music could not convert the song of an osu! map.", exception);
                 }
-                String kept = Files.isRegularFile(original) ? original.getFileName().toString() : "";
-                return new SongResult("", new AudioLeftBehind(kept, sourceExtension, missing,
-                        missing ? "" : firstLine(MusicBattleTracks.safeMessage(exception))));
+                return new SongResult("", new AudioLeftBehind(keep(original, keptName), sourceExtension, unsupported,
+                        unsupported ? "" : firstLine(MusicBattleTracks.safeMessage(exception))));
             }
             try {
                 Files.deleteIfExists(original);
@@ -69,6 +85,26 @@ public final class ClientOsuManiaImporter {
         }
     }
 
+    /**
+     * Gives a song that could not be converted the name the player will find it under, and returns that name, or an
+     * empty one when the file is gone or cannot be renamed.
+     */
+    private static String keep(Path original, String keptName) {
+        try {
+            if (!Files.isRegularFile(original)) {
+                return "";
+            }
+            Path kept = original.resolveSibling(keptName);
+            if (!kept.equals(original)) {
+                Files.move(original, kept, StandardCopyOption.REPLACE_EXISTING);
+            }
+            return kept.getFileName().toString();
+        } catch (IOException | RuntimeException exception) {
+            ru.gora.musicbattle.MusicBattleMod.LOGGER.warn("Blocky Music could not keep the song of an osu! map.", exception);
+            return "";
+        }
+    }
+
     /** What became of a {@link PendingSong}: the OGG's name in music_battle_raw, or why there is none. */
     public record SongResult(String audioFile, AudioLeftBehind leftBehind) {
     }
@@ -76,13 +112,14 @@ public final class ClientOsuManiaImporter {
     /**
      * A song that came with the map but is not OGG, the only format Minecraft plays, and could not be converted.
      *
-     * @param keptFile the original, written into music_battle_raw under this name so the Audio button can offer it
-     *     again once ffmpeg is installed; empty if even that failed
-     * @param sourceExtension what the song was, such as {@code .mp3}
-     * @param ffmpegMissing whether the reason was that this computer has no ffmpeg, rather than ffmpeg failing
-     * @param reason what ffmpeg reported when it did run, for the status line
+     * @param keptFile the original, written into music_battle_raw under this name so the player can convert it
+     *     elsewhere and pick the result with the Audio button; empty if even that failed
+     * @param sourceExtension what the song was, such as {@code .m4a}
+     * @param unsupportedFormat whether the song is in a format the mod does not read (AudioDecoders lists what it
+     *     reads), rather than a file of one of those that failed to convert
+     * @param reason why the conversion failed, for the status line; empty for an unsupported format
      */
-    public record AudioLeftBehind(String keptFile, String sourceExtension, boolean ffmpegMissing, String reason) {
+    public record AudioLeftBehind(String keptFile, String sourceExtension, boolean unsupportedFormat, String reason) {
     }
 
     private record AudioCopy(String file, AudioLeftBehind leftBehind, PendingSong pending) {
@@ -137,8 +174,8 @@ public final class ClientOsuManiaImporter {
     }
 
     /**
-     * Imports a map and converts its song before returning, waiting for ffmpeg. For callers that are already off the
-     * render thread; the editor uses {@link #importChartDeferringSong} and converts in the background.
+     * Imports a map and converts its song before returning. For callers that are already off the render thread; the
+     * editor uses {@link #importChartDeferringSong} and converts in the background.
      */
     public static ImportedOsuChart importChartWithAudio(Path path, int difficultyIndex) throws IOException {
         ImportedOsuChart imported = importChartDeferringSong(path, difficultyIndex);
@@ -150,7 +187,7 @@ public final class ClientOsuManiaImporter {
     }
 
     /**
-     * Imports a map without waiting for ffmpeg: a song that is not OGG comes back as {@code pendingSong}, already
+     * Imports a map without converting its song: a song that is not OGG comes back as {@code pendingSong}, already
      * copied into music_battle_raw, for the caller to {@link PendingSong#convert} off the render thread.
      */
     public static ImportedOsuChart importChartDeferringSong(Path path, int difficultyIndex) throws IOException {
@@ -164,7 +201,7 @@ public final class ClientOsuManiaImporter {
             String previewFile = copySiblingPreview(path, parsed.previewFile(), parsed.chart().id());
             return new ImportedOsuChart(parsed.chart(), audio.file(), previewFile, audio.leftBehind(), audio.pending());
         }
-        throw new IOException("Import supports .json, .osu and .osz");
+        throw new ClientTrackExporter.Problem("music_battle.l10n.editor.import_unsupported_type", path.getFileName().toString());
     }
 
     public static List<OsuDifficulty> listDifficulties(Path path) throws IOException {
@@ -245,7 +282,7 @@ public final class ClientOsuManiaImporter {
                 return new ImportedOsuChart(first.chart(), audio.file(), previewFile, audio.leftBehind(), audio.pending());
             }
         }
-        throw new IOException("No .osu chart found in " + path.getFileName());
+        throw new ClientTrackExporter.Problem("music_battle.l10n.editor.osz_no_beatmap", path.getFileName().toString());
     }
 
     private static ParsedOsuChart parseOsu(String fileName, String text) throws IOException {
@@ -343,7 +380,7 @@ public final class ClientOsuManiaImporter {
         notes.sort(Comparator.comparingInt(BattleNote::tick).thenComparingInt(BattleNote::owner).thenComparingInt(BattleNote::lane));
         String fullTitle = version.isBlank() ? title : title + " [" + version + "]";
         String sourceMode = mode == 3 ? "osu!mania" : "osu!";
-        ClientFnfChartImporter.ImportedChart chart = new ClientFnfChartImporter.ImportedChart(safeId(fullTitle), fullTitle, "Imported from " + sourceMode + ": " + fileName, Math.max(20, Math.min(400, bpm)), List.copyOf(notes));
+        ClientFnfChartImporter.ImportedChart chart = new ClientFnfChartImporter.ImportedChart(safeId(fullTitle), fullTitle, ClientTrackExporter.importedDescription(sourceMode, fileName), Math.max(20, Math.min(400, bpm)), List.copyOf(notes));
         return new ParsedOsuChart(chart, audioFile, previewFile);
     }
 
@@ -781,7 +818,9 @@ public final class ClientOsuManiaImporter {
         Path target = MusicBattleTracks.rawDirectory().resolve(safeName).toAbsolutePath().normalize();
         try {
             Files.createDirectories(target.getParent());
-            BufferedImage image = ImageIO.read(new ByteArrayInputStream(bytes));
+            // A memory-cached stream: for a plain InputStream ImageIO keeps a cache file in the system's temporary
+            // folder, and the mod writes nothing outside the Minecraft folder.
+            BufferedImage image = ImageIO.read(new javax.imageio.stream.MemoryCacheImageInputStream(new ByteArrayInputStream(bytes)));
             if (image == null) {
                 return "";
             }
@@ -816,32 +855,104 @@ public final class ClientOsuManiaImporter {
         return null;
     }
 
+    /**
+     * Puts a map's song into music_battle_raw, deciding by its bytes and never by its name what to do: maps call an
+     * Ogg Vorbis song .mp3, and an MP3 or Opus song .ogg. Ogg Vorbis the game plays as it is (one or two channels) is
+     * copied as the OGG it is rather than converted into a second, slightly worse one; a 5.1 one, which the game would
+     * leave silent, is converted. Anything else waits under a hidden temporary name for its conversion (see
+     * {@link PendingSong}), so an MP3 called .ogg can never sit where its OGG is about to go. A format the mod does
+     * not read is reported here and now, and kept under a name that says what it is.
+     */
     private static AudioCopy copyAudioBytes(byte[] bytes, String sourceName, String chartId) throws IOException {
-        String sourceExtension = extension(sourceName);
         String baseName = safeId(chartId + "_" + stripExtension(sourceName));
         Path rawDirectory = MusicBattleTracks.rawDirectory().toAbsolutePath().normalize();
         Files.createDirectories(rawDirectory);
-        if (!".ogg".equals(sourceExtension)) {
-            // Only copied here; the conversion is the caller's, off the render thread (see PendingSong).
-            Path converted = rawDirectory.resolve(baseName + ".ogg").toAbsolutePath().normalize();
-            Path original = rawDirectory.resolve(baseName + sourceExtension).toAbsolutePath().normalize();
-            try {
-                Files.write(original, bytes);
-            } catch (IOException writeFailure) {
-                ru.gora.musicbattle.MusicBattleMod.LOGGER.warn("Blocky Music could not keep the song of an osu! map.", writeFailure);
-                return new AudioCopy("", new AudioLeftBehind("", sourceExtension, false,
-                        firstLine(MusicBattleTracks.safeMessage(writeFailure))), null);
-            }
-            return new AudioCopy("", null, new PendingSong(original, converted, sourceExtension));
+        if (NativeAudio.playsAsIs(bytes)) {
+            Path target = rawDirectory.resolve(baseName + ".ogg").toAbsolutePath().normalize();
+            Files.write(target, bytes);
+            return new AudioCopy(target.getFileName().toString(), null, null);
         }
-        String safeName = baseName + sourceExtension;
-        Path target = rawDirectory.resolve(safeName).toAbsolutePath().normalize();
-        Files.createDirectories(target.getParent());
-        Files.write(target, bytes);
-        return new AudioCopy(target.getFileName().toString(), null, null);
+        String namedExtension = extension(sourceName);
+        Path converted = rawDirectory.resolve(baseName + ".ogg").toAbsolutePath().normalize();
+        Path original;
+        try {
+            original = NativeAudio.createTemporaryFile(converted);
+            Files.write(original, bytes);
+        } catch (IOException writeFailure) {
+            ru.gora.musicbattle.MusicBattleMod.LOGGER.warn("Blocky Music could not keep the song of an osu! map.", writeFailure);
+            return new AudioCopy("", new AudioLeftBehind("", namedExtension, false,
+                    firstLine(MusicBattleTracks.safeMessage(writeFailure))), null);
+        }
+        AudioDecoders.Kind kind;
+        try {
+            kind = AudioDecoders.detect(original);
+        } catch (UnsupportedFormatException unsupported) {
+            // Nothing to convert: the player is told now, and finds the song under a name that says what it is.
+            String extension = unsupportedExtension(unsupported.formatName(), namedExtension);
+            String kept = keep(original, baseName + extension);
+            return new AudioCopy("", new AudioLeftBehind(kept, extension, true, ""), null);
+        } catch (IOException | RuntimeException readFailure) {
+            ru.gora.musicbattle.MusicBattleMod.LOGGER.warn("Blocky Music could not read the song of an osu! map.", readFailure);
+            String kept = keep(original, baseName + keptExtension(namedExtension));
+            return new AudioCopy("", new AudioLeftBehind(kept, namedExtension, false,
+                    firstLine(MusicBattleTracks.safeMessage(readFailure))), null);
+        }
+        // Only copied here; the conversion is the caller's, off the render thread.
+        String extension = switch (kind) {
+            case MP3 -> ".mp3";
+            case WAV -> ".wav";
+            case FLAC -> ".flac";
+            case OGG_FLAC -> ".oga";
+            case MP4 -> ".m4a";
+            case ADTS -> ".aac";
+            case OPUS -> ".opus";
+            case WEBM -> ".webm";
+            case TS -> ".ts";
+            // Ogg Vorbis that Minecraft cannot play as it is: behind an ID3 tag, or with more than two channels. Should
+            // it fail, it is kept as .oga, so it never passes for a playable .ogg.
+            case VORBIS -> ".oga";
+        };
+        return new AudioCopy("", null, new PendingSong(original, converted,
+                kind == AudioDecoders.Kind.VORBIS ? ".ogg" : extension, baseName + extension));
     }
 
-    /** ffmpeg's report cut to what fits a status line; the whole of it is in the log. */
+    /**
+     * The extension for a song in a format the mod does not read, by what it was recognised as, so the file the player
+     * is pointed to says what it is: a WMA song a map calls .ogg is kept as .wma, an Opus one the decoder refuses
+     * (ambisonics, say) as .opus.
+     */
+    private static String unsupportedExtension(String formatName, String namedExtension) {
+        if (formatName == null) {
+            return keptExtension(namedExtension);
+        }
+        return switch (formatName) {
+            case "Opus" -> ".opus";
+            case "AAC (ADIF)" -> ".aac";
+            case "WMA/WMV" -> ".wma";
+            case "WebM/MKV" -> ".webm";
+            case "AVI" -> ".avi";
+            case "AIFF" -> ".aiff";
+            case "CAF" -> ".caf";
+            case "AMR" -> ".amr";
+            case "Monkey's Audio" -> ".ape";
+            case "WavPack" -> ".wv";
+            case "MIDI" -> ".mid";
+            case "FLV" -> ".flv";
+            case "MPEG video" -> ".mpg";
+            case "Ogg FLAC", "Speex" -> ".oga";
+            default -> formatName.startsWith("WAV ") ? ".wav"
+                    : formatName.endsWith("in MPEG-TS") ? ".ts"
+                    : formatName.startsWith("WebM/MKV") ? ".webm"
+                    : formatName.contains("Opus") ? ".opus" : keptExtension(namedExtension);
+        };
+    }
+
+    /** The name's own extension for a kept song, except .ogg, which the editor would take for a playable song. */
+    private static String keptExtension(String namedExtension) {
+        return ".ogg".equals(namedExtension) ? ".bin" : namedExtension;
+    }
+
+    /** A failure's reason cut to what fits a status line; the whole of it is in the log. */
     private static String firstLine(String message) {
         String line = message == null ? "" : message.strip().lines().findFirst().orElse("");
         return line.length() <= 120 ? line : line.substring(0, 117) + "...";

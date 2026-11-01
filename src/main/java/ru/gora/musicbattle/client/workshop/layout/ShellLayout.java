@@ -6,7 +6,7 @@ import ru.gora.musicbattle.client.ui.TextMeasurer;
 import ru.gora.musicbattle.client.ui.TextStyle;
 
 /**
- * The Workshop shell (spec 06 section 6.1): a panel of 0.85 screen width on large screens and the full width below
+ * The Workshop shell: a panel of 0.85 screen width on large screens and the full width below
  * 640 units, a title bar with the block-note icon and the lowercase title, the account chip and the close button, a
  * tab strip (Browse · Installed · Server beatmaps) with the Upload action, an optional notice line under the tabs, and
  * the content area the views fill.
@@ -22,8 +22,10 @@ public final class ShellLayout {
     private static final int NOTICE_LINES = 2;
     public static final float WIDE_FRACTION = 0.85F;
     public static final float FULL_WIDTH_BELOW = 640F;
+    /** Room either side of a tab's label. */
+    private static final float TAB_PAD = 4F;
 
-    /** The tabs of the listing. SERVER stays hidden until a server reports the feature (M3). */
+    /** The tabs of the listing. SERVER shows only when the server the player is on offers its beatmaps, or a picker has some. */
     public enum Tab {
         BROWSE("browse"), INSTALLED("installed"), SERVER("server");
 
@@ -101,7 +103,7 @@ public final class ShellLayout {
         Rect tabs = new Rect(panel.x(), titleH, panelWidth, tabsH);
         layout.add(TABS, PANEL, Layout.Kind.PANEL, tabs);
 
-        // Upload sits at the right end of the tab strip (spec 06 section 6.5 entry point).
+        // Upload sits at the right end of the tab strip.
         String uploadLabel = tr.get(WorkshopStrings.KEY + "upload.open");
         float uploadWidth = Math.min(panelWidth * 0.34F,
                 TextFit.width(measurer, uploadLabel, TextStyle.CAPTION) + Metrics.ICON_SM + Metrics.GAP + 10);
@@ -117,16 +119,28 @@ public final class ShellLayout {
         }
         float tabX = tabs.x() + pad;
         float room = upload.x() - Metrics.GAP - tabX;
+        // Each tab is as wide as its label, as the settings' tabs and the library's are, in body text while every tab
+        // fits that way and in captions - the size the compact window's own buttons use - when they do not. Equal
+        // shares of the strip cut "Установленные" to "Установлен…" and "Серверные карты" to "Серверные…" at 320 units.
+        // Whether they fit is measured with every label in its bold face, so switching tabs never switches the size.
+        boolean small = tabsWidth(measurer, tr, visible, TextStyle.STRONG) > room;
+        boolean cut = small && tabsWidth(measurer, tr, visible, TextStyle.LABEL) > room;
         float perTab = room / visible.size();
         for (Tab tab : visible) {
             String label = tr.get(WorkshopStrings.KEY + "tab." + tab.id());
-            TextStyle style = tab == state.tab() ? TextStyle.STRONG : TextStyle.BODY;
-            float width = Math.min(perTab - Metrics.GAP, TextFit.width(measurer, label, style) + 8);
+            boolean active = tab == state.tab();
+            TextStyle style = small ? (active ? TextStyle.LABEL : TextStyle.CAPTION) : (active ? TextStyle.STRONG : TextStyle.BODY);
+            float width = TextFit.width(measurer, label, style) + TAB_PAD * 2;
+            if (cut) {
+                // No shipped language gets here from 320 units up (the workshop-text check proves it); a longer one
+                // would get equal shares with its labels cut rather than tabs running under the Upload button.
+                width = Math.min(perTab - Metrics.GAP, width);
+            }
             width = Math.max(18F, width);
             Rect box = new Rect(tabX, tabs.y() + 1, width, tabsH - 2);
             layout.add("shell.tab." + tab.id(), TABS, Layout.Kind.BUTTON, box);
             layout.labelCentered("shell.tab." + tab.id() + ".text", "shell.tab." + tab.id(), box.centerX(),
-                    capY(style, box.y(), box.h() - 2), width - 4, label, style);
+                    capY(style, box.y(), box.h() - 2), width - TAB_PAD * 2, label, style);
             tabX = box.right() + Metrics.GAP;
         }
 
@@ -160,6 +174,15 @@ public final class ShellLayout {
         layout.paragraph(NOTICE + ".text", NOTICE, textX, textY, textWidth, text, TextStyle.CAPTION, lineHeight,
                 NOTICE_LINES);
         return strip.bottom();
+    }
+
+    /** The strip the visible tabs take with every label in {@code face}, their padding and the gaps between them. */
+    private static float tabsWidth(TextMeasurer measurer, Tr tr, List<Tab> visible, TextStyle face) {
+        float total = Metrics.GAP * (visible.size() - 1);
+        for (Tab tab : visible) {
+            total += Math.max(18F, TextFit.width(measurer, tr.get(WorkshopStrings.KEY + "tab." + tab.id()), face) + TAB_PAD * 2);
+        }
+        return total;
     }
 
     /** y of the cap line that centres a style's capitals in a box. */

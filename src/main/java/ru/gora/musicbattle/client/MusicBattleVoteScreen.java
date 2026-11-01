@@ -215,7 +215,7 @@ public final class MusicBattleVoteScreen extends UiLayer implements WorkshopDrop
         return false;
     }
 
-    /** Workshop packages dropped on this screen install through the Workshop flow (spec 06 section 5). */
+    /** Workshop packages dropped on this screen install through the Workshop flow. */
     @Override
     public void onFilesDrop(List<Path> paths) {
         WorkshopDrops.onFilesDropped(this, paths);
@@ -837,7 +837,7 @@ public final class MusicBattleVoteScreen extends UiLayer implements WorkshopDrop
                 return;
             }
             stopFollowingDownload();
-            // The server has to fetch this set from us first (spec 06 section 9.4); it answers with a chunk request.
+            // The server has to fetch this set from us first; it answers with a chunk request.
             // The revision and the hash are the installed copy's, which is the one we can actually hand over.
             ServerWorkshopClient.rememberVoteUpload(set.setId(), set.revision(), set.contentSha256());
             PacketDistributor.sendToServer(new VoteInstalledPayload(payload.battleId(), set.setId(), set.revision(),

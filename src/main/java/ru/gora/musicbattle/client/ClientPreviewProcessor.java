@@ -39,9 +39,16 @@ public final class ClientPreviewProcessor {
         return dot >= 0 && EXTENSIONS.contains(name.substring(dot + 1).toLowerCase(Locale.ROOT));
     }
 
+    /**
+     * The beatmap's picture as a bounded PNG for "Publish to server". The PNG is a temporary file in the mod's own
+     * temporary folder inside the Minecraft folder ({@code music_battle_tracks/.temp}), never the system's temporary
+     * folder; the publisher deletes it when that upload ends or fails, and a file a killed game left there is deleted
+     * when the game starts again ({@code MusicBattleTracks.clearTemporaryDirectory}).
+     */
     public static ProcessedPreview processForPublication(Path source) throws IOException {
         long sourceBytes = Files.size(source);
-        Path output = Files.createTempFile("blocky-music-preview-", ".png");
+        Path directory = Files.createDirectories(ru.gora.musicbattle.server.MusicBattleTracks.temporaryDirectory());
+        Path output = Files.createTempFile(directory, "publish-preview-", ".png");
         boolean complete = false;
         try {
             Decoded decoded = decode(source, MAX_PUBLISHED_DIMENSION);
@@ -69,8 +76,12 @@ public final class ClientPreviewProcessor {
     public static NativeImage loadNativeImage(Path source) throws IOException {
         Decoded decoded = decode(source, 2048);
         try (ByteArrayOutputStream output = new ByteArrayOutputStream()) {
-            if (!ImageIO.write(decoded.image(), "png", output)) {
-                throw new IOException("PNG encoder is unavailable");
+            // A memory-cached stream: ImageIO's default for an OutputStream is a cache file in the system's temporary
+            // folder, and the mod writes nothing outside the Minecraft folder.
+            try (ImageOutputStream stream = new javax.imageio.stream.MemoryCacheImageOutputStream(output)) {
+                if (!ImageIO.write(decoded.image(), "png", stream)) {
+                    throw new IOException("PNG encoder is unavailable");
+                }
             }
             try (ByteArrayInputStream input = new ByteArrayInputStream(output.toByteArray())) {
                 return NativeImage.read(input);

@@ -177,7 +177,109 @@ public final class DjWorkflowChecks {
         }
         check(repeatByOrdinal.invoke(null,-1)==repeatOff && repeatByOrdinal.invoke(null,99)==repeatOff,
                 "an out-of-range repeat ordinal cannot select a mode");
+        libraryWire();
+        libraryFollowsThePanel();
         System.out.println("DJ workflow checks passed: "+checks);
+    }
+    /** An idle booth as the panel payload describes it: these maps on the server, this list on the booth. */
+    static ru.gora.musicbattle.network.OpenDjPanelPayload boothState(List<TrackSummary> tracks,List<String> library) {
+        return boothState(tracks,library,List.of());
+    }
+    /** The same idle booth with a queue; its revision stays put, so only the list can change between two of them. */
+    static ru.gora.musicbattle.network.OpenDjPanelPayload boothState(List<TrackSummary> tracks,List<String> library,
+                                                                     List<DjPlaylistEntry> queue) {
+        return new ru.gora.musicbattle.network.OpenDjPanelPayload(net.minecraft.core.BlockPos.ZERO,
+                tracks,library,List.of(),-1,false,List.of(),-1,
+                false,"","",1f,0L,false,0,0,true,false,.3f,.65f,.45f,false,.25f,280f,.35f,false,12000f,
+                true,false,List.of(),queue,null,true,0,7L,List.of(),120,null,1f,0,List.of(),List.of(),false,0);
+    }
+    /**
+     * The booth's own list on the wire: the panel payload carries it in its order, the add and remove commands carry
+     * their map, and a list longer than a booth can hold is refused rather than believed.
+     */
+    static void libraryWire() {
+        var panel=boothState(List.of(),List.of("first_map","ws_12_easy","second_map"));
+        RegistryFriendlyByteBuf panelBuf=new RegistryFriendlyByteBuf(Unpooled.buffer(),null,ConnectionType.NEOFORGE);
+        try {
+            var codec=ru.gora.musicbattle.network.OpenDjPanelPayload.STREAM_CODEC;
+            codec.encode(panelBuf,panel);
+            check(codec.decode(panelBuf).library().equals(panel.library()),
+                    "the panel payload brings the booth's list in its order");
+        } finally {panelBuf.release();}
+        RegistryFriendlyByteBuf hostile=new RegistryFriendlyByteBuf(Unpooled.buffer(),null,ConnectionType.NEOFORGE);
+        try {
+            hostile.writeBlockPos(net.minecraft.core.BlockPos.ZERO);
+            hostile.writeVarInt(0);
+            hostile.writeVarInt(ru.gora.musicbattle.block.entity.DjPanelBlockEntity.MAX_LIBRARY_TRACKS+1);
+            boolean refused=false;
+            try {ru.gora.musicbattle.network.OpenDjPanelPayload.STREAM_CODEC.decode(hostile);}
+            catch (RuntimeException expected) {refused=true;}
+            check(refused,"a list longer than a booth can hold is refused");
+        } finally {hostile.release();}
+        for (var action : List.of(ru.gora.musicbattle.network.ConfigureDjPanelPayload.Action.LIBRARY_ADD,
+                ru.gora.musicbattle.network.ConfigureDjPanelPayload.Action.LIBRARY_REMOVE)) {
+            var command=new ru.gora.musicbattle.network.ConfigureDjPanelPayload(net.minecraft.core.BlockPos.ZERO,action,
+                    net.minecraft.core.BlockPos.ZERO,14f,1f,0f,0f,0f,"ws_12_easy",false,0,1f,0L,true,false,.3f,.65f,.45f,
+                    false,.25f,280f,.35f,false,12000f,true,false,List.of());
+            RegistryFriendlyByteBuf commandBuf=new RegistryFriendlyByteBuf(Unpooled.buffer(),null,ConnectionType.NEOFORGE);
+            try {
+                var codec=ru.gora.musicbattle.network.ConfigureDjPanelPayload.STREAM_CODEC;
+                codec.encode(commandBuf,command);
+                check(command.equals(codec.decode(commandBuf)),"a list command keeps its action and its map: "+action);
+            } finally {commandBuf.release();}
+        }
+    }
+    /**
+     * The playlist keeps its own copy of the booth's list and takes Add's map from it, while its chooser lists the
+     * panel's current one. The list changes without the playlist's revision moving - a "+" pick that lands while the
+     * playlist is open, a map the server gains or loses - and the copy used to stay as it was until the queue itself
+     * changed, so the chooser could offer a map that Add then could not find.
+     */
+    static void libraryFollowsThePanel() throws Exception {
+        TrackSummary a=TrackSummary.legacy("map_a","Alpha","",120,400,"","",false);
+        TrackSummary b=TrackSummary.legacy("map_b","Beta","",128,500,"","",false);
+        TrackSummary c=TrackSummary.legacy("map_c","Gamma","",140,600,"","",false);
+        Class<?> panelType=Class.forName("ru.gora.musicbattle.client.DjPanelScreen");
+        Object panel=panelType.getConstructor(ru.gora.musicbattle.network.OpenDjPanelPayload.class)
+                .newInstance(boothState(List.of(a,b,c),List.of("map_b","map_a")));
+        Method apply=panelType.getMethod("applyServerState",ru.gora.musicbattle.network.OpenDjPanelPayload.class);
+        Method revision=panelType.getDeclaredMethod("libraryRevision"); revision.setAccessible(true);
+        Method resolved=panelType.getDeclaredMethod("libraryTracks"); resolved.setAccessible(true);
+        check(resolved.invoke(panel).equals(List.of(b,a)),"the panel resolves the booth's list in the list's order");
+        int opened=(int)revision.invoke(panel);
+        apply.invoke(panel,boothState(List.of(a,b,c),List.of("map_b","map_a")));
+        check((int)revision.invoke(panel)==opened,"a refresh that brings the same list leaves its revision alone");
+        Class<?> playlistType=Class.forName("ru.gora.musicbattle.client.DjPlaylistScreen");
+        Constructor<?> open=playlistType.getDeclaredConstructor(panelType); open.setAccessible(true);
+        Object playlist=open.newInstance(panel);
+        // Far from its next once-a-second refresh, so tick() stays off the network in this harness.
+        field(playlistType,"refreshCooldown").set(playlist,1_000);
+        Method tick=playlistType.getMethod("tick"); tick.setAccessible(true);
+        check(field(playlistType,"library").get(playlist).equals(List.of(b,a)),"the playlist opens on the booth's list");
+        apply.invoke(panel,boothState(List.of(a,b,c),List.of("map_b","map_a","map_c")));
+        check((int)revision.invoke(panel)!=opened,"a map joining the list moves its revision");
+        tick.invoke(playlist);
+        check(field(playlistType,"library").get(playlist).equals(List.of(b,a,c)),
+                "an open playlist takes up a map that joined the list, with no change to the queue");
+        apply.invoke(panel,boothState(List.of(a,c),List.of("map_b","map_a","map_c")));
+        tick.invoke(playlist);
+        check(field(playlistType,"library").get(playlist).equals(List.of(a,c)),
+                "a map the server no longer has leaves what the playlist's Add can choose");
+
+        // A DJ typing a new start for the selected row when a map lands: the queue did not change, so neither does
+        // the cue on screen.
+        DjPlaylistEntry row=new DjPlaylistEntry(UUID.randomUUID(),"map_a",40);
+        Object queued=panelType.getConstructor(ru.gora.musicbattle.network.OpenDjPanelPayload.class)
+                .newInstance(boothState(List.of(a,b,c),List.of("map_a"),List.of(row)));
+        Object editing=open.newInstance(queued);
+        field(playlistType,"refreshCooldown").set(editing,1_000);
+        check((int)field(playlistType,"cueSourceTicks").get(editing)==40,"the playlist opens on its first row's cue");
+        field(playlistType,"cueSourceTicks").set(editing,333);
+        apply.invoke(queued,boothState(List.of(a,b,c),List.of("map_a","map_b"),List.of(row)));
+        tick.invoke(editing);
+        check(field(playlistType,"library").get(editing).equals(List.of(a,b))
+                        && (int)field(playlistType,"cueSourceTicks").get(editing)==333,
+                "a map joining the list leaves the cue being typed alone");
     }
     static void check(boolean value,String message) {checks++;if(!value)throw new AssertionError(message);}
     static Field field(Class<?> type,String name)throws Exception {Field f=type.getDeclaredField(name);f.setAccessible(true);return f;}
