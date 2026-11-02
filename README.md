@@ -6,7 +6,7 @@ Blocky Music это мод для Minecraft 1.21.1 на NeoForge: ритм-би�
 редактор карт и DJ-стойка с колонками, камерами и визуальными эффектами. Подробное описание по-русски:
 [docs/OVERVIEW.ru.md](docs/OVERVIEW.ru.md).
 
-**[Download on Modrinth](https://modrinth.com/mod/blocky-music)** · Minecraft 1.21.1 · NeoForge · client and server
+**[Download on CurseForge](https://www.curseforge.com/minecraft/mc-mods/blocky-music)** · [Modrinth](https://modrinth.com/mod/blocky-music) · Minecraft 1.21.1 · NeoForge · client and server
 
 This repository is the source of version **0.2.0-beta.2**, published so it can be read, built and checked. The code
 is MIT and the mod's own assets are CC BY-NC 4.0, so the mod as a whole is not open source; see [Licence](#licence).

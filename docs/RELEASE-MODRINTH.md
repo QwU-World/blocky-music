@@ -20,9 +20,9 @@ Modrinth (`github.com/modrinth/code`) — именно они решают, пу
 Исходники лежат на GitHub: https://github.com/QwU-World/blocky-music. Исходники 0.2.0-beta.2 выложены туда вместе с
 релизом, 1 ноября 2026, чтобы ссылка Source в листинге вела на код того jar, который проходит ревью. Каждая следующая версия уходит туда
 так же, вместе со своим релизом: публичная копия (`git archive` с `:(exclude)` для двух файлов SampleFocus, см.
-`DEVELOPMENT.md`) одним коммитом поверх прошлого. `README.md` и
-`.github/ISSUE_TEMPLATE/config.yml` ведут на https://modrinth.com/mod/blocky-music, а до одобрения эта страница
-отвечает «Project not found» (01.11.2026 `api.modrinth.com/v2/project/blocky-music` ещё давал 404); так было и с
+`DEVELOPMENT.md`) одним коммитом поверх прошлого. С 2 ноября 2026 мод вышел на CurseForge (https://www.curseforge.com/minecraft/mc-mods/blocky-music), и главная
+ссылка `README.md` и «Download Blocky Music» в `.github/ISSUE_TEMPLATE/config.yml` ведут туда. Ссылка «Modrinth» в
+`README.md` ведёт на https://modrinth.com/mod/blocky-music, а до одобрения эта страница отвечает «Project not found» (01.11.2026 `api.modrinth.com/v2/project/blocky-music` ещё давал 404); так было и с
 0.1.0-beta.1. Что проверить после одобрения — в разделе «После одобрения».
 
 **Цель** — правило Modrinth 5.1 ([Content Rules](https://modrinth.com/legal/rules)): метаданные «filled
@@ -285,9 +285,9 @@ AI-generated content (code и text), остальное выключено. Го
 
 ## После одобрения
 
-Главная ссылка `README.md` («Download on Modrinth») и ссылка «Download Blocky Music» в
-`.github/ISSUE_TEMPLATE/config.yml` ведут на https://modrinth.com/mod/blocky-music. Пока проект на модерации, там
-«Project not found»; после одобрения ссылки заработают сами, исходники для этого перевыкладывать не нужно.
+Ссылка «Modrinth» в `README.md` ведёт на https://modrinth.com/mod/blocky-music. Пока проект на модерации, там
+«Project not found»; после одобрения она заработает сама, исходники для этого перевыкладывать не нужно. Главная ссылка
+`README.md` и «Download Blocky Music» в шаблоне issue ведут на CurseForge.
 
 1. Дождаться статуса approved.
 2. Проверить, что страница открыта всем: `curl -s -o /dev/null -w '%{http_code}\n'

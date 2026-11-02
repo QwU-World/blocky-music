@@ -9,5 +9,5 @@ contact_links:
     url: https://discord.gg/sSENQuz6a7
     about: Questions, ideas and help getting it running - the #bugs-suggestions channel under Minecraft mods.
   - name: Download Blocky Music
-    url: https://modrinth.com/mod/blocky-music
-    about: The releases live on Modrinth. This repository is the source, not the download.
+    url: https://www.curseforge.com/minecraft/mc-mods/blocky-music
+    about: The releases are on CurseForge and Modrinth. This repository is the source, not the download.

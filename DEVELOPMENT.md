@@ -1313,3 +1313,9 @@ Language), для форматированных подписей — `I18n.get(
   совпадает с `NOTICE.md`. Из публичных
   документов ушли ссылки на закрытые коммиты и репозитории; исправлены строка про `.workshop_packages/` выше и
   комментарий `WorkshopSignature` про `allowPlayerMaps`.
+- `docs/CURSEFORGE-LISTING.md`: листинг для первой заливки на CurseForge (01.11.2026) — описание с Modrinth, переделанное
+  под правила CurseForge (раздел «Network and files» вместо раскрытий, ссылки на свои сайты внизу, playerAnimator 2.0.4+
+  и NeoForge 21.1.219+, Custom License с полным текстом), поля проекта и файла, changelog и записка для проверяющих.
+- 02.11.2026 мод вышел на CurseForge (https://www.curseforge.com/minecraft/mc-mods/blocky-music): главная ссылка
+  `README.md` и «Download Blocky Music» в шаблоне issue ведут туда, ссылка на Modrinth стоит рядом и заработает после
+  одобрения; `docs/CURSEFORGE-LISTING.md` и `docs/RELEASE-MODRINTH.md` говорят то же.
